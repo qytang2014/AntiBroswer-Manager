@@ -566,7 +566,7 @@ export function ProxyManagerModal({
                 <input
                   type="text"
                   required
-                  placeholder="例如: rabisu"
+                  placeholder="例如: proxy"
                   value={newSubName}
                   onChange={(e) => setNewSubName(e.target.value)}
                   className="w-full bg-[#191f33] border border-gray-700/80 text-gray-200 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500"
@@ -760,7 +760,7 @@ export function ProxyManagerModal({
             </div>
 
             <p className="text-xs text-gray-400">
-              Paste links here (one per line). Supports vmess, vless, trojan, ss, socks5, tuic.
+              Paste links here (one per line). Supports vmess, vless, trojan, ss, socks5, tuic, anytls.
             </p>
 
             <form onSubmit={handleBatchAdd} className="space-y-4">
@@ -769,7 +769,7 @@ export function ProxyManagerModal({
                 rows={10}
                 value={batchText}
                 onChange={(e) => setBatchText(e.target.value)}
-                placeholder={"vmess://...\nss://...\nvless://...\ntrojan://...\ntuic://..."}
+                placeholder={"vmess://...\nss://...\nvless://...\ntrojan://...\ntuic://...\nanytls://..."}
                 className="w-full bg-[#191f33] border border-gray-700/80 text-gray-200 font-mono text-xs rounded-lg p-3 focus:outline-none focus:border-cyan-500 resize-none"
               />
 

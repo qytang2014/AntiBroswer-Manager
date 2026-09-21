@@ -44,7 +44,7 @@ def _parse_timestamp(ts_str: str | None) -> datetime.datetime | None:
 
 _SUPPORTED_SCHEMES = {
     "vless", "vmess", "trojan", "trojan-go", "ss", "shadowsocks",
-    "hysteria", "hysteria2", "hy2", "tuic", "socks5", "socks", "http", "https",
+    "hysteria", "hysteria2", "hy2", "tuic", "anytls", "socks5", "socks", "http", "https",
 }
 
 
@@ -58,7 +58,7 @@ def parse_multiline_nodes(
     raw_stripped = text.strip()
     if raw_stripped and not any(
         raw_stripped.startswith(prefix)
-        for prefix in ("vless://", "vmess://", "trojan://", "ss://", "socks5://", "tuic://", "hy2://", "hysteria2://", "http://", "https://")
+        for prefix in ("vless://", "vmess://", "trojan://", "ss://", "socks5://", "tuic://", "hy2://", "hysteria2://", "anytls://", "http://", "https://")
     ):
         try:
             padded = raw_stripped + "=" * ((4 - len(raw_stripped) % 4) % 4)
@@ -86,7 +86,7 @@ def parse_multiline_nodes(
             # If it's a singbox protocol
             if scheme in (
                 "vless", "vmess", "trojan", "trojan-go", "ss", "shadowsocks",
-                "hysteria", "hysteria2", "hy2", "tuic",
+                "hysteria", "hysteria2", "hy2", "tuic", "anytls",
             ):
                 try:
                     outbound = _parse_uri(line)
@@ -225,7 +225,7 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
     parsed_config = node.get("parsed_config")
 
     # Format proxy payload
-    if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic"):
+    if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
         if parsed_config:
             try:
                 cfg = json.loads(parsed_config)

@@ -24,10 +24,11 @@ def test_parse_multiline_nodes():
     trojan://pass3@1.2.3.7:443#Node4
     tuic://uuid-5:pass5@1.2.3.8:8443?congestion_control=bbr#Node5
     socks5://user:pass@1.2.3.9:1080#Node6
+    anytls://pwd@1.2.3.10:8443?sni=example.com#Node7
     invalid-protocol://foo
     """
     nodes = parse_multiline_nodes(text)
-    assert len(nodes) == 6
+    assert len(nodes) == 7
 
     protocols = [n["protocol"].lower() for n in nodes]
     assert "vless" in protocols
@@ -36,6 +37,7 @@ def test_parse_multiline_nodes():
     assert "trojan" in protocols
     assert "tuic" in protocols
     assert "socks5" in protocols
+    assert "anytls" in protocols
 
     names = [n["name"] for n in nodes]
     assert "Node1" in names
@@ -44,6 +46,7 @@ def test_parse_multiline_nodes():
     assert "Node4" in names
     assert "Node5" in names
     assert "Node6" in names
+    assert "Node7" in names
 
 
 def test_parse_base64_subscription():

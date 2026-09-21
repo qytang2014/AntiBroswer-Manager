@@ -26,6 +26,7 @@ function detectProxyType(raw: string | null | undefined): "standard" | "singbox_
     trimmed.startsWith("hysteria2://") ||
     trimmed.startsWith("hy2://") ||
     trimmed.startsWith("tuic://") ||
+    trimmed.startsWith("anytls://") ||
     trimmed.startsWith("wireguard://")
   ) {
     return "singbox_uri";
