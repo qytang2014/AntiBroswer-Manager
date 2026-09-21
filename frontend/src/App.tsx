@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
 import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
@@ -13,6 +13,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { LaunchErrorBanner } from "./components/LaunchErrorBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LoginPage } from "./components/LoginPage";
+import { ProxyManagerModal } from "./components/ProxyManagerModal";
 
 type AuthState = "checking" | "required" | "ok" | "error";
 type View = "empty" | "create" | "edit" | "view";
@@ -103,6 +104,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [launchError, setLaunchError] = useState<LaunchDenial | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [proxyManagerOpen, setProxyManagerOpen] = useState(false);
   const [stopped, setStopped] = useState(false);
 
   const handleQuit = useCallback(async () => {
@@ -253,6 +255,12 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           onSaved={setSystemStatus}
         />
       )}
+      {proxyManagerOpen && (
+        <ProxyManagerModal
+          isOpen={proxyManagerOpen}
+          onClose={() => setProxyManagerOpen(false)}
+        />
+      )}
       {updateInfo?.update_available && !updateDismissed && (
         <UpdateBanner info={updateInfo} onDismiss={() => setUpdateDismissed(true)} />
       )}
@@ -294,6 +302,13 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           </div>
           <div className="flex items-center gap-3">
             <SystemStatusBadge status={systemStatus} />
+            <button
+              onClick={() => setProxyManagerOpen(true)}
+              className="text-gray-500 hover:text-cyan-400 p-1"
+              title="管理代理 / Manage Proxies"
+            >
+              <Network className="h-4 w-4" />
+            </button>
             <button
               onClick={() => setSettingsOpen(true)}
               className="text-gray-500 hover:text-gray-300 p-1"

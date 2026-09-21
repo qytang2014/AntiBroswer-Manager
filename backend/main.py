@@ -46,6 +46,8 @@ from .browser_manager import (
     test_proxy,
 )
 from .models import (
+    BatchTestRequest,
+    BatchTestResult,
     ClipboardRequest,
     LaunchResponse,
     LoginRequest,
@@ -54,12 +56,18 @@ from .models import (
     ProfileResponse,
     ProfileStatusResponse,
     ProfileUpdate,
+    ProxyNodeBatchCreate,
+    ProxyNodeCreate,
+    ProxyNodeResponse,
     ProxyTestRequest,
     ProxyTestResponse,
     ReorderRequest,
     SettingsResponse,
     SettingsUpdate,
     StatusResponse,
+    SubscriptionCreate,
+    SubscriptionResponse,
+    SubscriptionUpdate,
     TagResponse,
     UpdateCheckResponse,
     WebStoreInstallRequest,
@@ -502,9 +510,13 @@ async def lifespan(app: FastAPI):
     diagnostics.install_asyncio_handler(asyncio.get_running_loop(), logger)
     logger.info(diagnostics.startup_line(browser_mgr))
     browser_mgr._auto_launch_task = asyncio.create_task(browser_mgr.auto_launch_all())
+    from .subscription_service import run_subscription_scheduler
+    sub_scheduler_task = asyncio.create_task(run_subscription_scheduler())
     logger.info("CloakBrowser Manager started")
     yield
     logger.info("Shutting down — stopping all browsers...")
+    sub_scheduler_task.cancel()
+    await asyncio.gather(sub_scheduler_task, return_exceptions=True)
     if browser_mgr._auto_launch_task and not browser_mgr._auto_launch_task.done():
         browser_mgr._auto_launch_task.cancel()
         await asyncio.gather(browser_mgr._auto_launch_task, return_exceptions=True)
@@ -647,6 +659,134 @@ async def get_extension_icon_endpoint(ext_id: str):
         pass
     raise HTTPException(status_code=404, detail="Icon not found")
 
+
+# ── Proxy Management & Subscriptions ─────────────────────────────────────────
+
+@app.get("/api/proxies/subscriptions", response_model=list[SubscriptionResponse])
+async def list_subscriptions_endpoint():
+    """List all proxy subscriptions."""
+    return db.list_subscriptions()
+
+
+@app.post("/api/proxies/subscriptions", response_model=SubscriptionResponse, status_code=201)
+async def create_subscription_endpoint(req: SubscriptionCreate):
+    """Create a new proxy subscription and fetch its nodes."""
+    from .subscription_service import fetch_and_update_subscription
+    sub = db.create_subscription(
+        name=req.name,
+        url=req.url,
+        update_interval_hours=req.update_interval_hours,
+    )
+    # Immediately fetch nodes asynchronously
+    try:
+        await fetch_and_update_subscription(sub["id"])
+    except Exception as exc:
+        logger.warning("Initial fetch for subscription '%s' failed: %s", req.name, exc)
+    return db.get_subscription(sub["id"])
+
+
+@app.put("/api/proxies/subscriptions/{sub_id}", response_model=SubscriptionResponse)
+async def update_subscription_endpoint(sub_id: str, req: SubscriptionUpdate):
+    """Update subscription settings (name, url, update interval)."""
+    from .subscription_service import fetch_and_update_subscription
+    current = db.get_subscription(sub_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    url_changed = req.url is not None and req.url != current["url"]
+    updated = db.update_subscription(
+        sub_id,
+        name=req.name,
+        url=req.url,
+        update_interval_hours=req.update_interval_hours,
+    )
+    if url_changed:
+        try:
+            await fetch_and_update_subscription(sub_id)
+        except Exception as exc:
+            logger.warning("Refresh after URL change for '%s' failed: %s", sub_id, exc)
+    return db.get_subscription(sub_id)
+
+
+@app.delete("/api/proxies/subscriptions/{sub_id}")
+async def delete_subscription_endpoint(sub_id: str):
+    """Delete a subscription and all its nodes."""
+    success = db.delete_subscription(sub_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"ok": True}
+
+
+@app.post("/api/proxies/subscriptions/{sub_id}/refresh", response_model=SubscriptionResponse)
+async def refresh_subscription_endpoint(sub_id: str):
+    """Manually trigger a refresh for a subscription."""
+    from .subscription_service import fetch_and_update_subscription
+    sub = db.get_subscription(sub_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    try:
+        await fetch_and_update_subscription(sub_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to refresh subscription: {exc}")
+    return db.get_subscription(sub_id)
+
+
+@app.get("/api/proxies/nodes", response_model=list[ProxyNodeResponse])
+async def list_proxy_nodes_endpoint(
+    subscription_id: str | None = None,
+    manual: bool = False,
+):
+    """List proxy nodes filtered by subscription or manual only."""
+    return db.list_proxy_nodes(subscription_id=subscription_id, manual_only=manual)
+
+
+@app.post("/api/proxies/nodes/batch", response_model=list[ProxyNodeResponse], status_code=201)
+async def batch_create_proxy_nodes_endpoint(req: ProxyNodeBatchCreate):
+    """Batch add proxy nodes from multiline text."""
+    from .subscription_service import parse_multiline_nodes
+    nodes = parse_multiline_nodes(req.text, subscription_id=req.subscription_id)
+    if not nodes:
+        raise HTTPException(status_code=400, detail="No valid proxy nodes could be parsed from the input.")
+    created = db.batch_create_proxy_nodes(nodes)
+    return created
+
+
+@app.delete("/api/proxies/nodes/{node_id}")
+async def delete_proxy_node_endpoint(node_id: str):
+    """Delete a single proxy node."""
+    success = db.delete_proxy_node(node_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Proxy node not found")
+    return {"ok": True}
+
+
+@app.post("/api/proxies/nodes/{node_id}/test", response_model=BatchTestResult)
+async def test_single_proxy_node_endpoint(node_id: str):
+    """Test latency of a single proxy node."""
+    from .subscription_service import test_node_sync
+    node = db.get_proxy_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Proxy node not found")
+    return await asyncio.to_thread(test_node_sync, node)
+
+
+@app.post("/api/proxies/nodes/test-batch", response_model=list[BatchTestResult])
+async def test_batch_proxy_nodes_endpoint(req: BatchTestRequest):
+    """Test latency for a batch of proxy nodes concurrently."""
+    from .subscription_service import test_batch_nodes
+    node_ids = req.node_ids
+    if not node_ids:
+        if req.manual_only:
+            nodes = db.list_proxy_nodes(manual_only=True)
+            node_ids = [n["id"] for n in nodes]
+        elif req.subscription_id:
+            nodes = db.list_proxy_nodes(subscription_id=req.subscription_id)
+            node_ids = [n["id"] for n in nodes]
+        else:
+            nodes = db.list_proxy_nodes()
+            node_ids = [n["id"] for n in nodes]
+
+    return await test_batch_nodes(node_ids)
 
 
 @app.post("/api/profiles", response_model=ProfileResponse, status_code=201)

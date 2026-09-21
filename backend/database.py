@@ -158,6 +158,36 @@ def _create_extensions_table(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _create_proxy_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            update_interval_hours INTEGER NOT NULL DEFAULT 0,
+            last_updated_at TEXT,
+            node_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS proxy_nodes (
+            id TEXT PRIMARY KEY,
+            subscription_id TEXT REFERENCES subscriptions(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            protocol TEXT NOT NULL,
+            raw_uri TEXT NOT NULL,
+            parsed_config TEXT,
+            last_latency_ms INTEGER,
+            last_tested_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_nodes_sub_id ON proxy_nodes (subscription_id)")
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
@@ -166,6 +196,7 @@ def init_db():
             conn.execute(_PROFILE_SCHEMA)
             _create_tags_table(conn)
             _create_extensions_table(conn)
+            _create_proxy_tables(conn)
             conn.commit()
             return
         old_columns = {row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
@@ -174,6 +205,7 @@ def init_db():
         else:
             _create_tags_table(conn)
         _create_extensions_table(conn)
+        _create_proxy_tables(conn)
         conn.commit()
 
 
@@ -405,4 +437,239 @@ def delete_extension(ext_id: str) -> bool:
         cursor = conn.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Subscriptions and Proxy Nodes CRUD
+# ---------------------------------------------------------------------------
+
+def list_subscriptions() -> list[dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM subscriptions ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_subscription(sub_id: str) -> dict[str, Any] | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?", (sub_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def create_subscription(
+    name: str,
+    url: str,
+    update_interval_hours: int = 0,
+    sub_id: str | None = None,
+) -> dict[str, Any]:
+    sid = sub_id or uuid.uuid4().hex[:12]
+    now = _now()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO subscriptions
+            (id, name, url, update_interval_hours, last_updated_at, node_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+            """,
+            (sid, name, url, update_interval_hours, None, now, now),
+        )
+        conn.commit()
+    return get_subscription(sid)  # type: ignore
+
+
+def update_subscription(
+    sub_id: str,
+    *,
+    name: str | None = None,
+    url: str | None = None,
+    update_interval_hours: int | None = None,
+    last_updated_at: str | None = None,
+    node_count: int | None = None,
+) -> dict[str, Any] | None:
+    current = get_subscription(sub_id)
+    if not current:
+        return None
+
+    fields: list[str] = []
+    values: list[Any] = []
+
+    if name is not None:
+        fields.append("name = ?")
+        values.append(name)
+    if url is not None:
+        fields.append("url = ?")
+        values.append(url)
+    if update_interval_hours is not None:
+        fields.append("update_interval_hours = ?")
+        values.append(update_interval_hours)
+    if last_updated_at is not None:
+        fields.append("last_updated_at = ?")
+        values.append(last_updated_at)
+    if node_count is not None:
+        fields.append("node_count = ?")
+        values.append(node_count)
+
+    fields.append("updated_at = ?")
+    values.append(_now())
+    values.append(sub_id)
+
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE subscriptions SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+    return get_subscription(sub_id)
+
+
+def delete_subscription(sub_id: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def list_proxy_nodes(
+    subscription_id: str | None = None,
+    manual_only: bool = False,
+) -> list[dict[str, Any]]:
+    with get_db() as conn:
+        if manual_only:
+            rows = conn.execute(
+                "SELECT * FROM proxy_nodes WHERE subscription_id IS NULL ORDER BY created_at DESC"
+            ).fetchall()
+        elif subscription_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM proxy_nodes WHERE subscription_id = ? ORDER BY created_at ASC",
+                (subscription_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM proxy_nodes ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_proxy_node(node_id: str) -> dict[str, Any] | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM proxy_nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def create_proxy_node(
+    name: str,
+    protocol: str,
+    raw_uri: str,
+    subscription_id: str | None = None,
+    parsed_config: str | None = None,
+    node_id: str | None = None,
+) -> dict[str, Any]:
+    nid = node_id or uuid.uuid4().hex[:12]
+    now = _now()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO proxy_nodes
+            (id, subscription_id, name, protocol, raw_uri, parsed_config, last_latency_ms, last_tested_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+            """,
+            (nid, subscription_id, name, protocol, raw_uri, parsed_config, now, now),
+        )
+        if subscription_id:
+            conn.execute(
+                "UPDATE subscriptions SET node_count = (SELECT count(*) FROM proxy_nodes WHERE subscription_id = ?), updated_at = ? WHERE id = ?",
+                (subscription_id, now, subscription_id),
+            )
+        conn.commit()
+    return get_proxy_node(nid)  # type: ignore
+
+
+def batch_create_proxy_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Insert multiple proxy nodes in a single transaction."""
+    if not nodes:
+        return []
+    now = _now()
+    sub_ids: set[str] = set()
+    result_ids: list[str] = []
+
+    with get_db() as conn:
+        for node in nodes:
+            nid = node.get("id") or uuid.uuid4().hex[:12]
+            result_ids.append(nid)
+            sub_id = node.get("subscription_id")
+            if sub_id:
+                sub_ids.add(sub_id)
+            conn.execute(
+                """
+                INSERT INTO proxy_nodes
+                (id, subscription_id, name, protocol, raw_uri, parsed_config, last_latency_ms, last_tested_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                (
+                    nid,
+                    sub_id,
+                    node["name"],
+                    node["protocol"],
+                    node["raw_uri"],
+                    node.get("parsed_config"),
+                    now,
+                    now,
+                ),
+            )
+        for sub_id in sub_ids:
+            conn.execute(
+                "UPDATE subscriptions SET node_count = (SELECT count(*) FROM proxy_nodes WHERE subscription_id = ?), updated_at = ? WHERE id = ?",
+                (sub_id, now, sub_id),
+            )
+        conn.commit()
+
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in result_ids)
+        rows = conn.execute(
+            f"SELECT * FROM proxy_nodes WHERE id IN ({placeholders})", result_ids
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def update_proxy_node_latency(node_id: str, latency_ms: int | None) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE proxy_nodes SET last_latency_ms = ?, last_tested_at = ?, updated_at = ? WHERE id = ?",
+            (latency_ms, _now(), _now(), node_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_proxy_node(node_id: str) -> bool:
+    with get_db() as conn:
+        node = conn.execute("SELECT subscription_id FROM proxy_nodes WHERE id = ?", (node_id,)).fetchone()
+        if not node:
+            return False
+        sub_id = node["subscription_id"]
+        cursor = conn.execute("DELETE FROM proxy_nodes WHERE id = ?", (node_id,))
+        if sub_id:
+            conn.execute(
+                "UPDATE subscriptions SET node_count = (SELECT count(*) FROM proxy_nodes WHERE subscription_id = ?), updated_at = ? WHERE id = ?",
+                (sub_id, _now(), sub_id),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_nodes_by_subscription(sub_id: str) -> int:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM proxy_nodes WHERE subscription_id = ?", (sub_id,))
+        conn.execute(
+            "UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?",
+            (_now(), sub_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+
 

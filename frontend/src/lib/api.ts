@@ -319,4 +319,94 @@ export const api = {
 
   getClipboard: (id: string) =>
     request<{ text: string }>(`/api/profiles/${id}/clipboard`),
+
+  // Proxy & Subscription Management
+  getSubscriptions: () => request<Subscription[]>("/api/proxies/subscriptions"),
+
+  createSubscription: (data: SubscriptionCreate) =>
+    request<Subscription>("/api/proxies/subscriptions", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateSubscription: (id: string, data: SubscriptionUpdate) =>
+    request<Subscription>(`/api/proxies/subscriptions/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteSubscription: (id: string) =>
+    request<{ ok: boolean }>(`/api/proxies/subscriptions/${id}`, { method: "DELETE" }),
+
+  refreshSubscription: (id: string) =>
+    request<Subscription>(`/api/proxies/subscriptions/${id}/refresh`, { method: "POST" }),
+
+  getProxyNodes: (params?: { subscription_id?: string; manual?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.subscription_id) qs.set("subscription_id", params.subscription_id);
+    if (params?.manual) qs.set("manual", "true");
+    const qStr = qs.toString() ? `?${qs.toString()}` : "";
+    return request<ProxyNode[]>(`/api/proxies/nodes${qStr}`);
+  },
+
+  batchAddProxyNodes: (text: string, subscription_id?: string) =>
+    request<ProxyNode[]>("/api/proxies/nodes/batch", {
+      method: "POST",
+      body: JSON.stringify({ text, subscription_id }),
+    }),
+
+  deleteProxyNode: (id: string) =>
+    request<{ ok: boolean }>(`/api/proxies/nodes/${id}`, { method: "DELETE" }),
+
+  testProxyNode: (id: string) =>
+    request<BatchTestResult>(`/api/proxies/nodes/${id}/test`, { method: "POST" }),
+
+  batchTestProxyNodes: (data: { node_ids?: string[]; subscription_id?: string; manual_only?: boolean }) =>
+    request<BatchTestResult[]>("/api/proxies/nodes/test-batch", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
+
+export interface Subscription {
+  id: string;
+  name: string;
+  url: string;
+  update_interval_hours: number;
+  last_updated_at: string | null;
+  node_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionCreate {
+  name: string;
+  url: string;
+  update_interval_hours?: number;
+}
+
+export interface SubscriptionUpdate {
+  name?: string;
+  url?: string;
+  update_interval_hours?: number;
+}
+
+export interface ProxyNode {
+  id: string;
+  subscription_id: string | null;
+  name: string;
+  protocol: string;
+  raw_uri: string;
+  last_latency_ms: number | null;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchTestResult {
+  node_id: string;
+  latency_ms: number | null;
+  ok: boolean;
+  error?: string | null;
+}
+

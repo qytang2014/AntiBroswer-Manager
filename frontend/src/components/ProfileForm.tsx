@@ -1,15 +1,17 @@
 import { Check, ChevronDown, Copy, Loader2, Puzzle, RotateCcw, Save, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
   Extension,
   HostOS,
   Profile,
   ProfileCreateData,
+  ProxyNode,
   ProxyTestResult,
   ViewerMode,
 } from "../lib/api";
 import { ExtensionManagerModal } from "./ExtensionManagerModal";
+import { ProxyManagerModal } from "./ProxyManagerModal";
 
 function detectProxyType(raw: string | null | undefined): "standard" | "singbox_uri" | "singbox_sub" | "singbox_json" {
   if (!raw) return "standard";
@@ -92,6 +94,27 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
   );
   const [installedExtensions, setInstalledExtensions] = useState<Extension[]>([]);
   const [isExtModalOpen, setIsExtModalOpen] = useState(false);
+
+  const [managedNodes, setManagedNodes] = useState<ProxyNode[]>([]);
+  const [subsMap, setSubsMap] = useState<Map<string, string>>(new Map());
+  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+
+  const loadManagedProxies = useCallback(async () => {
+    try {
+      const [subs, nodes] = await Promise.all([
+        api.getSubscriptions(),
+        api.getProxyNodes(),
+      ]);
+      setSubsMap(new Map(subs.map((s) => [s.id, s.name])));
+      setManagedNodes(nodes);
+    } catch (e) {
+      console.error("Failed to load managed proxies", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadManagedProxies();
+  }, [loadManagedProxies]);
 
   const [previewError, setPreviewError] = useState(false);
   const [previewBuster, setPreviewBuster] = useState(0);
@@ -500,19 +523,58 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="label mb-0">Proxy Protocol</label>
+                <div className="flex items-center gap-2">
+                  <label className="label mb-0">Proxy Protocol</label>
+                  <button
+                    type="button"
+                    onClick={() => setIsProxyModalOpen(true)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 underline font-medium flex items-center gap-1"
+                  >
+                    管理代理
+                  </button>
+                </div>
                 <select
-                  className="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
-                  value={proxyType}
+                  className="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-indigo-500 max-w-[260px] truncate"
+                  value={
+                    managedNodes.find((n) => n.raw_uri === form.proxy)
+                      ? `node:${managedNodes.find((n) => n.raw_uri === form.proxy)!.id}`
+                      : proxyType
+                  }
                   onChange={(e) => {
-                    setProxyType(e.target.value as any);
-                    setProxyTest(null);
+                    const val = e.target.value;
+                    if (val.startsWith("node:")) {
+                      const nodeId = val.slice(5);
+                      const node = managedNodes.find((n) => n.id === nodeId);
+                      if (node) {
+                        set("proxy", node.raw_uri);
+                        setProxyType(detectProxyType(node.raw_uri));
+                        setProxyTest(null);
+                      }
+                    } else {
+                      setProxyType(val as any);
+                      setProxyTest(null);
+                    }
                   }}
                 >
-                  <option value="standard">Standard (HTTP/SOCKS5)</option>
-                  <option value="singbox_uri">Sing-box Node URI (VLESS/VMess/Hysteria2)</option>
-                  <option value="singbox_sub">Sing-box Subscription URL</option>
-                  <option value="singbox_json">Sing-box Native JSON</option>
+                  <optgroup label="自定义协议 / Custom">
+                    <option value="standard">Standard (HTTP/SOCKS5)</option>
+                    <option value="singbox_uri">Sing-box Node URI (VLESS/VMess/Hysteria2/TUIC)</option>
+                    <option value="singbox_sub">Sing-box Subscription URL</option>
+                    <option value="singbox_json">Sing-box Native JSON</option>
+                  </optgroup>
+                  {managedNodes.length > 0 && (
+                    <optgroup label="已保存的节点 / Managed Nodes">
+                      {managedNodes.map((n) => {
+                        const subName = n.subscription_id ? subsMap.get(n.subscription_id) : null;
+                        const prefix = subName ? `[${subName}]` : "[手动]";
+                        return (
+                          <option key={n.id} value={`node:${n.id}`}>
+                            {prefix} {n.name} ({n.protocol.toUpperCase()})
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
@@ -985,6 +1047,11 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
       isOpen={isExtModalOpen}
       onClose={() => setIsExtModalOpen(false)}
       onExtensionsChanged={loadInstalledExtensions}
+    />
+    <ProxyManagerModal
+      isOpen={isProxyModalOpen}
+      onClose={() => setIsProxyModalOpen(false)}
+      onNodesChanged={loadManagedProxies}
     />
   </>
   );

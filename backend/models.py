@@ -216,3 +216,63 @@ class LoginRequest(BaseModel):
 class WebStoreInstallRequest(BaseModel):
     id_or_url: str
 
+
+class SubscriptionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    url: str = Field(min_length=1, max_length=2048)
+    update_interval_hours: int = Field(default=0, ge=0)
+
+
+class SubscriptionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    update_interval_hours: int | None = Field(default=None, ge=0)
+
+
+class SubscriptionResponse(BaseModel):
+    id: str
+    name: str
+    url: str
+    update_interval_hours: int
+    last_updated_at: str | None = None
+    node_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class ProxyNodeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    protocol: str
+    raw_uri: str
+    subscription_id: str | None = None
+
+
+class ProxyNodeBatchCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=1_048_576)
+    subscription_id: str | None = None
+
+
+class ProxyNodeResponse(BaseModel):
+    id: str
+    subscription_id: str | None = None
+    name: str
+    protocol: str
+    raw_uri: str
+    last_latency_ms: int | None = None
+    last_tested_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class BatchTestRequest(BaseModel):
+    node_ids: list[str] = Field(default_factory=list)
+    subscription_id: str | None = None
+    manual_only: bool = False
+
+
+class BatchTestResult(BaseModel):
+    node_id: str
+    latency_ms: int | None = None
+    ok: bool
+    error: str | None = None
+
