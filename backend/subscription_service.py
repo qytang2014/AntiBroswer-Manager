@@ -7,6 +7,7 @@ import base64
 import datetime
 import json
 import logging
+import time
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -215,36 +216,86 @@ async def run_subscription_scheduler() -> None:
             logger.error("Error in subscription scheduler: %s", exc)
 
 
-def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
-    """Test a single proxy node synchronously and record latency in DB."""
-    from .browser_manager import _test_proxy_sync
+_SPEED_TEST_URLS = [
+    "http://cp.cloudflare.com/generate_204",
+    "http://connectivitycheck.gstatic.com/generate_204",
+]
+_NODE_TEST_TIMEOUT = 3.0  # 3 seconds max per test endpoint (fast fail like Clash/Karing)
 
+
+def _measure_proxy_rtt(proxy_url: str, timeout: float = _NODE_TEST_TIMEOUT) -> tuple[bool, int | None, str | None]:
+    """Measure pure proxy round-trip latency (RTT) using lightweight HTTP 204 endpoints.
+
+    Returns (ok, latency_ms, error).
+    """
+    last_err = None
+    for url in _SPEED_TEST_URLS:
+        try:
+            t0 = time.monotonic()
+            resp = httpx.get(
+                url,
+                proxy=proxy_url,
+                timeout=httpx.Timeout(timeout),
+                follow_redirects=True,
+            )
+            t1 = time.monotonic()
+            if resp.status_code in (200, 204):
+                rtt_ms = max(1, round((t1 - t0) * 1000))
+                return True, rtt_ms, None
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    return False, None, last_err or "Connection timed out"
+
+
+def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
+    """Test a single proxy node synchronously and record pure latency in DB."""
     nid = node["id"]
     protocol = (node.get("protocol") or "").lower()
     raw_uri = node.get("raw_uri") or ""
     parsed_config = node.get("parsed_config")
 
-    # Format proxy payload
-    if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
-        if parsed_config:
-            try:
-                cfg = json.loads(parsed_config)
-                proxy_payload = {"type": "singbox", "config": {"outbounds": [cfg]}}
-            except Exception:
+    proc = None
+    try:
+        if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
+            from cloakbrowser.singbox.manager import handle_singbox_proxy
+            if parsed_config:
+                try:
+                    cfg = json.loads(parsed_config)
+                    proxy_payload = {"type": "singbox", "config": {"outbounds": [cfg]}}
+                except Exception:
+                    proxy_payload = {"type": "singbox", "config": raw_uri}
+            else:
                 proxy_payload = {"type": "singbox", "config": raw_uri}
-        else:
-            proxy_payload = {"type": "singbox", "config": raw_uri}
-    else:
-        proxy_payload = raw_uri
 
-    res = _test_proxy_sync(proxy_payload)
-    if res.get("ok"):
-        lat = res.get("latency_ms")
+            proc, socks5_url = handle_singbox_proxy(proxy_payload)
+            target_proxy_url = (
+                f"http://127.0.0.1:{proc.http_port}"
+                if proc and getattr(proc, "http_port", None)
+                else socks5_url
+            )
+        else:
+            target_proxy_url = raw_uri
+
+        ok, lat, err = _measure_proxy_rtt(target_proxy_url)
+    except Exception as exc:
+        ok, lat, err = False, None, str(exc)
+    finally:
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                try:
+                    proc.proc.kill()
+                except Exception:
+                    pass
+
+    if ok and lat is not None:
         update_proxy_node_latency(nid, lat)
         return BatchTestResult(node_id=nid, latency_ms=lat, ok=True)
     else:
         update_proxy_node_latency(nid, -1)
-        return BatchTestResult(node_id=nid, latency_ms=-1, ok=False, error=res.get("error"))
+        return BatchTestResult(node_id=nid, latency_ms=-1, ok=False, error=err or "Connection failed")
 
 
 async def test_batch_nodes(node_ids: list[str]) -> list[BatchTestResult]:

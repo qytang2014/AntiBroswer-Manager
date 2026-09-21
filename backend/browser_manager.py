@@ -214,7 +214,9 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
                 else socks5_url
             )
 
+        t0 = time.monotonic()
         ip = resolve_proxy_exit_ip(target_proxy_url)
+        latency_ms = round((time.monotonic() - t0) * 1000)
     except Exception as exc:  # SOCKS w/o socksio, connection refused, etc.
         logger.warning("Proxy test failed: %s", exc)
         return {"ok": False, "error": f"Could not connect through proxy: {exc}"}
@@ -229,7 +231,6 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
                 except Exception:
                     pass
 
-    latency_ms = round((time.monotonic() - t0) * 1000)
     if not ip:
         return {"ok": False, "error": "Proxy did not return an exit IP (timeout or blocked)"}
     country = city = timezone = None

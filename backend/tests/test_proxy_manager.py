@@ -135,14 +135,8 @@ def test_proxy_nodes_api_and_testing(app_client, tmp_db):
     manual_nodes = resp.json()
     assert len(manual_nodes) == 2
 
-    # 3. Test single node (mock browser_manager._test_proxy_sync)
-    mock_test_result = {
-        "latency_ms": 150,
-        "ok": True,
-        "ip": "1.2.3.4",
-        "error": None,
-    }
-    with patch("backend.browser_manager._test_proxy_sync", return_value=mock_test_result):
+    # 3. Test single node (mock subscription_service._measure_proxy_rtt)
+    with patch("backend.subscription_service._measure_proxy_rtt", return_value=(True, 150, None)):
         resp = app_client.post(f"/api/proxies/nodes/{node1_id}/test")
         assert resp.status_code == 200
         result = resp.json()
