@@ -93,7 +93,29 @@ export interface ProxyTestResult {
   timezone?: string | null;
   latency_ms?: number | null;
   error?: string | null;
+  cached?: boolean;
 }
+
+export interface Extension {
+  id: string;
+  name: string;
+  version: string;
+  description?: string | null;
+  icon_url?: string | null;
+  path: string;
+  source: string;
+  webstore_id?: string | null;
+  created_at: string;
+}
+
+export interface PopularExtension {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  rating: number;
+}
+
 
 export interface SystemStatus {
   running_count: number;
@@ -204,10 +226,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  testProxy: (proxy: string) =>
+  testProxy: (proxy: string, proxy_type?: string) =>
     request<ProxyTestResult>("/api/profiles/test-proxy", {
       method: "POST",
-      body: JSON.stringify({ proxy }),
+      body: JSON.stringify({ proxy, proxy_type }),
     }),
 
   updateProfile: (id: string, data: Partial<ProfileCreateData>) =>
@@ -244,8 +266,42 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
 
+  listExtensions: () => request<Extension[]>("/api/extensions"),
+
+  getPopularExtensions: () => request<PopularExtension[]>("/api/extensions/popular"),
+
+  installFromWebStore: (id_or_url: string) =>
+    request<Extension>("/api/extensions/install-webstore", {
+      method: "POST",
+      body: JSON.stringify({ id_or_url }),
+    }),
+
+  uploadExtension: async (file: File): Promise<Extension> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/extensions/upload", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      try {
+        const data = JSON.parse(text);
+        throw new ApiError(res.status, data.detail || "Failed to upload extension");
+      } catch (e) {
+        if (e instanceof ApiError) throw e;
+        throw new ApiError(res.status, text || "Failed to upload extension");
+      }
+    }
+    return res.json();
+  },
+
+  deleteExtension: (id: string) =>
+    request<{ ok: boolean }>(`/api/extensions/${id}`, { method: "DELETE" }),
+
   shutdown: () =>
     request<{ ok: boolean; message?: string }>("/api/shutdown", { method: "POST" }),
+
 
   getSettings: () => request<ManagerSettings>("/api/settings"),
 

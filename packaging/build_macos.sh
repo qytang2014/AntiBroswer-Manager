@@ -32,15 +32,48 @@ echo "[build] frontend"
 ( cd frontend && npm ci && npm run build )
 
 # 2. Clean-room build venv with runtime + build deps.
-# PYTHON overrides the interpreter (e.g. /opt/homebrew/bin/python3.14 on a box
-# whose system python3 is too old, like the Apple Silicon build machine).
-PYTHON="${PYTHON:-python3}"
+# Auto-select Python 3.10+ if current python3 is older (e.g. pyenv 3.8/3.9).
+if [ -z "${PYTHON:-}" ]; then
+  PYTHON="python3"
+  PY_MINOR="$("$PYTHON" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
+  if [ "$PY_MINOR" -lt 10 ]; then
+    for cand in /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3.12 /usr/local/bin/python3.11 /usr/local/bin/python3.10; do
+      if [ -x "$cand" ]; then
+        C_MINOR="$("$cand" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
+        if [ "$C_MINOR" -ge 10 ]; then
+          PYTHON="$cand"
+          break
+        fi
+      fi
+    done
+  fi
+fi
+
+# If existing build venv was created by Python < 3.10, clear it
+if [ -d "$BUILD_VENV" ]; then
+  VENV_PY_MINOR="$("$BUILD_VENV/bin/python" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
+  if [ "$VENV_PY_MINOR" -lt 10 ]; then
+    echo "[build] clearing outdated build venv (Python 3.$VENV_PY_MINOR < 3.10)"
+    rm -rf "$BUILD_VENV"
+  fi
+fi
+
 if [ ! -x "$BUILD_VENV/bin/python" ]; then
   echo "[build] creating build venv at $BUILD_VENV ($PYTHON)"
   "$PYTHON" -m venv "$BUILD_VENV"
 fi
+
+if [ -z "${CLOAKBROWSER_SRC:-}" ] && [ -d "$ROOT/../CloakBrowser-Proxy" ]; then
+  CLOAKBROWSER_SRC="$ROOT/../CloakBrowser-Proxy"
+fi
+
 "$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check -q \
   -r backend/requirements.txt -r packaging/requirements-build.txt
+
+if [ -n "${CLOAKBROWSER_SRC:-}" ] && [ -d "$CLOAKBROWSER_SRC" ]; then
+  echo "[build] installing cloakbrowser from local directory: $CLOAKBROWSER_SRC"
+  "$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check -q -e "$CLOAKBROWSER_SRC[geoip]"
+fi
 
 # 2a. Pin cryptography to the self-contained universal2 wheel (static OpenSSL).
 # The newest cryptography ships no single-arch macOS wheel, so on the Intel
@@ -56,7 +89,8 @@ fi
 
 # 3. Freeze.
 echo "[build] pyinstaller"
-rm -rf "$DIST" "$BUILD"
+rm -rf "$DIST" "$BUILD" 2>/dev/null || rm -rf "$DIST"/* "$BUILD"/* 2>/dev/null || true
+mkdir -p "$DIST" "$BUILD"
 "$BUILD_VENV/bin/pyinstaller" --noconfirm --clean \
   --distpath "$DIST" --workpath "$BUILD" \
   packaging/manager.spec

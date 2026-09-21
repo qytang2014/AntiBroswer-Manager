@@ -194,7 +194,8 @@ class ClipboardRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    proxy: str = Field(min_length=1, max_length=512)
+    proxy: str = Field(min_length=1, max_length=65536)
+    proxy_type: str | None = None
 
 
 class ProxyTestResponse(BaseModel):
@@ -205,7 +206,13 @@ class ProxyTestResponse(BaseModel):
     timezone: str | None = None
     latency_ms: int | None = None
     error: str | None = None
+    cached: bool = False
 
 
 class LoginRequest(BaseModel):
     token: str
+
+
+class WebStoreInstallRequest(BaseModel):
+    id_or_url: str
+

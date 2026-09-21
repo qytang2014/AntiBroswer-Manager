@@ -59,16 +59,82 @@ def license_error_detail(exc: BaseException) -> dict[str, str]:
     return detail
 
 
-def _normalize_proxy(raw: str) -> str:
-    """Convert common proxy formats to http://user:pass@host:port.
+# LRU Cache for proxy test results: cache_key -> (timestamp, result_dict)
+_PROXY_TEST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PROXY_TEST_LOCKS: dict[str, asyncio.Lock] = {}
+_PROXY_CACHE_TTL = 30.0  # seconds
+
+
+def _is_singbox_proxy(proxy: Any) -> bool:
+    """Return True if proxy config represents a sing-box outbound."""
+    if isinstance(proxy, dict):
+        return proxy.get("type") == "singbox" or "outbounds" in proxy
+    if isinstance(proxy, str):
+        p = proxy.strip()
+        if p.startswith((
+            "vless://", "vmess://", "trojan://", "ss://", "shadowsocks://",
+            "hysteria2://", "hy2://", "tuic://", "wireguard://",
+        )):
+            return True
+        if p.startswith("{") and p.endswith("}"):
+            try:
+                data = json.loads(p)
+                return isinstance(data, dict) and (data.get("type") == "singbox" or "outbounds" in data)
+            except Exception:
+                return False
+    return False
+
+
+def _normalize_proxy(raw: Any, proxy_type: str | None = None) -> Any:
+    """Convert common proxy formats to standard format or sing-box config dict.
 
     Accepts:
-      - http://user:pass@host:port  (already valid)
+      - sing-box URI (vless://, vmess://, etc.) -> {"type": "singbox", "config": ...}
+      - sing-box JSON dict or JSON string -> {"type": "singbox", "config": ...}
+      - sing-box subscription URL -> {"type": "singbox", "config": url}
+      - http://user:pass@host:port  (standard proxy)
       - host:port:user:pass
       - host:port
     """
+    if not raw:
+        return None
+
+    if isinstance(raw, dict):
+        if raw.get("type") == "singbox":
+            return raw
+        if "outbounds" in raw:
+            return {"type": "singbox", "config": raw}
+        return raw
+
+    if not isinstance(raw, str):
+        return raw
+
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    # Explicit singbox proxy types from frontend
+    if proxy_type == "singbox_json" or (raw.startswith("{") and raw.endswith("}")):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                if parsed.get("type") == "singbox":
+                    return parsed
+                return {"type": "singbox", "config": parsed}
+        except Exception:
+            pass
+
+    if proxy_type in ("singbox_uri", "singbox_sub") or raw.startswith((
+        "vless://", "vmess://", "trojan://", "ss://", "shadowsocks://",
+        "hysteria2://", "hy2://", "tuic://", "wireguard://",
+    )):
+        return {"type": "singbox", "config": raw}
+
+    # Standard proxy URLs
     if raw.startswith(("http://", "https://", "socks5://")):
         return raw
+
+    # host:port:user:pass or host:port
     parts = raw.split(":")
     if len(parts) == 4:
         host, port, user, passwd = parts
@@ -78,14 +144,23 @@ def _normalize_proxy(raw: str) -> str:
     return raw
 
 
-def _validate_proxy(url: str) -> None:
-    """Validate that a normalized proxy URL has scheme, host, and port."""
+def _validate_proxy(proxy: Any) -> None:
+    """Validate proxy URL or sing-box configuration dict."""
+    if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+        try:
+            from cloakbrowser.singbox.parser import build_singbox_config
+            build_singbox_config(proxy["config"])
+            return
+        except Exception as exc:
+            raise ValueError(f"Invalid sing-box configuration: {exc}") from exc
+
+    url = str(proxy)
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https", "socks5"):
         raise ValueError(
-            f"Invalid proxy scheme '{parsed.scheme}'. Must be http, https, or socks5."
+            f"Invalid proxy scheme '{parsed.scheme}'. Must be http, https, socks5, or a sing-box node."
         )
     if not parsed.hostname:
         raise ValueError(f"Proxy URL missing hostname: {url}")
@@ -93,26 +168,67 @@ def _validate_proxy(url: str) -> None:
         raise ValueError(f"Proxy URL missing port: {url}")
 
 
-async def test_proxy(raw_proxy: str) -> dict[str, Any]:
+async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str, Any]:
     """Connect through a proxy, return exit IP + geo + latency (or an error).
 
-    Reuses the same normalize/validate as launch, then resolves the exit IP
-    via cloakbrowser's geoip echo services. Blocking work runs off-thread.
+    Includes 30s LRU caching and concurrency locking to avoid resource exhaustion
+    from rapid repeated clicks.
     """
-    proxy = _normalize_proxy(raw_proxy)
-    _validate_proxy(proxy)  # raises ValueError on bad format -> 400 in the route
-    return await asyncio.to_thread(_test_proxy_sync, proxy)
+    cache_key = f"{proxy_type}:{raw_proxy if isinstance(raw_proxy, str) else json.dumps(raw_proxy, sort_keys=True)}"
+    now = time.monotonic()
+    if cache_key in _PROXY_TEST_CACHE:
+        cached_time, cached_result = _PROXY_TEST_CACHE[cache_key]
+        if now - cached_time < _PROXY_CACHE_TTL:
+            return {**cached_result, "cached": True}
+
+    lock = _PROXY_TEST_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        if cache_key in _PROXY_TEST_CACHE:
+            cached_time, cached_result = _PROXY_TEST_CACHE[cache_key]
+            if now - cached_time < _PROXY_CACHE_TTL:
+                return {**cached_result, "cached": True}
+
+        proxy = _normalize_proxy(raw_proxy, proxy_type)
+        _validate_proxy(proxy)  # raises ValueError on bad format -> 400 in the route
+        res = await asyncio.to_thread(_test_proxy_sync, proxy)
+        if res.get("ok"):
+            _PROXY_TEST_CACHE[cache_key] = (time.monotonic(), res)
+        return res
 
 
-def _test_proxy_sync(proxy: str) -> dict[str, Any]:
+def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
     from cloakbrowser.geoip import _ensure_geoip_db, resolve_proxy_exit_ip
 
     t0 = time.monotonic()
+    proc = None
+    target_proxy_url = proxy
+
     try:
-        ip = resolve_proxy_exit_ip(proxy)
+        if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+            from cloakbrowser.singbox.manager import handle_singbox_proxy
+            proc, socks5_url = handle_singbox_proxy(proxy)
+            target_proxy_url = (
+                f"http://127.0.0.1:{proc.http_port}"
+                if proc and getattr(proc, "http_port", None)
+                else socks5_url
+            )
+
+        ip = resolve_proxy_exit_ip(target_proxy_url)
     except Exception as exc:  # SOCKS w/o socksio, connection refused, etc.
         logger.warning("Proxy test failed: %s", exc)
-        return {"ok": False, "error": "Could not connect through proxy"}
+        return {"ok": False, "error": f"Could not connect through proxy: {exc}"}
+    finally:
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.proc.kill()
+                except Exception:
+                    pass
+
     latency_ms = round((time.monotonic() - t0) * 1000)
     if not ip:
         return {"ok": False, "error": "Proxy did not return an exit IP (timeout or blocked)"}
@@ -133,6 +249,7 @@ def _test_proxy_sync(proxy: str) -> dict[str, Any]:
         "city": city,
         "timezone": timezone,
         "latency_ms": latency_ms,
+        "cached": False,
     }
 
 

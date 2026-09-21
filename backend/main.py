@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import starlette.requests
@@ -62,6 +62,13 @@ from .models import (
     StatusResponse,
     TagResponse,
     UpdateCheckResponse,
+    WebStoreInstallRequest,
+)
+from .extension_manager import (
+    POPULAR_EXTENSIONS,
+    install_extension_from_bytes,
+    install_from_webstore,
+    remove_extension,
 )
 from .runtime import bundle_dir
 from .settings_store import load_settings, save_settings
@@ -568,9 +575,78 @@ async def list_profiles():
 async def test_proxy_endpoint(req: ProxyTestRequest):
     """Connect through a proxy and report exit IP + geo + latency."""
     try:
-        return await test_proxy(req.proxy)
+        return await test_proxy(req.proxy, req.proxy_type)
     except ValueError as exc:  # bad proxy format from _validate_proxy
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Extensions endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/extensions")
+async def list_extensions_endpoint():
+    """List all installed Chrome extensions."""
+    return db.list_extensions()
+
+
+@app.get("/api/extensions/popular")
+async def popular_extensions_endpoint():
+    """Return popular extensions curated for 1-click install."""
+    return POPULAR_EXTENSIONS
+
+
+@app.post("/api/extensions/upload")
+async def upload_extension_endpoint(file: UploadFile = File(...)):
+    """Upload and unpack a .crx or .zip Chrome extension."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    content = await file.read()
+    try:
+        return await install_extension_from_bytes(content, file.filename, source="upload")
+    except Exception as exc:
+        logger.warning("Failed to install uploaded extension: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/extensions/install-webstore")
+async def install_webstore_endpoint(req: WebStoreInstallRequest):
+    """Download and install an extension from Chrome Web Store by URL or ID."""
+    try:
+        return await install_from_webstore(req.id_or_url)
+    except Exception as exc:
+        logger.warning("Failed to install extension from Web Store: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/extensions/{ext_id}")
+async def delete_extension_endpoint(ext_id: str):
+    """Delete an extension from database and disk."""
+    success = remove_extension(ext_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Extension not found")
+    return {"ok": True}
+
+
+@app.get("/api/extensions/{ext_id}/icon")
+async def get_extension_icon_endpoint(ext_id: str):
+    """Serve the extension's icon image file."""
+    ext = db.get_extension(ext_id)
+    if not ext:
+        raise HTTPException(status_code=404, detail="Extension not found")
+    ext_dir = Path(ext["path"])
+    try:
+        manifest = json.loads((ext_dir / "manifest.json").read_text(encoding="utf-8"))
+        icons = manifest.get("icons", {})
+        for size in ["128", "96", "64", "48", "32", "16"]:
+            if size in icons:
+                icon_file = ext_dir / icons[size]
+                if icon_file.is_file():
+                    return FileResponse(str(icon_file))
+    except Exception:
+        pass
+    raise HTTPException(status_code=404, detail="Icon not found")
+
 
 
 @app.post("/api/profiles", response_model=ProfileResponse, status_code=201)

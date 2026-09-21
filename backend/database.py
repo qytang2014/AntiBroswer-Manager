@@ -142,6 +142,22 @@ def _rebuild_profiles(conn: sqlite3.Connection, old_columns: set[str]) -> None:
         conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _create_extensions_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS extensions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            description TEXT,
+            icon_url TEXT,
+            path TEXT NOT NULL,
+            source TEXT NOT NULL,
+            webstore_id TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
@@ -149,6 +165,7 @@ def init_db():
         if not exists:
             conn.execute(_PROFILE_SCHEMA)
             _create_tags_table(conn)
+            _create_extensions_table(conn)
             conn.commit()
             return
         old_columns = {row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
@@ -156,7 +173,8 @@ def init_db():
             _rebuild_profiles(conn, old_columns)
         else:
             _create_tags_table(conn)
-            conn.commit()
+        _create_extensions_table(conn)
+        conn.commit()
 
 
 def _now() -> str:
@@ -345,3 +363,46 @@ def duplicate_profile(profile_id: str, *, new_id: str | None = None) -> dict[str
         tags=src.get("tags"),
         **fields,
     )
+
+
+def list_extensions() -> list[dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM extensions ORDER BY created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_extension(ext_id: str) -> dict[str, Any] | None:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM extensions WHERE id = ?", (ext_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def create_extension(
+    ext_id: str,
+    name: str,
+    version: str,
+    description: str | None,
+    icon_url: str | None,
+    path: str,
+    source: str,
+    webstore_id: str | None = None,
+) -> dict[str, Any]:
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO extensions
+            (id, name, version, description, icon_url, path, source, webstore_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ext_id, name, version, description, icon_url, path, source, webstore_id, _now()),
+        )
+        conn.commit()
+    return get_extension(ext_id)  # type: ignore
+
+
+def delete_extension(ext_id: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+

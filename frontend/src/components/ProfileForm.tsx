@@ -1,13 +1,38 @@
-import { Check, ChevronDown, Copy, Loader2, RotateCcw, Save, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Loader2, Puzzle, RotateCcw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
+  Extension,
   HostOS,
   Profile,
   ProfileCreateData,
   ProxyTestResult,
   ViewerMode,
 } from "../lib/api";
+import { ExtensionManagerModal } from "./ExtensionManagerModal";
+
+function detectProxyType(raw: string | null | undefined): "standard" | "singbox_uri" | "singbox_sub" | "singbox_json" {
+  if (!raw) return "standard";
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return "singbox_json";
+  if (
+    trimmed.startsWith("vless://") ||
+    trimmed.startsWith("vmess://") ||
+    trimmed.startsWith("trojan://") ||
+    trimmed.startsWith("ss://") ||
+    trimmed.startsWith("shadowsocks://") ||
+    trimmed.startsWith("hysteria2://") ||
+    trimmed.startsWith("hy2://") ||
+    trimmed.startsWith("tuic://") ||
+    trimmed.startsWith("wireguard://")
+  ) {
+    return "singbox_uri";
+  }
+  if (trimmed.includes("/sub/") || trimmed.includes("subscribe")) {
+    return "singbox_sub";
+  }
+  return "standard";
+}
 
 interface ProfileFormProps {
   profile: Profile | null; // null = create mode
@@ -62,6 +87,12 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     tags: [],
   });
 
+  const [proxyType, setProxyType] = useState<"standard" | "singbox_uri" | "singbox_sub" | "singbox_json">(() =>
+    detectProxyType(profile?.proxy)
+  );
+  const [installedExtensions, setInstalledExtensions] = useState<Extension[]>([]);
+  const [isExtModalOpen, setIsExtModalOpen] = useState(false);
+
   const [previewError, setPreviewError] = useState(false);
   const [previewBuster, setPreviewBuster] = useState(0);
 
@@ -87,6 +118,18 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
   const [tagColor, setTagColor] = useState<string | null>("#6366f1");
   const [extensionPathInput, setExtensionPathInput] = useState("");
   const [launchArgInput, setLaunchArgInput] = useState("");
+  const loadInstalledExtensions = async () => {
+    try {
+      const list = await api.listExtensions();
+      setInstalledExtensions(list);
+    } catch (err) {
+      console.error("Failed to load extensions in form:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadInstalledExtensions();
+  }, []);
 
   useEffect(() => {
     if (profile) {
@@ -113,6 +156,7 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
         notes: profile.notes,
         tags: profile.tags ?? [],
       });
+      setProxyType(detectProxyType(profile.proxy));
     }
     // Re-fetch the preview for the newly selected profile (bust the cache).
     setPreviewError(false);
@@ -129,12 +173,21 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const toggleExtension = (extPath: string) => {
+    const current = form.extension_paths ?? [];
+    if (current.includes(extPath)) {
+      set("extension_paths", current.filter((p) => p !== extPath));
+    } else {
+      set("extension_paths", [...current, extPath]);
+    }
+  };
+
   const handleTestProxy = async () => {
     if (!form.proxy) return;
     setProxyTest(null);
     setTestingProxy(true);
     try {
-      setProxyTest(await api.testProxy(form.proxy));
+      setProxyTest(await api.testProxy(form.proxy, proxyType));
     } catch (err) {
       const message =
         err instanceof ApiError ? err.message : "Proxy test failed";
@@ -270,7 +323,8 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
   };
 
   return (
-    <form onSubmit={handleSubmit} className="p-6 max-w-3xl mx-auto">
+    <>
+      <form onSubmit={handleSubmit} className="p-6 max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold">
@@ -445,27 +499,75 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Network</h3>
           <div className="space-y-3">
             <div>
-              <label className="label">Proxy</label>
-              <div className="flex gap-2">
-                <input
-                  className="input flex-1"
-                  value={form.proxy ?? ""}
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="label mb-0">Proxy Protocol</label>
+                <select
+                  className="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+                  value={proxyType}
                   onChange={(e) => {
-                    set("proxy", e.target.value || null);
+                    setProxyType(e.target.value as any);
                     setProxyTest(null);
                   }}
-                  placeholder="http://user:pass@host:port"
-                />
-                <button
-                  type="button"
-                  className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
-                  onClick={handleTestProxy}
-                  disabled={!form.proxy || testingProxy}
                 >
-                  {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Test
-                </button>
+                  <option value="standard">Standard (HTTP/SOCKS5)</option>
+                  <option value="singbox_uri">Sing-box Node URI (VLESS/VMess/Hysteria2)</option>
+                  <option value="singbox_sub">Sing-box Subscription URL</option>
+                  <option value="singbox_json">Sing-box Native JSON</option>
+                </select>
               </div>
+
+              {proxyType === "singbox_json" ? (
+                <div className="space-y-2">
+                  <textarea
+                    className="input w-full font-mono text-xs h-28 resize-y"
+                    value={form.proxy ?? ""}
+                    onChange={(e) => {
+                      set("proxy", e.target.value || null);
+                      setProxyTest(null);
+                    }}
+                    placeholder={`{\n  "outbounds": [\n    {\n      "type": "vless",\n      "tag": "my-proxy",\n      "server": "example.com",\n      "server_port": 443,\n      "uuid": "your-uuid",\n      "tls": { "enabled": true }\n    }\n  ]\n}`}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      onClick={handleTestProxy}
+                      disabled={!form.proxy || testingProxy}
+                    >
+                      {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Test
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    className="input flex-1 font-mono text-xs"
+                    value={form.proxy ?? ""}
+                    onChange={(e) => {
+                      set("proxy", e.target.value || null);
+                      setProxyTest(null);
+                    }}
+                    placeholder={
+                      proxyType === "singbox_uri"
+                        ? "vless://uuid@host:443?type=ws&security=tls#node"
+                        : proxyType === "singbox_sub"
+                        ? "https://my-proxy-provider.com/sub/token"
+                        : "http://user:pass@host:port"
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+                    onClick={handleTestProxy}
+                    disabled={!form.proxy || testingProxy}
+                  >
+                    {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Test
+                  </button>
+                </div>
+              )}
+
               {proxyTest && !testingProxy && (
                 <p
                   className={`text-xs mt-1 ${proxyTest.ok ? "text-emerald-400" : "text-red-400"}`}
@@ -475,7 +577,8 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
                       (proxyTest.city || proxyTest.country
                         ? ` · ${[proxyTest.city, proxyTest.country].filter(Boolean).join(", ")}`
                         : "") +
-                      (proxyTest.latency_ms != null ? ` · ${proxyTest.latency_ms}ms` : "")
+                      (proxyTest.latency_ms != null ? ` · ${proxyTest.latency_ms}ms` : "") +
+                      (proxyTest.cached ? " (cached)" : "")
                     : proxyTest.error || "Proxy test failed"}
                 </p>
               )}
@@ -746,10 +849,67 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
 
         {/* Extensions */}
         <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Extensions</h3>
-          <p className="text-xs text-gray-500 mb-2">Add one unpacked Chrome extension directory per path.</p>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Chrome Extensions</h3>
+            <button
+              type="button"
+              onClick={() => setIsExtModalOpen(true)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-medium"
+            >
+              <Puzzle className="h-3.5 w-3.5" />
+              Manage Extensions
+            </button>
+          </div>
+
+          <p className="text-xs text-gray-500 mb-3">
+            Select installed extensions from library or add custom unpacked directories.
+          </p>
+
+          {/* Installed Extensions Selection */}
+          {installedExtensions.length > 0 && (
+            <div className="space-y-1.5 mb-3">
+              <div className="text-[11px] text-gray-400 font-medium">Installed Extension Library:</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {installedExtensions.map((ext) => {
+                  const isSelected = (form.extension_paths ?? []).includes(ext.path);
+                  return (
+                    <div
+                      key={ext.id}
+                      onClick={() => toggleExtension(ext.path)}
+                      className={`p-2 rounded-lg border cursor-pointer flex items-center gap-2.5 transition ${
+                        isSelected
+                          ? "bg-indigo-950/40 border-indigo-500/50 text-white"
+                          : "bg-gray-800/30 border-gray-800 text-gray-400 hover:border-gray-700"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}} // handled by parent div
+                        className="rounded border-gray-700 text-indigo-600 focus:ring-0"
+                      />
+                      {ext.icon_url ? (
+                        <img src={ext.icon_url} alt={ext.name} className="h-5 w-5 rounded object-contain shrink-0" />
+                      ) : (
+                        <div className="h-5 w-5 rounded bg-indigo-950 flex items-center justify-center text-[10px] font-bold text-indigo-300">
+                          {ext.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium truncate">{ext.name}</div>
+                        <div className="text-[10px] text-gray-500 truncate">v{ext.version}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Custom Unpacked Path List */}
           {(form.extension_paths ?? []).length > 0 && (
             <div className="space-y-1.5 mb-3">
+              <div className="text-[11px] text-gray-400 font-medium">Active Extension Paths:</div>
               {(form.extension_paths ?? []).map((path, index) => (
                 <div key={`${path}-${index}`} className="flex items-center gap-2 rounded-md bg-surface-3 px-2 py-1.5">
                   <code className="flex-1 truncate text-xs text-gray-300">{path}</code>
@@ -760,13 +920,14 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
               ))}
             </div>
           )}
+
           <div className="flex gap-2">
             <input
-              className="input flex-1 font-mono"
+              className="input flex-1 font-mono text-xs"
               value={extensionPathInput}
               onChange={(e) => setExtensionPathInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addExtensionPath(); } }}
-              placeholder="/data/extensions/ublock"
+              placeholder="Or enter custom unpacked path: /path/to/extension"
             />
             <button type="button" onClick={addExtensionPath} className="btn-secondary text-xs">Add</button>
           </div>
@@ -820,5 +981,11 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
       </div>
 
     </form>
+    <ExtensionManagerModal
+      isOpen={isExtModalOpen}
+      onClose={() => setIsExtModalOpen(false)}
+      onExtensionsChanged={loadInstalledExtensions}
+    />
+  </>
   );
 }

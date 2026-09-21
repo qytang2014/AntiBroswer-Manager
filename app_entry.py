@@ -40,15 +40,19 @@ def _port_available() -> bool:
             return False
 
 
-def _wait_until_ready(timeout: float = 20.0) -> bool:
-    """Poll /api/health until the server answers or the timeout elapses."""
+def _wait_until_ready(timeout: float = 180.0) -> bool:
+    """Poll /api/health until the server answers or the timeout elapses.
+
+    First launch may download the stealth Chromium binary (140MB), which
+    can take 30-60s depending on network speed.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(f"{SERVER_URL}/api/health", timeout=0.5):
                 return True
         except OSError:
-            time.sleep(0.1)
+            time.sleep(0.2)
     return False
 
 

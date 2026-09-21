@@ -1,0 +1,149 @@
+"""Unit tests for sing-box proxy integration, caching, and Chrome extensions management."""
+
+from __future__ import annotations
+
+import io
+import json
+import time
+import zipfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import database as db
+from backend.browser_manager import (
+    _normalize_proxy,
+    _validate_proxy,
+    test_proxy as run_test_proxy,
+    _PROXY_TEST_CACHE,
+)
+from backend.extension_manager import (
+    extract_webstore_id,
+    install_extension_from_bytes,
+    remove_extension,
+    POPULAR_EXTENSIONS,
+)
+from backend.main import app
+
+
+# conftest.py provides app_client and tmp_db fixtures
+
+
+def test_normalize_and_validate_singbox_proxy():
+    # 1. Sing-box URI
+    vless_uri = (
+        "vless://00000000-0000-0000-0000-000000000000@1.2.3.4:443"
+        "?type=ws&security=tls&path=%2Fws#test"
+    )
+    norm = _normalize_proxy(vless_uri)
+    assert isinstance(norm, dict)
+    assert norm.get("type") == "singbox"
+    assert norm.get("config") == vless_uri
+    _validate_proxy(norm)
+
+    # 2. Sing-box JSON string
+    json_str = json.dumps({
+        "outbounds": [
+            {
+                "type": "vless",
+                "tag": "proxy",
+                "server": "1.2.3.4",
+                "server_port": 443,
+                "uuid": "00000000-0000-0000-0000-000000000000",
+            }
+        ]
+    })
+    norm_json = _normalize_proxy(json_str, proxy_type="singbox_json")
+    assert isinstance(norm_json, dict)
+    assert norm_json.get("type") == "singbox"
+    _validate_proxy(norm_json)
+
+    # 3. Standard HTTP proxy
+    std_proxy = "http://user:pass@1.2.3.4:8080"
+    norm_std = _normalize_proxy(std_proxy)
+    assert norm_std == std_proxy
+    _validate_proxy(norm_std)
+
+
+@pytest.mark.asyncio
+async def test_proxy_test_caching():
+    proxy_uri = "vless://00000000-0000-0000-0000-000000000000@example.com:443#test-cache"
+    _PROXY_TEST_CACHE.clear()
+
+    mock_result = {
+        "ok": True,
+        "ip": "1.1.1.1",
+        "country": "US",
+        "city": "Dallas",
+        "latency_ms": 50,
+        "cached": False,
+    }
+
+    with patch("backend.browser_manager._test_proxy_sync", return_value=mock_result) as mock_sync:
+        # First call: executes sync
+        res1 = await run_test_proxy(proxy_uri, "singbox_uri")
+        assert res1["ok"] is True
+        assert res1["ip"] == "1.1.1.1"
+        assert res1["cached"] is False
+        assert mock_sync.call_count == 1
+
+        # Second call immediately: hits LRU cache, does not call sync again!
+        res2 = await run_test_proxy(proxy_uri, "singbox_uri")
+        assert res2["ok"] is True
+        assert res2["cached"] is True
+        assert mock_sync.call_count == 1
+
+
+def test_extension_manager_unpack_and_db(tmp_db):
+    # Create a mock zip extension with manifest.json
+    manifest_data = {
+        "manifest_version": 3,
+        "name": "Test Extension",
+        "version": "1.2.3",
+        "description": "A test chrome extension",
+    }
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_data))
+    zip_bytes = zip_buffer.getvalue()
+
+    # Install extension
+    import asyncio
+    ext = asyncio.run(install_extension_from_bytes(zip_bytes, "test.zip", source="upload"))
+    assert ext["name"] == "Test Extension"
+    assert ext["version"] == "1.2.3"
+    assert Path(ext["path"]).is_dir()
+
+    # List and verify in DB
+    all_exts = db.list_extensions()
+    assert any(e["id"] == ext["id"] for e in all_exts)
+
+    # Delete extension
+    removed = remove_extension(ext["id"])
+    assert removed is True
+    assert not Path(ext["path"]).exists()
+
+
+def test_webstore_id_extractor():
+    url1 = "https://chromewebstore.google.com/detail/ublock-origin/cjpalhdlnbpafiamejdnhcphjbkeiagm"
+    assert extract_webstore_id(url1) == "cjpalhdlnbpafiamejdnhcphjbkeiagm"
+
+    raw_id = "cjpalhdlnbpafiamejdnhcphjbkeiagm"
+    assert extract_webstore_id(raw_id) == "cjpalhdlnbpafiamejdnhcphjbkeiagm"
+
+    assert extract_webstore_id("invalid-id-here") is None
+
+
+def test_extensions_api(app_client):
+    # Popular list
+    resp = app_client.get("/api/extensions/popular")
+    assert resp.status_code == 200
+    assert len(resp.json()) > 0
+    assert any(p["name"] == "uBlock Origin" for p in resp.json())
+
+    # List extensions
+    resp = app_client.get("/api/extensions")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)

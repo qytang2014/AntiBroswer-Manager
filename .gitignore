@@ -3,10 +3,12 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+uv.lock
 
 # Node
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # Native packaging build output
 dist_native/
@@ -35,3 +37,4 @@ publish-docker.sh
 debug
 backend/version.txt
 .plans
+docs
