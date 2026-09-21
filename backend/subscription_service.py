@@ -220,7 +220,7 @@ _SPEED_TEST_URLS = [
     "http://cp.cloudflare.com/generate_204",
     "http://connectivitycheck.gstatic.com/generate_204",
 ]
-_NODE_TEST_TIMEOUT = 3.0  # 3 seconds max per test endpoint (fast fail like Clash/Karing)
+_NODE_TEST_TIMEOUT = 2.5  # 2.5 seconds max per test endpoint (fast fail like Clash/Karing)
 
 
 def _measure_proxy_rtt(proxy_url: str, timeout: float = _NODE_TEST_TIMEOUT) -> tuple[bool, int | None, str | None]:
@@ -255,10 +255,10 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
     raw_uri = node.get("raw_uri") or ""
     parsed_config = node.get("parsed_config")
 
-    proc = None
     try:
         if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
-            from cloakbrowser.singbox.manager import handle_singbox_proxy
+            from backend.singbox_runner import fast_singbox_proxy
+
             if parsed_config:
                 try:
                     cfg = json.loads(parsed_config)
@@ -268,27 +268,12 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
             else:
                 proxy_payload = {"type": "singbox", "config": raw_uri}
 
-            proc, socks5_url = handle_singbox_proxy(proxy_payload)
-            target_proxy_url = (
-                f"http://127.0.0.1:{proc.http_port}"
-                if proc and getattr(proc, "http_port", None)
-                else socks5_url
-            )
+            with fast_singbox_proxy(proxy_payload) as target_proxy_url:
+                ok, lat, err = _measure_proxy_rtt(target_proxy_url)
         else:
-            target_proxy_url = raw_uri
-
-        ok, lat, err = _measure_proxy_rtt(target_proxy_url)
+            ok, lat, err = _measure_proxy_rtt(raw_uri)
     except Exception as exc:
         ok, lat, err = False, None, str(exc)
-    finally:
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                try:
-                    proc.proc.kill()
-                except Exception:
-                    pass
 
     if ok and lat is not None:
         update_proxy_node_latency(nid, lat)

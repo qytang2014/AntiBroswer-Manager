@@ -197,42 +197,92 @@ async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str,
         return res
 
 
-def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
-    from cloakbrowser.geoip import _ensure_geoip_db, resolve_proxy_exit_ip
+_FAST_SPEED_TEST_URLS = [
+    "http://cp.cloudflare.com/generate_204",
+    "http://connectivitycheck.gstatic.com/generate_204",
+]
 
-    t0 = time.monotonic()
-    proc = None
-    target_proxy_url = proxy
+_FAST_IP_ECHO_URLS = [
+    "https://api.ip.sb/ip",
+    "https://icanhazip.com",
+    "https://checkip.amazonaws.com",
+    "https://ipinfo.io/ip",
+]
+
+
+def _probe_proxy_target(target_proxy_url: str) -> tuple[str | None, int | None, str | None]:
+    """Probe proxy for latency (RTT) and exit IP using fast endpoints.
+
+    Returns (exit_ip, latency_ms, error).
+    """
+    import ipaddress
+    import httpx
+
+    latency_ms = None
+    exit_ip = None
+    last_err = None
+
+    # 1. Pure RTT latency check (fast 204 HTTP response, 2.5s timeout)
+    for test_url in _FAST_SPEED_TEST_URLS:
+        try:
+            t0 = time.monotonic()
+            resp = httpx.get(
+                test_url,
+                proxy=target_proxy_url,
+                timeout=httpx.Timeout(2.5),
+                follow_redirects=True,
+            )
+            if resp.status_code in (200, 204):
+                latency_ms = max(1, round((time.monotonic() - t0) * 1000))
+                break
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+
+    # 2. Fast Exit IP resolution (2.5s timeout, avoiding hanging services like api.ipify.org)
+    for ip_url in _FAST_IP_ECHO_URLS:
+        try:
+            t0 = time.monotonic()
+            resp = httpx.get(
+                ip_url,
+                proxy=target_proxy_url,
+                timeout=httpx.Timeout(2.5),
+            )
+            if resp.status_code == 200:
+                raw_ip = resp.text.strip()
+                ipaddress.ip_address(raw_ip)
+                exit_ip = raw_ip
+                if latency_ms is None:
+                    latency_ms = max(1, round((time.monotonic() - t0) * 1000))
+                break
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+
+    return exit_ip, latency_ms, last_err
+
+
+def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
+    from cloakbrowser.geoip import _ensure_geoip_db
+
+    ip = None
+    latency_ms = None
+    last_err = None
 
     try:
         if isinstance(proxy, dict) and proxy.get("type") == "singbox":
-            from cloakbrowser.singbox.manager import handle_singbox_proxy
-            proc, socks5_url = handle_singbox_proxy(proxy)
-            target_proxy_url = (
-                f"http://127.0.0.1:{proc.http_port}"
-                if proc and getattr(proc, "http_port", None)
-                else socks5_url
-            )
+            from backend.singbox_runner import fast_singbox_proxy
 
-        t0 = time.monotonic()
-        ip = resolve_proxy_exit_ip(target_proxy_url)
-        latency_ms = round((time.monotonic() - t0) * 1000)
+            with fast_singbox_proxy(proxy) as target_proxy_url:
+                ip, latency_ms, last_err = _probe_proxy_target(target_proxy_url)
+        else:
+            ip, latency_ms, last_err = _probe_proxy_target(proxy)
     except Exception as exc:  # SOCKS w/o socksio, connection refused, etc.
         logger.warning("Proxy test failed: %s", exc)
         return {"ok": False, "error": f"Could not connect through proxy: {exc}"}
-    finally:
-        if proc is not None:
-            try:
-                proc.terminate()
-                proc.proc.wait(timeout=2)
-            except Exception:
-                try:
-                    proc.proc.kill()
-                except Exception:
-                    pass
 
     if not ip:
-        return {"ok": False, "error": "Proxy did not return an exit IP (timeout or blocked)"}
+        return {"ok": False, "error": last_err or "Proxy did not return an exit IP (timeout or blocked)"}
     country = city = timezone = None
     try:  # geo is best-effort; never fails the test
         import geoip2.database
@@ -249,7 +299,7 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
         "country": country,
         "city": city,
         "timezone": timezone,
-        "latency_ms": latency_ms,
+        "latency_ms": latency_ms if latency_ms is not None else 0,
         "cached": False,
     }
 

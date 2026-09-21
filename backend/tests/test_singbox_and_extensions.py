@@ -147,3 +147,28 @@ def test_extensions_api(app_client):
     resp = app_client.get("/api/extensions")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+def test_probe_proxy_target():
+    from backend.browser_manager import _probe_proxy_target
+
+    with patch("httpx.get") as mock_get:
+        def side_effect(url, **kwargs):
+            mock_resp = MagicMock()
+            if "generate_204" in url:
+                mock_resp.status_code = 204
+                return mock_resp
+            if "api.ip.sb" in url:
+                mock_resp.status_code = 200
+                mock_resp.text = "1.2.3.4\n"
+                return mock_resp
+            mock_resp.status_code = 500
+            return mock_resp
+
+        mock_get.side_effect = side_effect
+        ip, latency, err = _probe_proxy_target("http://127.0.0.1:1080")
+        assert ip == "1.2.3.4"
+        assert latency is not None
+        assert latency >= 1
+        assert err is None
+
