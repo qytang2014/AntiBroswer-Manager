@@ -172,3 +172,33 @@ def test_probe_proxy_target():
         assert latency >= 1
         assert err is None
 
+
+def test_resolve_profile_network_fingerprint_sync():
+    from backend.browser_manager import _resolve_profile_network_fingerprint_sync
+
+    with patch("backend.browser_manager._probe_proxy_target", return_value=("8.8.8.8", 50, None)):
+        # 1. Profile with empty timezone/locale -> auto-matched from exit IP
+        profile_auto = {"timezone": None, "locale": None, "geoip": True, "launch_args": []}
+        tz, loc, args = _resolve_profile_network_fingerprint_sync("http://127.0.0.1:1080", profile_auto)
+        assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
+        assert "--fingerprint-webrtc-ip=8.8.8.8" in args
+        assert tz is not None
+        assert loc is not None
+
+        # 2. Profile with explicit timezone and locale -> user preference preserved
+        profile_manual = {
+            "timezone": "Europe/London",
+            "locale": "en-GB",
+            "geoip": False,
+            "launch_args": [],
+        }
+        tz_m, loc_m, args_m = _resolve_profile_network_fingerprint_sync("http://127.0.0.1:1080", profile_manual)
+        assert tz_m == "Europe/London"
+        assert loc_m == "en-GB"
+        assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args_m
+
+        # 3. Profile without proxy -> no probe, no WebRTC args
+        tz_none, loc_none, args_none = _resolve_profile_network_fingerprint_sync(None, profile_auto)
+        assert args_none == []
+
+

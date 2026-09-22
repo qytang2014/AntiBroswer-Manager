@@ -304,6 +304,70 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
     }
 
 
+def _resolve_profile_network_fingerprint_sync(
+    proxy: Any,
+    profile: dict[str, Any],
+) -> tuple[str | None, str | None, list[str]]:
+    """Resolve exit IP, timezone, locale, and WebRTC anti-leak args for a profile launch.
+
+    Returns (timezone, locale, extra_webrtc_args).
+
+    Protections:
+    1. If timezone or locale is not specified (or geoip is True), probes the proxy's
+       actual exit IP using fast sing-box/direct probe instead of letting upstream
+       fall back to local direct connection (which leaks China real IP/timezone).
+    2. Spoofs WebRTC to the proxy exit IP: --fingerprint-webrtc-ip=<exit_ip>.
+    3. Forces WebRTC to never leak non-proxied UDP: --force-webrtc-ip-handling-policy=disable_non_proxied_udp.
+    """
+    from cloakbrowser.geoip import COUNTRY_LOCALE_MAP, _ensure_geoip_db
+
+    extra_args: list[str] = []
+    user_launch_args = profile.get("launch_args") or []
+    timezone = profile.get("timezone") or None
+    locale = profile.get("locale") or None
+    exit_ip = None
+
+    if proxy:
+        # Enforce strict WebRTC interface policy: prevent non-proxied UDP on local interfaces
+        has_user_policy = any(a.startswith("--force-webrtc-ip-handling-policy") for a in user_launch_args)
+        if not has_user_policy:
+            extra_args.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+
+    # If timezone or locale is missing or geoip is enabled, resolve exit IP through proxy
+    need_probe = proxy and (bool(profile.get("geoip", True)) or timezone is None or locale is None)
+
+    if need_probe:
+        try:
+            if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+                from backend.singbox_runner import fast_singbox_proxy
+
+                with fast_singbox_proxy(proxy) as target_proxy_url:
+                    exit_ip, _, _ = _probe_proxy_target(target_proxy_url)
+            else:
+                exit_ip, _, _ = _probe_proxy_target(proxy)
+
+            if exit_ip:
+                has_user_webrtc_ip = any(a.startswith("--fingerprint-webrtc-ip") for a in user_launch_args)
+                if not has_user_webrtc_ip:
+                    extra_args.append(f"--fingerprint-webrtc-ip={exit_ip}")
+                try:
+                    import geoip2.database
+
+                    with geoip2.database.Reader(_ensure_geoip_db()) as reader:
+                        resp = reader.city(exit_ip)
+                        if timezone is None and resp.location.time_zone:
+                            timezone = resp.location.time_zone
+                        if locale is None and resp.country.iso_code:
+                            country = resp.country.iso_code
+                            locale = COUNTRY_LOCALE_MAP.get(country, "en-US")
+                except Exception as geo_exc:
+                    logger.warning("Failed to resolve GeoIP from exit IP %s: %s", exit_ip, geo_exc)
+        except Exception as exc:
+            logger.warning("Failed to pre-probe proxy for network fingerprint: %s", exc)
+
+    return timezone, locale, extra_args
+
+
 def _init_profile_defaults(user_data_dir: Path) -> None:
     """Set up bookmarks and DuckDuckGo search on first launch."""
     default_dir = user_data_dir / "Default"
@@ -673,16 +737,22 @@ class BrowserManager:
             if proxy:
                 _validate_proxy(proxy)
 
+            # Resolve network fingerprint (WebRTC, Timezone, Locale) safely without leaking local IP
+            resolved_tz, resolved_locale, net_args = await asyncio.to_thread(
+                _resolve_profile_network_fingerprint_sync, proxy, profile
+            )
+            extra_args.extend(net_args)
+
             launch_options: dict[str, Any] = {
                 "user_data_dir": profile["user_data_dir"],
                 "headless": False,
                 "proxy": proxy,
                 "args": extra_args,
-                "timezone": profile.get("timezone") or None,
-                "locale": profile.get("locale") or None,
+                "timezone": resolved_tz,
+                "locale": resolved_locale,
                 "humanize": bool(profile.get("humanize", False)),
                 "human_preset": profile.get("human_preset", "default"),
-                "geoip": bool(profile.get("geoip", False)),
+                "geoip": False if proxy else bool(profile.get("geoip", False)),
                 "color_scheme": profile.get("color_scheme") or None,
                 "extension_paths": profile.get("extension_paths") or [],
                 "license_key": self.license_key,
