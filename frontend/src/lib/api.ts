@@ -116,6 +116,13 @@ export interface PopularExtension {
   rating: number;
 }
 
+export interface WebStoreSearchResult {
+  id: string;
+  name: string;
+  description?: string;
+  icon_url?: string | null;
+}
+
 
 export interface SystemStatus {
   running_count: number;
@@ -275,6 +282,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ id_or_url }),
     }),
+
+  searchWebStore: (query: string) =>
+    request<WebStoreSearchResult[]>(`/api/extensions/webstore/search?q=${encodeURIComponent(query)}`),
 
   uploadExtension: async (file: File): Promise<Extension> => {
     const formData = new FormData();

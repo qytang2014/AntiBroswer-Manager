@@ -140,13 +140,44 @@ def test_extensions_api(app_client):
     # Popular list
     resp = app_client.get("/api/extensions/popular")
     assert resp.status_code == 200
-    assert len(resp.json()) > 0
-    assert any(p["name"] == "uBlock Origin" for p in resp.json())
+    popular = resp.json()
+    assert len(popular) > 0
+    names = [p["name"] for p in popular]
+    assert "Bitwarden Password Manager" in names
+    assert "floccus bookmarks sync" in names
+    assert "MetaMask" not in names
+    assert "Proxy SwitchyOmega" not in names
 
     # List extensions
     resp = app_client.get("/api/extensions")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+def test_search_webstore_api(app_client):
+    from unittest.mock import patch
+
+    mock_html = """
+    <div data-item-id="nngceckbapebfimnlniiiahkandclblb">
+        <h2>Bitwarden Password Manager</h2>
+        <img src="https://lh3.googleusercontent.com/icon.png" />
+        <p>A secure and free password manager for all of your devices.</p>
+    </div>
+    """
+    with patch("httpx.AsyncClient.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = mock_html
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        resp = app_client.get("/api/extensions/webstore/search?q=bitwarden")
+        assert resp.status_code == 200
+        results = resp.json()
+        assert len(results) == 1
+        assert results[0]["id"] == "nngceckbapebfimnlniiiahkandclblb"
+        assert results[0]["name"] == "Bitwarden Password Manager"
+        assert "password manager" in results[0]["description"].lower()
 
 
 def test_probe_proxy_target():
@@ -176,14 +207,21 @@ def test_probe_proxy_target():
 def test_resolve_profile_network_fingerprint_sync():
     from backend.browser_manager import _resolve_profile_network_fingerprint_sync
 
-    with patch("backend.browser_manager._probe_proxy_target", return_value=("8.8.8.8", 50, None)):
+    mock_city = MagicMock()
+    mock_city.location.time_zone = "America/Chicago"
+    mock_city.country.iso_code = "US"
+    mock_reader = MagicMock()
+    mock_reader.__enter__.return_value.city.return_value = mock_city
+
+    with patch("backend.browser_manager._probe_proxy_target", return_value=("8.8.8.8", 50, None)), \
+         patch("geoip2.database.Reader", return_value=mock_reader):
         # 1. Profile with empty timezone/locale -> auto-matched from exit IP
         profile_auto = {"timezone": None, "locale": None, "geoip": True, "launch_args": []}
         tz, loc, args = _resolve_profile_network_fingerprint_sync("http://127.0.0.1:1080", profile_auto)
         assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
         assert "--fingerprint-webrtc-ip=8.8.8.8" in args
-        assert tz is not None
-        assert loc is not None
+        assert tz == "America/Chicago"
+        assert loc == "en-US"
 
         # 2. Profile with explicit timezone and locale -> user preference preserved
         profile_manual = {

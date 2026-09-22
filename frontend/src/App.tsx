@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
 import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
@@ -14,6 +14,7 @@ import { LaunchErrorBanner } from "./components/LaunchErrorBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LoginPage } from "./components/LoginPage";
 import { ProxyManagerModal } from "./components/ProxyManagerModal";
+import { ExtensionManagerModal } from "./components/ExtensionManagerModal";
 
 type AuthState = "checking" | "required" | "ok" | "error";
 type View = "empty" | "create" | "edit" | "view";
@@ -105,6 +106,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [launchError, setLaunchError] = useState<LaunchDenial | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [proxyManagerOpen, setProxyManagerOpen] = useState(false);
+  const [extensionManagerOpen, setExtensionManagerOpen] = useState(false);
   const [stopped, setStopped] = useState(false);
 
   const handleQuit = useCallback(async () => {
@@ -261,6 +263,12 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           onClose={() => setProxyManagerOpen(false)}
         />
       )}
+      {extensionManagerOpen && (
+        <ExtensionManagerModal
+          isOpen={extensionManagerOpen}
+          onClose={() => setExtensionManagerOpen(false)}
+        />
+      )}
       {updateInfo?.update_available && !updateDismissed && (
         <UpdateBanner info={updateInfo} onDismiss={() => setUpdateDismissed(true)} />
       )}
@@ -308,6 +316,13 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
               title="管理代理 / Manage Proxies"
             >
               <Network className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setExtensionManagerOpen(true)}
+              className="text-gray-500 hover:text-amber-400 p-1"
+              title="管理扩展 / Manage Extensions"
+            >
+              <Puzzle className="h-4 w-4" />
             </button>
             <button
               onClick={() => setSettingsOpen(true)}

@@ -16,12 +16,15 @@ import pytest
 # main.py:381 also does `from cloakbrowser.config import CHROMIUM_VERSION`.
 # ---------------------------------------------------------------------------
 
+_proxy_repo = Path(__file__).resolve().parents[3] / "CloakBrowser-Proxy"
 _mock_cloakbrowser = types.ModuleType("cloakbrowser")
+_mock_cloakbrowser.__path__ = [str(_proxy_repo / "cloakbrowser")] if (_proxy_repo / "cloakbrowser").exists() else []
 _mock_cloakbrowser.launch_persistent_context_async = AsyncMock()  # type: ignore[attr-defined]
 
 _mock_config = types.ModuleType("cloakbrowser.config")
 _mock_config.CHROMIUM_VERSION = "0.0.0-test"  # type: ignore[attr-defined]
 _mock_config.get_chromium_version = lambda: "0.0.0-test"  # type: ignore[attr-defined]
+_mock_config.get_cache_dir = lambda: Path("/tmp")  # type: ignore[attr-defined]
 
 # BrowserManager.resolve_binary_status() (run in the lifespan) imports these.
 _mock_download = types.ModuleType("cloakbrowser.download")
@@ -39,6 +42,11 @@ _mock_license.CloakBrowserLicenseError = type(  # type: ignore[attr-defined]
 _mock_license.license_error_for_code = lambda code: None  # type: ignore[attr-defined]
 _mock_license.read_denial_file = lambda path: None  # type: ignore[attr-defined]
 
+sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
+sys.modules["cloakbrowser.config"] = _mock_config
+sys.modules.setdefault("cloakbrowser.download", _mock_download)
+sys.modules.setdefault("cloakbrowser.license", _mock_license)
+
 # Mock cloakbrowser.singbox or attach real implementation if available
 try:
     from pathlib import Path
@@ -54,11 +62,6 @@ try:
     sys.modules["cloakbrowser.singbox.manager"] = _real_sb_manager
 except Exception:
     pass
-
-sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
-sys.modules.setdefault("cloakbrowser.config", _mock_config)
-sys.modules.setdefault("cloakbrowser.download", _mock_download)
-sys.modules.setdefault("cloakbrowser.license", _mock_license)
 
 
 from backend import database as db  # noqa: E402

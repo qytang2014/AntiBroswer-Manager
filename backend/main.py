@@ -77,6 +77,7 @@ from .extension_manager import (
     install_extension_from_bytes,
     install_from_webstore,
     remove_extension,
+    search_chrome_webstore,
 )
 from .runtime import bundle_dir
 from .settings_store import load_settings, save_settings
@@ -606,6 +607,12 @@ async def list_extensions_endpoint():
 async def popular_extensions_endpoint():
     """Return popular extensions curated for 1-click install."""
     return POPULAR_EXTENSIONS
+
+
+@app.get("/api/extensions/webstore/search")
+async def search_webstore_endpoint(q: str = ""):
+    """Search Google Chrome Web Store by keyword."""
+    return await search_chrome_webstore(q)
 
 
 @app.post("/api/extensions/upload")

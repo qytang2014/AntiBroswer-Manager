@@ -45,26 +45,25 @@ POPULAR_EXTENSIONS = [
         "rating": 4.8,
     },
     {
-        "id": "nkbihfbeogaeaoehlefnkodbefgpgknn",
-        "name": "MetaMask",
-        "description": "Ethereum wallet in your browser.",
+        "id": "nngceckbapebfimnlniiiahkandclblb",
+        "name": "Bitwarden Password Manager",
+        "description": "A secure and free password manager for all of your devices.",
         "version": "Latest",
-        "rating": 4.6,
+        "rating": 4.9,
     },
     {
-        "id": "iphcomljkgghnfcnojlahf Eureka",
+        "id": "fnaicdffflnofjppbagibeoednhnbjhg",
+        "name": "floccus bookmarks sync",
+        "description": "Sync your bookmarks privately across browsers via Nextcloud, WebDAV or Git.",
+        "version": "Latest",
+        "rating": 4.7,
+    },
+    {
         "id": "hlkenndednhfkekhgcdicdfddnkalmdm",
         "name": "Cookie-Editor",
         "description": "Simple and powerful Cookie Editor.",
         "version": "Latest",
         "rating": 4.7,
-    },
-    {
-        "id": "padekgcemlokbadohgkifijomclgjgif",
-        "name": "Proxy SwitchyOmega",
-        "description": "Manage and switch between multiple proxies easily.",
-        "version": "Latest",
-        "rating": 4.5,
     },
     {
         "id": "idgpnmonknjnojddfkpgkljpfnnfcklj",
@@ -74,6 +73,80 @@ POPULAR_EXTENSIONS = [
         "rating": 4.6,
     },
 ]
+
+
+async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
+    """Search Google Chrome Web Store by keyword, or resolve ID/URL directly."""
+    import html
+    import urllib.parse
+
+    query = query.strip()
+    if not query:
+        return []
+
+    # If user provided a 32-char ID or URL, extract it
+    direct_id = extract_webstore_id(query)
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+    }
+
+    url = f"https://chromewebstore.google.com/search/{urllib.parse.quote(query)}"
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0, trust_env=True) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                logger.warning("WebStore search returned HTTP %d for '%s'", resp.status_code, query)
+                return []
+            page_text = resp.text
+    except Exception as exc:
+        logger.warning("WebStore search request failed for '%s': %s", query, exc)
+        return []
+
+    results: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    cards = re.findall(
+        r"data-item-id=\"([a-p]{32})\"([\s\S]*?)(?=(?:data-item-id=\"[a-p]{32}\"|<\/section>|$))",
+        page_text,
+    )
+    for ext_id, chunk in cards:
+        if ext_id in seen_ids:
+            continue
+        seen_ids.add(ext_id)
+
+        name_m = re.search(r"<h2[^>]*>([\s\S]*?)</h2>", chunk)
+        name = html.unescape(re.sub(r"<[^>]+>", "", name_m.group(1)).strip()) if name_m else ext_id
+
+        img_m = re.search(r"<img[^>]+src=\"([^\"]+)\"", chunk)
+        icon_url = img_m.group(1) if img_m else None
+
+        desc_m = re.search(r"<p[^>]*class=\"[^\"]*rQHEi[^\"]*\"[^>]*>([\s\S]*?)</p>", chunk)
+        if not desc_m:
+            desc_m = re.search(r"<p[^>]*>([\s\S]*?)</p>", chunk)
+        desc = html.unescape(re.sub(r"<[^>]+>", "", desc_m.group(1)).strip()) if desc_m else ""
+
+        results.append({
+            "id": ext_id,
+            "name": name,
+            "description": desc,
+            "icon_url": icon_url,
+        })
+
+    # If direct_id was detected but wasn't in top results, prioritize or include it
+    if direct_id and direct_id not in seen_ids:
+        results.insert(0, {
+            "id": direct_id,
+            "name": f"Extension ({direct_id})",
+            "description": "Direct Chrome Web Store extension ID match",
+            "icon_url": None,
+        })
+
+    return results
 
 
 def extract_webstore_id(input_str: str) -> str | None:

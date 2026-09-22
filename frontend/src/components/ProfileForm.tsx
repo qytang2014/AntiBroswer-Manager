@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Loader2, Puzzle, RotateCcw, Save, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Loader2, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
@@ -10,7 +10,6 @@ import type {
   ProxyTestResult,
   ViewerMode,
 } from "../lib/api";
-import { ExtensionManagerModal } from "./ExtensionManagerModal";
 import { ProxyManagerModal } from "./ProxyManagerModal";
 
 function detectProxyType(raw: string | null | undefined): "standard" | "singbox_uri" | "singbox_sub" | "singbox_json" {
@@ -94,7 +93,10 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     detectProxyType(profile?.proxy)
   );
   const [installedExtensions, setInstalledExtensions] = useState<Extension[]>([]);
-  const [isExtModalOpen, setIsExtModalOpen] = useState(false);
+  const [extDropdownOpen, setExtDropdownOpen] = useState(false);
+  const [extSearch, setExtSearch] = useState("");
+  const extDropdownRef = useRef<HTMLDivElement>(null);
+  const prevLibraryPathsRef = useRef<Set<string>>(new Set());
 
   const [managedNodes, setManagedNodes] = useState<ProxyNode[]>([]);
   const [subsMap, setSubsMap] = useState<Map<string, string>>(new Map());
@@ -116,6 +118,16 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
   useEffect(() => {
     loadManagedProxies();
   }, [loadManagedProxies]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (extDropdownRef.current && !extDropdownRef.current.contains(e.target as Node)) {
+        setExtDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const [previewError, setPreviewError] = useState(false);
   const [previewBuster, setPreviewBuster] = useState(0);
@@ -140,12 +152,32 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
   }, []);
   const [tagInput, setTagInput] = useState("");
   const [tagColor, setTagColor] = useState<string | null>("#6366f1");
-  const [extensionPathInput, setExtensionPathInput] = useState("");
   const [launchArgInput, setLaunchArgInput] = useState("");
+
   const loadInstalledExtensions = async () => {
     try {
       const list = await api.listExtensions();
       setInstalledExtensions(list);
+
+      setForm((f) => {
+        const currentPaths = f.extension_paths ?? [];
+        if (!profile) {
+          // New profile: default all installed extensions to checked
+          return { ...f, extension_paths: list.map((e) => e.path) };
+        } else {
+          // Existing profile: if there are newly installed extensions in the library, auto-select them
+          const updated = new Set(currentPaths);
+          const prevKnown = prevLibraryPathsRef.current;
+          list.forEach((ext) => {
+            if (!prevKnown.has(ext.path) && prevKnown.size > 0) {
+              updated.add(ext.path);
+            }
+          });
+          return { ...f, extension_paths: Array.from(updated) };
+        }
+      });
+
+      prevLibraryPathsRef.current = new Set(list.map((e) => e.path));
     } catch (err) {
       console.error("Failed to load extensions in form:", err);
     }
@@ -181,11 +213,17 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
         tags: profile.tags ?? [],
       });
       setProxyType(detectProxyType(profile.proxy));
+    } else {
+      // New profile: default all installed extensions to checked
+      setForm((f) => ({
+        ...f,
+        extension_paths: installedExtensions.map((e) => e.path),
+      }));
     }
     // Re-fetch the preview for the newly selected profile (bust the cache).
     setPreviewError(false);
     setPreviewBuster(Date.now());
-  }, [profile?.id]);
+  }, [profile?.id, installedExtensions.length]);
 
   useEffect(() => {
     if (hostOs === "macos") {
@@ -204,6 +242,22 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     } else {
       set("extension_paths", [...current, extPath]);
     }
+  };
+
+  const selectAllExtensions = () => {
+    const allPaths = Array.from(
+      new Set([...(form.extension_paths ?? []), ...installedExtensions.map((e) => e.path)])
+    );
+    set("extension_paths", allPaths);
+  };
+
+  const clearAllExtensions = () => {
+    set("extension_paths", []);
+  };
+
+  const removeExtensionPath = (pathToRemove: string) => {
+    const current = form.extension_paths ?? [];
+    set("extension_paths", current.filter((p) => p !== pathToRemove));
   };
 
   const handleTestProxy = async () => {
@@ -321,17 +375,6 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
 
   const removeTag = (tag: string) => {
     set("tags", (form.tags ?? []).filter((t) => t.tag !== tag));
-  };
-
-  const addExtensionPath = () => {
-    const path = extensionPathInput.trim();
-    if (!path || (form.extension_paths ?? []).includes(path)) return;
-    set("extension_paths", [...(form.extension_paths ?? []), path]);
-    setExtensionPathInput("");
-  };
-
-  const removeExtensionPath = (index: number) => {
-    set("extension_paths", (form.extension_paths ?? []).filter((_, i) => i !== index));
   };
 
   const addLaunchArg = () => {
@@ -913,87 +956,160 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
         {/* Extensions */}
         <section>
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Chrome Extensions</h3>
-            <button
-              type="button"
-              onClick={() => setIsExtModalOpen(true)}
-              className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-medium"
-            >
-              <Puzzle className="h-3.5 w-3.5" />
-              Manage Extensions
-            </button>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Chrome Extensions / 扩展插件
+            </h3>
+            <span className="text-[11px] text-gray-500">
+              {installedExtensions.length > 0
+                ? `${(form.extension_paths ?? []).length} / ${installedExtensions.length} selected`
+                : "No extensions in library"}
+            </span>
           </div>
 
           <p className="text-xs text-gray-500 mb-3">
-            Select installed extensions from library or add custom unpacked directories.
+            默认全选所有已安装插件，可点击下拉框取消添加或自定义勾选。
           </p>
 
-          {/* Installed Extensions Selection */}
-          {installedExtensions.length > 0 && (
-            <div className="space-y-1.5 mb-3">
-              <div className="text-[11px] text-gray-400 font-medium">Installed Extension Library:</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {installedExtensions.map((ext) => {
-                  const isSelected = (form.extension_paths ?? []).includes(ext.path);
-                  return (
-                    <div
-                      key={ext.id}
-                      onClick={() => toggleExtension(ext.path)}
-                      className={`p-2 rounded-lg border cursor-pointer flex items-center gap-2.5 transition ${
-                        isSelected
-                          ? "bg-indigo-950/40 border-indigo-500/50 text-white"
-                          : "bg-gray-800/30 border-gray-800 text-gray-400 hover:border-gray-700"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {}} // handled by parent div
-                        className="rounded border-gray-700 text-indigo-600 focus:ring-0"
-                      />
-                      {ext.icon_url ? (
-                        <img src={ext.icon_url} alt={ext.name} className="h-5 w-5 rounded object-contain shrink-0" />
-                      ) : (
-                        <div className="h-5 w-5 rounded bg-indigo-950 flex items-center justify-center text-[10px] font-bold text-indigo-300">
-                          {ext.name.charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-medium truncate">{ext.name}</div>
-                        <div className="text-[10px] text-gray-500 truncate">v{ext.version}</div>
-                      </div>
-                    </div>
-                  );
-                })}
+          {/* Multi-select dropdown */}
+          <div className="relative mb-3" ref={extDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setExtDropdownOpen(!extDropdownOpen)}
+              className="w-full input flex items-center justify-between py-2 text-left cursor-pointer hover:border-gray-600 transition"
+            >
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <Puzzle className="h-4 w-4 text-amber-400 shrink-0" />
+                <span className="text-xs text-gray-200 truncate">
+                  {(form.extension_paths ?? []).length > 0
+                    ? `已勾选 ${(form.extension_paths ?? []).length} 个插件 (点击展开选择)`
+                    : "未选择任何插件 (点击展开选择)"}
+                </span>
               </div>
-            </div>
-          )}
+              {extDropdownOpen ? (
+                <ChevronUp className="h-4 w-4 text-gray-400 shrink-0" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
+              )}
+            </button>
 
-          {/* Custom Unpacked Path List */}
-          {(form.extension_paths ?? []).length > 0 && (
-            <div className="space-y-1.5 mb-3">
-              <div className="text-[11px] text-gray-400 font-medium">Active Extension Paths:</div>
-              {(form.extension_paths ?? []).map((path, index) => (
-                <div key={`${path}-${index}`} className="flex items-center gap-2 rounded-md bg-surface-3 px-2 py-1.5">
-                  <code className="flex-1 truncate text-xs text-gray-300">{path}</code>
-                  <button type="button" onClick={() => removeExtensionPath(index)} className="hover:opacity-70">
-                    <X className="h-3 w-3" />
+            {extDropdownOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-2 max-h-72 flex flex-col">
+                {/* Search & quick actions */}
+                <div className="flex items-center gap-2 pb-2 border-b border-gray-800">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-500" />
+                    <input
+                      type="text"
+                      placeholder="Filter extensions..."
+                      value={extSearch}
+                      onChange={(e) => setExtSearch(e.target.value)}
+                      className="input w-full pl-7 py-1 text-xs"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={selectAllExtensions}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium px-1.5 py-1 rounded hover:bg-gray-800"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearAllExtensions}
+                    className="text-[10px] text-gray-400 hover:text-gray-200 font-medium px-1.5 py-1 rounded hover:bg-gray-800"
+                  >
+                    清空
                   </button>
                 </div>
-              ))}
+
+                {/* List of installed extensions */}
+                <div className="flex-1 overflow-y-auto py-1 space-y-1">
+                  {installedExtensions.length === 0 ? (
+                    <div className="text-center py-4 text-gray-500 text-xs">
+                      插件库暂无扩展，请在顶部导航栏点击 🧩 管理扩展 进行安装。
+                    </div>
+                  ) : (
+                    installedExtensions
+                      .filter(
+                        (e) =>
+                          e.name.toLowerCase().includes(extSearch.toLowerCase()) ||
+                          (e.description || "").toLowerCase().includes(extSearch.toLowerCase())
+                      )
+                      .map((ext) => {
+                        const isSelected = (form.extension_paths ?? []).includes(ext.path);
+                        return (
+                          <div
+                            key={ext.id}
+                            onClick={() => toggleExtension(ext.path)}
+                            className={`p-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition ${
+                              isSelected
+                                ? "bg-indigo-950/50 text-white"
+                                : "hover:bg-gray-800 text-gray-300"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                className="rounded border-gray-700 text-indigo-600 focus:ring-0"
+                              />
+                              {ext.icon_url ? (
+                                <img
+                                  src={ext.icon_url}
+                                  alt={ext.name}
+                                  className="h-5 w-5 rounded object-contain shrink-0"
+                                />
+                              ) : (
+                                <div className="h-5 w-5 rounded bg-indigo-950 flex items-center justify-center text-[10px] font-bold text-indigo-300 shrink-0">
+                                  🧩
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-medium truncate">{ext.name}</div>
+                                <div className="text-[10px] text-gray-400 truncate">v{ext.version}</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Selected extension chips */}
+          {(form.extension_paths ?? []).length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {(form.extension_paths ?? []).map((path) => {
+                const ext = installedExtensions.find((e) => e.path === path);
+                const displayName = ext ? ext.name : path.split("/").pop() || path;
+                return (
+                  <span
+                    key={path}
+                    className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-indigo-950/60 border border-indigo-800/50 text-indigo-200"
+                  >
+                    {ext?.icon_url ? (
+                      <img src={ext.icon_url} alt="" className="h-3.5 w-3.5 object-contain" />
+                    ) : (
+                      <Puzzle className="h-3 w-3 text-indigo-400" />
+                    )}
+                    <span className="truncate max-w-[160px]">{displayName}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeExtensionPath(path)}
+                      className="hover:text-white transition"
+                      title="Remove"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           )}
-
-          <div className="flex gap-2">
-            <input
-              className="input flex-1 font-mono text-xs"
-              value={extensionPathInput}
-              onChange={(e) => setExtensionPathInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addExtensionPath(); } }}
-              placeholder="Or enter custom unpacked path: /path/to/extension"
-            />
-            <button type="button" onClick={addExtensionPath} className="btn-secondary text-xs">Add</button>
-          </div>
         </section>
 
         {/* Advanced */}
@@ -1044,11 +1160,6 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
       </div>
 
     </form>
-    <ExtensionManagerModal
-      isOpen={isExtModalOpen}
-      onClose={() => setIsExtModalOpen(false)}
-      onExtensionsChanged={loadInstalledExtensions}
-    />
     <ProxyManagerModal
       isOpen={isProxyModalOpen}
       onClose={() => setIsProxyModalOpen(false)}

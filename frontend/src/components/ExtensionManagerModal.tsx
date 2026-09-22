@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { X, Upload, Download, Trash2, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import { api, Extension, PopularExtension, ApiError } from "../lib/api";
+import { X, Upload, Download, Trash2, CheckCircle2, AlertCircle, Loader2, Search } from "lucide-react";
+import { api, Extension, PopularExtension, WebStoreSearchResult, ApiError } from "../lib/api";
 
 interface ExtensionManagerModalProps {
   isOpen: boolean;
@@ -16,8 +16,11 @@ export function ExtensionManagerModal({
   const [activeTab, setActiveTab] = useState<"webstore" | "popular" | "upload">("webstore");
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [popular, setPopular] = useState<PopularExtension[]>([]);
+  const [searchResults, setSearchResults] = useState<WebStoreSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [installingId, setInstallingId] = useState<string | null>(null);
   const [webstoreInput, setWebstoreInput] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -57,11 +60,12 @@ export function ExtensionManagerModal({
     if (!target.trim()) return;
 
     setActionLoading(true);
+    setInstallingId(target);
     setFeedback(null);
     try {
       const installed = await api.installFromWebStore(target.trim());
       setFeedback({ type: "success", text: `Successfully installed "${installed.name}"!` });
-      setWebstoreInput("");
+      if (!idOrUrl) setWebstoreInput("");
       await fetchExtensions();
       onExtensionsChanged?.();
     } catch (err) {
@@ -69,6 +73,40 @@ export function ExtensionManagerModal({
       setFeedback({ type: "error", text: msg });
     } finally {
       setActionLoading(false);
+      setInstallingId(null);
+    }
+  };
+
+  const handleSearchOrInstall = async () => {
+    const target = webstoreInput.trim();
+    if (!target) return;
+
+    // Check if it looks like a direct 32-char ID or Web Store URL
+    const isDirectId = /^[a-p]{32}$/i.test(target);
+    const isUrl = target.includes("chromewebstore.google.com");
+
+    if (isDirectId || isUrl) {
+      handleInstallFromWebStore(target);
+      return;
+    }
+
+    // Keyword search
+    setSearching(true);
+    setFeedback(null);
+    try {
+      const results = await api.searchWebStore(target);
+      setSearchResults(results);
+      if (results.length === 0) {
+        setFeedback({
+          type: "error",
+          text: `No extensions found for "${target}". Try another keyword or paste direct ID/URL.`,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Failed to search Chrome Web Store";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setSearching(false);
     }
   };
 
@@ -187,26 +225,105 @@ export function ExtensionManagerModal({
 
           <div className="mt-3 pb-2">
             {activeTab === "webstore" && (
-              <div className="flex gap-2">
-                <input
-                  className="input flex-1 text-xs"
-                  value={webstoreInput}
-                  onChange={(e) => setWebstoreInput(e.target.value)}
-                  placeholder="https://chromewebstore.google.com/detail/... or 32-char ID"
-                  disabled={actionLoading}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleInstallFromWebStore();
-                  }}
-                />
-                <button
-                  type="button"
-                  className="btn-primary text-xs px-4 flex items-center gap-1.5 disabled:opacity-50"
-                  onClick={() => handleInstallFromWebStore()}
-                  disabled={actionLoading || !webstoreInput.trim()}
-                >
-                  {actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                  Install
-                </button>
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+                    <input
+                      className="input w-full pl-8 text-xs"
+                      value={webstoreInput}
+                      onChange={(e) => setWebstoreInput(e.target.value)}
+                      placeholder="Search Chrome Web Store by keyword, or enter 32-char ID / URL..."
+                      disabled={actionLoading || searching}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleSearchOrInstall();
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs px-4 flex items-center gap-1.5 disabled:opacity-50"
+                    onClick={() => handleSearchOrInstall()}
+                    disabled={actionLoading || searching || !webstoreInput.trim()}
+                  >
+                    {searching || actionLoading ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Search className="h-3.5 w-3.5" />
+                    )}
+                    Search / Install
+                  </button>
+                </div>
+
+                {/* Search Results */}
+                {searchResults.length > 0 && (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto border border-gray-800/80 rounded-lg p-2 bg-gray-950/40">
+                    <div className="text-[11px] text-gray-400 font-medium px-1 flex items-center justify-between">
+                      <span>Search Results ({searchResults.length}):</span>
+                      <button
+                        type="button"
+                        onClick={() => setSearchResults([])}
+                        className="text-[10px] text-gray-500 hover:text-gray-300"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    {searchResults.map((item) => {
+                      const isInstalled = extensions.some(
+                        (e) => e.webstore_id === item.id || e.name.toLowerCase() === item.name.toLowerCase()
+                      );
+                      const isThisInstalling = actionLoading && installingId === item.id;
+
+                      return (
+                        <div
+                          key={item.id}
+                          className="p-2 rounded-lg border border-gray-800/60 bg-gray-900/60 flex items-center justify-between gap-2.5 hover:border-gray-700 transition"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            {item.icon_url ? (
+                              <img
+                                src={item.icon_url}
+                                alt={item.name}
+                                className="h-7 w-7 rounded shrink-0 object-contain bg-gray-800/60 p-0.5"
+                              />
+                            ) : (
+                              <div className="h-7 w-7 rounded shrink-0 bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center text-indigo-300 text-xs font-bold">
+                                🧩
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-semibold text-white truncate">{item.name}</div>
+                              {item.description && (
+                                <div className="text-[10px] text-gray-400 truncate">{item.description}</div>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className={`text-xs px-2.5 py-1 rounded transition shrink-0 flex items-center gap-1 ${
+                              isInstalled
+                                ? "bg-gray-800 text-gray-400 cursor-default"
+                                : "btn-secondary text-indigo-300 hover:text-white"
+                            }`}
+                            disabled={actionLoading || isInstalled}
+                            onClick={() => handleInstallFromWebStore(item.id)}
+                          >
+                            {isThisInstalling ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : isInstalled ? (
+                              "Installed"
+                            ) : (
+                              <>
+                                <Download className="h-3 w-3" />
+                                Install
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
