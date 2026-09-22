@@ -17,18 +17,52 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _proxy_repo = Path(__file__).resolve().parents[3] / "CloakBrowser-Proxy"
+if _proxy_repo.exists() and str(_proxy_repo) not in sys.path:
+    sys.path.insert(0, str(_proxy_repo))
+
 _mock_cloakbrowser = types.ModuleType("cloakbrowser")
 _mock_cloakbrowser.__path__ = [str(_proxy_repo / "cloakbrowser")] if (_proxy_repo / "cloakbrowser").exists() else []
 _mock_cloakbrowser.launch_persistent_context_async = AsyncMock()  # type: ignore[attr-defined]
+sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
 
-_mock_config = types.ModuleType("cloakbrowser.config")
-_mock_config.CHROMIUM_VERSION = "0.0.0-test"  # type: ignore[attr-defined]
-_mock_config.get_chromium_version = lambda: "0.0.0-test"  # type: ignore[attr-defined]
-_mock_config.get_cache_dir = lambda: Path("/tmp")  # type: ignore[attr-defined]
+try:
+    import cloakbrowser.config as _real_config
+    _real_config.CHROMIUM_VERSION = "0.0.0-test"
+    _real_config.get_chromium_version = lambda: "0.0.0-test"
+    sys.modules["cloakbrowser.config"] = _real_config
+except Exception:
+    _mock_config = types.ModuleType("cloakbrowser.config")
+    _mock_config.CHROMIUM_VERSION = "0.0.0-test"  # type: ignore[attr-defined]
+    _mock_config.get_chromium_version = lambda: "0.0.0-test"  # type: ignore[attr-defined]
+    _mock_config.get_cache_dir = lambda: Path("/tmp")  # type: ignore[attr-defined]
+    _mock_config.DOWNLOAD_BASE_URL = "https://mock.download.com"
+    _mock_config.PLATFORM_CHROMIUM_VERSIONS = {}
+    _mock_config.get_archive_ext = lambda: ".tar.gz"
+    _mock_config.get_archive_name = lambda: "mock.tar.gz"
+    _mock_config.get_binary_dir = lambda: Path("/tmp/mock_bin")
+    _mock_config.get_binary_path = lambda: Path("/tmp/mock_bin/mock")
+    _mock_config.get_download_url = lambda *a, **kw: "https://mock.download.com"
+    _mock_config.get_effective_version = lambda *a, **kw: "0.0.0-test"
+    _mock_config.get_fallback_download_url = lambda *a, **kw: "https://mock.download.com"
+    _mock_config.get_platform_tag = lambda: "darwin_arm64"
+    sys.modules["cloakbrowser.config"] = _mock_config
 
-# BrowserManager.resolve_binary_status() (run in the lifespan) imports these.
-_mock_download = types.ModuleType("cloakbrowser.download")
-_mock_download.ensure_binary = MagicMock()  # type: ignore[attr-defined]
+try:
+    import cloakbrowser.download as _real_download
+    sys.modules["cloakbrowser.download"] = _real_download
+except Exception:
+    _mock_download = types.ModuleType("cloakbrowser.download")
+    _mock_download.ensure_binary = MagicMock()  # type: ignore[attr-defined]
+    _mock_download.DOWNLOAD_TIMEOUT = 30
+    _mock_download._extract_archive = MagicMock()
+    _mock_download._is_executable = MagicMock(return_value=True)
+    _mock_download._pro_binary_ready = MagicMock(return_value=False)
+    _mock_download._verify_download_checksum = MagicMock(return_value=True)
+    _mock_download._verify_pro_download = MagicMock(return_value=True)
+    _mock_download._write_pro_version_marker = MagicMock()
+    _mock_download._write_version_marker = MagicMock()
+    _mock_download.binary_info = MagicMock(return_value={})
+    sys.modules["cloakbrowser.download"] = _mock_download
 
 _mock_license = types.ModuleType("cloakbrowser.license")
 _mock_license.resolve_license_key = lambda key=None: key  # type: ignore[attr-defined]
@@ -41,10 +75,6 @@ _mock_license.CloakBrowserLicenseError = type(  # type: ignore[attr-defined]
 )
 _mock_license.license_error_for_code = lambda code: None  # type: ignore[attr-defined]
 _mock_license.read_denial_file = lambda path: None  # type: ignore[attr-defined]
-
-sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
-sys.modules["cloakbrowser.config"] = _mock_config
-sys.modules.setdefault("cloakbrowser.download", _mock_download)
 sys.modules.setdefault("cloakbrowser.license", _mock_license)
 
 # Mock cloakbrowser.singbox or attach real implementation if available

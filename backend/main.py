@@ -50,6 +50,8 @@ from .models import (
     BatchTestRequest,
     BatchTestResult,
     ClipboardRequest,
+    KernelItem,
+    KernelListResponse,
     LaunchResponse,
     LoginRequest,
     ProfileCreate,
@@ -80,6 +82,11 @@ from .extension_manager import (
     remove_extension,
     search_chrome_webstore,
     stream_install_from_webstore,
+)
+from .kernel_manager import (
+    delete_kernel,
+    list_available_kernels,
+    stream_download_kernel,
 )
 from .runtime import bundle_dir
 from .settings_store import load_settings, save_settings
@@ -691,14 +698,68 @@ async def get_extension_icon_endpoint(ext_id: str):
     try:
         manifest = json.loads((ext_dir / "manifest.json").read_text(encoding="utf-8"))
         icons = manifest.get("icons", {})
+        if not icons:
+            raise HTTPException(status_code=404, detail="No icon in extension")
+        # Find best icon
         for size in ["128", "96", "64", "48", "32", "16"]:
-            if size in icons:
-                icon_file = ext_dir / icons[size]
-                if icon_file.is_file():
-                    return FileResponse(str(icon_file))
-    except Exception:
-        pass
-    raise HTTPException(status_code=404, detail="Icon not found")
+            if size in icons and (ext_dir / icons[size]).is_file():
+                return FileResponse(ext_dir / icons[size])
+        raise HTTPException(status_code=404, detail="Icon file not found")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Kernel endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/kernels", response_model=KernelListResponse)
+async def list_kernels_endpoint():
+    """List all available and installed Chromium stealth kernels."""
+    return list_available_kernels()
+
+
+@app.get("/api/kernels/download-stream")
+async def download_kernel_stream_endpoint(version: str, tier: str = "free"):
+    """Download and extract a Chromium stealth kernel with real-time SSE progress events."""
+    async def event_generator():
+        try:
+            async for event in stream_download_kernel(
+                version=version,
+                tier=tier,
+                license_key=browser_mgr.license_key,
+                release_channel=browser_mgr.release_channel,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            # Re-evaluate status after install
+            browser_mgr.resolve_binary_status()
+        except Exception as exc:
+            err_data = {
+                "stage": "error",
+                "message": str(exc),
+                "percent": 0,
+            }
+            yield f"data: {json.dumps(err_data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.delete("/api/kernels/{version}")
+async def delete_kernel_endpoint(version: str, tier: str = "free"):
+    """Delete an installed Chromium kernel."""
+    success = delete_kernel(version, tier=tier)
+    browser_mgr.resolve_binary_status()
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Kernel {version} not found")
+    return {"ok": True}
 
 
 # ── Proxy Management & Subscriptions ─────────────────────────────────────────
@@ -1179,6 +1240,7 @@ async def get_system_status():
     return StatusResponse(
         running_count=len(browser_mgr.running),
         binary_version=binary_version,
+        binary_installed=browser_mgr.is_binary_ready(),
         license_tier=browser_mgr.license_tier,
         profiles_total=len(profiles),
         host_os=browser_mgr.runtime.host_os,

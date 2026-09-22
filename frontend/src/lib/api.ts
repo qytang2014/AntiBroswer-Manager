@@ -137,6 +137,7 @@ export interface WebStoreSearchResult {
 export interface SystemStatus {
   running_count: number;
   binary_version: string;
+  binary_installed?: boolean;
   license_tier: string; // "pro" | "free" | "keyless"
   profiles_total: number;
   host_os: HostOS;
@@ -145,6 +146,36 @@ export interface SystemStatus {
   windows_fonts_present: number | null;
   windows_fonts_required: number | null;
   windows_fonts_complete: boolean | null;
+}
+
+export interface KernelItem {
+  version: string;
+  name: string;
+  tier: "pro" | "free";
+  platform: string;
+  description: string;
+  installed: boolean;
+  is_active?: boolean;
+  binary_path?: string | null;
+  size_mb?: number | null;
+}
+
+export interface KernelListResponse {
+  current_platform: string;
+  current_tier: string;
+  active_version?: string | null;
+  installed: boolean;
+  kernels: KernelItem[];
+}
+
+export interface KernelDownloadProgress {
+  stage: "connecting" | "downloading" | "verifying" | "extracting" | "completed" | "error";
+  message: string;
+  percent: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  speed_mb?: number;
+  binary_path?: string;
 }
 
 export interface UpdateInfo {
@@ -424,6 +455,46 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  // Kernel Management
+  listKernels: () => request<KernelListResponse>("/api/kernels"),
+
+  downloadKernelStream: (
+    version: string,
+    tier: "pro" | "free" = "free",
+    onProgress?: (progress: KernelDownloadProgress) => void
+  ): Promise<{ ok: boolean; binary_path?: string }> => {
+    return new Promise((resolve, reject) => {
+      const url = `/api/kernels/download-stream?version=${encodeURIComponent(version)}&tier=${encodeURIComponent(tier)}`;
+      const eventSource = new EventSource(url);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data: KernelDownloadProgress = JSON.parse(event.data);
+          onProgress?.(data);
+
+          if (data.stage === "completed") {
+            eventSource.close();
+            resolve({ ok: true, binary_path: data.binary_path });
+          } else if (data.stage === "error") {
+            eventSource.close();
+            reject(new Error(data.message || "下载内核失败"));
+          }
+        } catch (err) {
+          eventSource.close();
+          reject(err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        reject(new Error("网络错误: 无法连接到内核下载服务，请检查网络或稍后重试"));
+      };
+    });
+  },
+
+  deleteKernel: (version: string) =>
+    request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}`, { method: "DELETE" }),
 };
 
 export interface Subscription {

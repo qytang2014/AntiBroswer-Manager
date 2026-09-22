@@ -327,3 +327,40 @@ def test_resolve_profile_network_fingerprint_sync():
         assert args_none == []
 
 
+def test_kernel_manager_list_and_binary_ready():
+    from backend.kernel_manager import list_available_kernels, is_binary_ready
+
+    data = list_available_kernels()
+    assert isinstance(data, dict)
+    assert isinstance(data["kernels"], list)
+    assert len(data["kernels"]) >= 1
+    assert data["current_platform"] in [
+        "darwin-arm64", "darwin-x64", "linux-x64", "windows-x64",
+        "darwin_arm64", "darwin_x64", "linux_x64", "windows_x64",
+        "unknown"
+    ]
+    assert data["current_tier"] in ["pro", "free", "keyless"]
+    assert isinstance(data["installed"], bool)
+
+    # is_binary_ready should return bool and not throw or trigger download
+    ready = is_binary_ready()
+    assert isinstance(ready, bool)
+
+
+def test_kernel_api_endpoints(app_client):
+    # 1. GET /api/kernels
+    resp = app_client.get("/api/kernels")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "current_platform" in data
+    assert "current_tier" in data
+    assert "installed" in data
+    assert "kernels" in data
+    assert isinstance(data["kernels"], list)
+
+    # 2. DELETE non-existent kernel
+    resp_del = app_client.delete("/api/kernels/non_existent_version_999")
+    assert resp_del.status_code == 404
+
+
+

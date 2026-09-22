@@ -578,6 +578,7 @@ class BrowserManager:
         self.license_tier = "keyless"
         self.license_plan: str | None = None
         self.binary_version: str | None = None
+        self.binary_installed: bool = False
         self.running: dict[str, RunningProfile] = {}
         # Last launch failure per profile, surfaced on the status poll and cleared
         # on the next launch. Holds post-handshake denials (out of seats, bad key)
@@ -600,19 +601,19 @@ class BrowserManager:
         self._auto_launch_task: asyncio.Task | None = None
 
     def resolve_binary_status(self) -> None:
-        """Resolve the license tier + binary version and pre-download the binary.
+        """Resolve the license tier + binary version and check if the binary is installed.
 
-        Blocking — called once at startup (via a thread) so the multi-hundred-MB
-        Pro download stays out of the launch path and auto-launch's 60s timeout.
-        Never raises: on any failure the keyless baked-in binary remains usable.
+        Non-blocking check — does NOT download the binary at startup so startup is instant
+        and never blocks FastAPI or causes connection refused on port 8080.
+        Users can download kernels on demand via the Kernel Manager.
         """
         from cloakbrowser.config import CHROMIUM_VERSION, get_chromium_version
-        from cloakbrowser.download import ensure_binary
         from cloakbrowser.license import (
             get_pro_latest_version,
             resolve_license_key,
             validate_license,
         )
+        from .kernel_manager import is_binary_ready
 
         try:
             keyless_version = get_chromium_version()
@@ -639,22 +640,21 @@ class BrowserManager:
 
         self.license_tier = tier
         self.binary_version = version
-
-        try:
-            ensure_binary(
-                license_key=self.license_key,
-                release_channel=self.release_channel,
-            )
+        self.binary_installed = is_binary_ready(version=version, pro=(tier == "pro"))
+        if self.binary_installed:
             logger.info("Binary ready: tier=%s version=%s", tier, version)
-        except Exception as exc:
-            logger.error(
-                "Binary pre-download failed (keyless fallback remains): %s",
-                exc,
-                exc_info=True,
-            )
+        else:
+            logger.info("No Chromium binary installed yet: tier=%s version=%s (can be downloaded via Kernel Manager)", tier, version)
+
+    def is_binary_ready(self) -> bool:
+        from .kernel_manager import is_binary_ready
+        return is_binary_ready(version=self.binary_version, pro=(self.license_tier == "pro"))
 
     async def launch(self, profile: dict[str, Any]) -> RunningProfile:
         """Launch a browser instance using the configured host runtime."""
+        if not self.is_binary_ready():
+            raise RuntimeError("Chromium 内核未下载，请先点击顶部『内核管理』下载内核后再启动浏览器。")
+
         profile_id = profile["id"]
 
         # Per-launch context so any launch failure carries the inputs that
@@ -1264,6 +1264,10 @@ class BrowserManager:
 
     async def auto_launch_all(self):
         """Launch all profiles with auto_launch=True. Called on startup."""
+        if not self.is_binary_ready():
+            logger.info("Skipping auto-launch: Chromium binary is not installed yet.")
+            return
+
         from . import database as db
 
         profiles = db.list_profiles()

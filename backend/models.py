@@ -150,6 +150,7 @@ class LaunchResponse(BaseModel):
 class StatusResponse(BaseModel):
     running_count: int
     binary_version: str
+    binary_installed: bool = True
     license_tier: str = "keyless"
     profiles_total: int
     host_os: HostOS
@@ -276,4 +277,24 @@ class BatchTestResult(BaseModel):
     latency_ms: int | None = None
     ok: bool
     error: str | None = None
+
+
+class KernelItem(BaseModel):
+    version: str
+    name: str
+    tier: str  # "pro" | "free"
+    platform: str
+    description: str
+    installed: bool
+    is_active: bool = False
+    binary_path: str | None = None
+    size_mb: float | None = None
+
+
+class KernelListResponse(BaseModel):
+    current_platform: str
+    current_tier: str
+    active_version: str | None = None
+    installed: bool = False
+    kernels: list[KernelItem]
 

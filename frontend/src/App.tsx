@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
 import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
@@ -15,6 +15,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { LoginPage } from "./components/LoginPage";
 import { ProxyManagerModal } from "./components/ProxyManagerModal";
 import { ExtensionManagerModal } from "./components/ExtensionManagerModal";
+import { KernelManagerModal } from "./components/KernelManagerModal";
 
 type AuthState = "checking" | "required" | "ok" | "error";
 type View = "empty" | "create" | "edit" | "view";
@@ -107,7 +108,13 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [proxyManagerOpen, setProxyManagerOpen] = useState(false);
   const [extensionManagerOpen, setExtensionManagerOpen] = useState(false);
+  const [kernelManagerOpen, setKernelManagerOpen] = useState(false);
+  const [kernelBannerDismissed, setKernelBannerDismissed] = useState(false);
   const [stopped, setStopped] = useState(false);
+
+  const refreshSystemStatus = useCallback(() => {
+    api.getStatus().then(setSystemStatus).catch(() => setSystemStatus(null));
+  }, []);
 
   const handleQuit = useCallback(async () => {
     if (!window.confirm("Quit CloakBrowser Manager? This stops the server and closes all running profiles.")) {
@@ -122,9 +129,9 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   }, []);
 
   useEffect(() => {
-    api.getStatus().then(setSystemStatus).catch(() => setSystemStatus(null));
+    refreshSystemStatus();
     api.checkUpdate().then(setUpdateInfo).catch(() => setUpdateInfo(null));
-  }, []);
+  }, [refreshSystemStatus]);
 
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
 
@@ -269,6 +276,37 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           onClose={() => setExtensionManagerOpen(false)}
         />
       )}
+      {kernelManagerOpen && (
+        <KernelManagerModal
+          isOpen={kernelManagerOpen}
+          onClose={() => setKernelManagerOpen(false)}
+          onKernelChanged={refreshSystemStatus}
+        />
+      )}
+      {systemStatus && systemStatus.binary_installed === false && !kernelBannerDismissed && (
+        <div className="bg-amber-950/70 border-b border-amber-800/60 px-4 py-2 text-xs flex items-center justify-between text-amber-200">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>未检测到 Chromium 内核</strong>：启动浏览器配置前，请先下载并安装内核。
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setKernelManagerOpen(true)}
+              className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-gray-950 font-semibold text-xs transition"
+            >
+              立即下载内核
+            </button>
+            <button
+              onClick={() => setKernelBannerDismissed(true)}
+              className="text-amber-400/70 hover:text-amber-200 p-0.5 rounded"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
       {updateInfo?.update_available && !updateDismissed && (
         <UpdateBanner info={updateInfo} onDismiss={() => setUpdateDismissed(true)} />
       )}
@@ -310,6 +348,16 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           </div>
           <div className="flex items-center gap-3">
             <SystemStatusBadge status={systemStatus} />
+            <button
+              onClick={() => setKernelManagerOpen(true)}
+              className="relative text-gray-500 hover:text-blue-400 p-1"
+              title="内核管理 / Kernel Manager"
+            >
+              <Cpu className="h-4 w-4" />
+              {systemStatus && systemStatus.binary_installed === false && (
+                <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-surface-1 animate-pulse" />
+              )}
+            </button>
             <button
               onClick={() => setProxyManagerOpen(true)}
               className="text-gray-500 hover:text-cyan-400 p-1"
