@@ -26,6 +26,9 @@ export interface Profile {
   extension_paths: string[];
   allow_3p_cookies: boolean;
   set_google_default: boolean;
+  search_engine_name?: string | null;
+  search_engine_keyword?: string | null;
+  search_engine_url?: string | null;
   capture_preview: boolean;
   restore_session: boolean;
   notes: string | null;
@@ -69,6 +72,9 @@ export interface ProfileCreateData {
   extension_paths?: string[];
   allow_3p_cookies?: boolean;
   set_google_default?: boolean;
+  search_engine_name?: string | null;
+  search_engine_keyword?: string | null;
+  search_engine_url?: string | null;
   capture_preview?: boolean;
   restore_session?: boolean;
   notes?: string | null;
@@ -131,6 +137,19 @@ export interface WebStoreSearchResult {
   name: string;
   description?: string;
   icon_url?: string | null;
+}
+
+export interface ExtensionUpdateInfo {
+  has_update: boolean;
+  current_version: string;
+  latest_version: string | null;
+  status: "update_available" | "up_to_date" | "unknown" | "unsupported" | "error";
+  error?: string;
+}
+
+export interface ExtensionCheckUpdatesResult {
+  updates: Record<string, ExtensionUpdateInfo>;
+  checked_at: string;
 }
 
 
@@ -387,6 +406,9 @@ export const api = {
 
   deleteExtension: (id: string) =>
     request<{ ok: boolean }>(`/api/extensions/${id}`, { method: "DELETE" }),
+
+  checkExtensionUpdates: () =>
+    request<ExtensionCheckUpdatesResult>("/api/extensions/check-updates", { method: "POST" }),
 
   shutdown: () =>
     request<{ ok: boolean; message?: string }>("/api/shutdown", { method: "POST" }),

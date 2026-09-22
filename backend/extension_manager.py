@@ -425,7 +425,7 @@ async def stream_install_from_webstore(id_or_url: str) -> AsyncIterator[dict[str
 
     yield {
         "stage": "connecting",
-        "message": f"正在连接 Chrome 应用商店下载 {webstore_id}...",
+        "message": "正在连接 Chrome 应用商店...",
         "percent": 0,
         "downloaded_bytes": 0,
         "total_bytes": 0,
@@ -759,3 +759,142 @@ def remove_extension(ext_id: str) -> bool:
         shutil.rmtree(target_dir, ignore_errors=True)
 
     return delete_extension(ext_id)
+
+
+async def check_extensions_updates() -> dict[str, Any]:
+    """Check for available updates for all installed extensions via Chrome Omaha protocol.
+
+    - Tries direct local network first; falls back to imported proxy if network is restricted.
+    - Web Store extensions (source='webstore_id') are queried against Google's update2 service.
+    - Uploaded/manual extensions are marked as 'unsupported' (manual upload).
+    """
+    import xml.etree.ElementTree as ET
+    from .database import list_extensions
+
+    installed = list_extensions()
+    results: dict[str, dict[str, Any]] = {}
+    query_items: list[tuple[str, str, str]] = []  # (db_id, webstore_id, current_version)
+
+    for ext in installed:
+        ext_id = ext["id"]
+        cur_version = ext.get("version", "0.0.0")
+        source = ext.get("source", "upload")
+        webstore_id = ext.get("webstore_id")
+
+        if source == "webstore_id" and webstore_id and _EXT_ID_RE.match(webstore_id):
+            query_items.append((ext_id, webstore_id, cur_version))
+        else:
+            results[ext_id] = {
+                "has_update": False,
+                "current_version": cur_version,
+                "latest_version": None,
+                "status": "unsupported",
+            }
+
+    if not query_items:
+        return {"updates": results, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    # Construct Omaha query params: x=id%3D{ext_id}%26v%3D{current_version}%26uc
+    params = [f"x=id%3D{wid}%26v%3D{ver}%26uc" for _, wid, ver in query_items]
+    query_str = "&".join(params)
+    url = f"https://clients2.google.com/service/update2/crx?{query_str}&acceptformat=crx2,crx3&prodversion=128.0"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )
+    }
+
+    resp_text = ""
+    req_err = None
+
+    # 1. Try local network first
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=6.0, trust_env=True) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                resp_text = resp.text
+            else:
+                req_err = RuntimeError(f"HTTP {resp.status_code}")
+    except Exception as exc:
+        req_err = exc
+
+    # 2. Try imported proxy if local failed
+    if not resp_text:
+        async with get_imported_proxy_url() as proxy_url:
+            if proxy_url:
+                try:
+                    async with httpx.AsyncClient(proxy=proxy_url, follow_redirects=True, timeout=15.0, trust_env=True) as client:
+                        resp = await client.get(url, headers=headers)
+                        if resp.status_code == 200:
+                            resp_text = resp.text
+                            req_err = None
+                        else:
+                            req_err = RuntimeError(f"HTTP {resp.status_code}")
+                except Exception as exc:
+                    req_err = exc
+
+    if not resp_text:
+        logger.warning("Failed to check extension updates: %s", req_err)
+        for db_id, _, cur_ver in query_items:
+            results[db_id] = {
+                "has_update": False,
+                "current_version": cur_ver,
+                "latest_version": None,
+                "status": "error",
+                "error": str(req_err) if req_err else "Network error",
+            }
+        return {"updates": results, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    # Parse XML response
+    try:
+        root = ET.fromstring(resp_text)
+        app_results: dict[str, tuple[str, str | None]] = {}
+        for elem in root.iter():
+            if elem.tag.endswith("app"):
+                appid = elem.get("appid")
+                if not appid:
+                    continue
+                for child in elem:
+                    if child.tag.endswith("updatecheck"):
+                        st = child.get("status", "unknown")
+                        ver = child.get("version")
+                        app_results[appid] = (st, ver)
+
+        for db_id, wid, cur_ver in query_items:
+            st, latest_ver = app_results.get(wid, ("unknown", None))
+            if st == "ok" and latest_ver:
+                has_up = latest_ver != cur_ver
+                results[db_id] = {
+                    "has_update": has_up,
+                    "current_version": cur_ver,
+                    "latest_version": latest_ver,
+                    "status": "update_available" if has_up else "up_to_date",
+                }
+            elif st == "noupdate":
+                results[db_id] = {
+                    "has_update": False,
+                    "current_version": cur_ver,
+                    "latest_version": cur_ver,
+                    "status": "up_to_date",
+                }
+            else:
+                results[db_id] = {
+                    "has_update": False,
+                    "current_version": cur_ver,
+                    "latest_version": None,
+                    "status": "unknown",
+                }
+    except Exception as exc:
+        logger.warning("Failed to parse update XML: %s", exc)
+        for db_id, _, cur_ver in query_items:
+            results[db_id] = {
+                "has_update": False,
+                "current_version": cur_ver,
+                "latest_version": None,
+                "status": "error",
+                "error": str(exc),
+            }
+
+    return {"updates": results, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}

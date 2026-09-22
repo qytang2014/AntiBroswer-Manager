@@ -26,6 +26,14 @@ from .vnc_manager import VNCManager
 
 logger = logging.getLogger("cloakbrowser.manager.browser")
 
+# Ensure Playwright allows loading extensions by suppressing its default --disable-extensions flag
+try:
+    import cloakbrowser.config
+    if "--disable-extensions" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--disable-extensions")
+except Exception:
+    pass
+
 
 UPGRADE_URL = "https://cloakbrowser.dev/#pricing"
 
@@ -477,6 +485,14 @@ _ACTIVE_DEFAULT_JS = """async () => {
   const a = (l.defaults || []).find(e => e.default);
   return a ? {name: a.name, keyword: a.keyword} : null;
 }"""
+
+_HAS_GOOGLE_JS = """async () => {
+  const cr = await import('chrome://resources/js/cr.js');
+  const l = await cr.sendWithPromise('getSearchEnginesList');
+  const all = [...(l.defaults || []), ...(l.others || []), ...(l.extensions || [])];
+  return all.some(e => e.keyword === 'google.com' || (e.name && e.name.toLowerCase() === 'google'));
+}"""
+
 # Click the "Add" button that opens the add-search-engine dialog. We can't seed a
 # search engine by writing files: a hand-written Web Data row carries an invalid
 # url_hash (an HMAC we can't forge) and Chrome deletes it on load (strictly so on
@@ -485,9 +501,9 @@ _CLICK_ADD_JS = """() => {
   let clicked = false;
   const walk = (root) => root.querySelectorAll('*').forEach(el => {
     if (el.shadowRoot) walk(el.shadowRoot);
-    if (el.tagName === 'CR-BUTTON'
-        && /^Add$/i.test((el.textContent || '').trim())
-        && /Add Site Search/i.test(el.getAttribute('aria-label') || '')) {
+    if (el.id === 'addSearchEngine' || (el.tagName === 'CR-BUTTON'
+        && (/^Add$/i.test((el.textContent || '').trim()) || (el.textContent || '').trim() === '添加')
+        && (/Add Site Search/i.test(el.getAttribute('aria-label') || '') || (el.getAttribute('aria-label') || '').includes('添加')))) {
       el.click(); clicked = true;
     }
   });
@@ -499,8 +515,7 @@ _ADD_ENABLED_JS = """() => {
   let enabled = false;
   const walk = (root) => root.querySelectorAll('*').forEach(el => {
     if (el.shadowRoot) walk(el.shadowRoot);
-    if (el.tagName === 'CR-BUTTON'
-        && /^Add$/i.test((el.textContent || '').trim())
+    if ((el.id === 'actionButton' || (el.tagName === 'CR-BUTTON' && (/^Add$/i.test((el.textContent || '').trim()) || (el.textContent || '').trim() === '添加')))
         && el.closest('cr-dialog')) enabled = !el.disabled;
   });
   walk(document);
@@ -511,16 +526,14 @@ _SUBMIT_ADD_JS = """() => {
   let clicked = false;
   const walk = (root) => root.querySelectorAll('*').forEach(el => {
     if (el.shadowRoot) walk(el.shadowRoot);
-    if (el.tagName === 'CR-BUTTON'
-        && /^Add$/i.test((el.textContent || '').trim())
+    if ((el.id === 'actionButton' || (el.tagName === 'CR-BUTTON' && (/^Add$/i.test((el.textContent || '').trim()) || (el.textContent || '').trim() === '添加')))
         && el.closest('cr-dialog') && !el.disabled) { el.click(); clicked = true; }
   });
   walk(document);
   return clicked;
 }"""
-# Open Google's "More actions" menu, then click "Make default". Exact aria-label
-# match so we don't hit the "Google AI Mode" starter-pack entry. Playwright
-# locators don't pierce this page's nested shadow DOM reliably, so we walk it.
+# Open Google's "More actions" menu, then click "Make default". Exact label
+# check matches Google without hitting "Google AI Mode".
 _MAKE_GOOGLE_DEFAULT_JS = """() => {
   const walk = (root, fn) => root.querySelectorAll('*').forEach(el => {
     if (el.shadowRoot) walk(el.shadowRoot, fn);
@@ -528,13 +541,13 @@ _MAKE_GOOGLE_DEFAULT_JS = """() => {
   });
   walk(document, el => {
     const label = ((el.getAttribute && el.getAttribute('aria-label')) || '').trim();
-    if (el.tagName === 'CR-ICON-BUTTON' && label === 'More actions for Google') el.click();
+    if (el.tagName === 'CR-ICON-BUTTON' && label.includes('Google') && !label.includes('AI')) el.click();
   });
   return new Promise(resolve => setTimeout(() => {
     let clicked = false;
     walk(document, el => {
-      if (el.tagName === 'BUTTON'
-          && /^Make default$/i.test((el.textContent || '').trim())
+      const text = (el.textContent || '').trim();
+      if ((el.id === 'makeDefault' || (el.tagName === 'BUTTON' && (/^Make default$/i.test(text) || text === '设为默认选项')))
           && !el.disabled) { el.click(); clicked = true; }
     });
     resolve(clicked);
@@ -640,15 +653,20 @@ class BrowserManager:
 
         self.license_tier = tier
         self.binary_version = version
-        self.binary_installed = is_binary_ready(version=version, pro=(tier == "pro"))
+        self.binary_installed = self.is_binary_ready()
         if self.binary_installed:
             logger.info("Binary ready: tier=%s version=%s", tier, version)
         else:
             logger.info("No Chromium binary installed yet: tier=%s version=%s (can be downloaded via Kernel Manager)", tier, version)
 
     def is_binary_ready(self) -> bool:
-        from .kernel_manager import is_binary_ready
-        return is_binary_ready(version=self.binary_version, pro=(self.license_tier == "pro"))
+        from .kernel_manager import is_binary_ready, list_available_kernels
+        # 1. Check if the target/preferred binary is ready
+        if is_binary_ready(version=self.binary_version, pro=(self.license_tier == "pro")):
+            return True
+        # 2. Check if ANY installed binary is ready on disk (fallback)
+        data = list_available_kernels()
+        return bool(data.get("installed", False))
 
     async def launch(self, profile: dict[str, Any]) -> RunningProfile:
         """Launch a browser instance using the configured host runtime."""
@@ -711,7 +729,7 @@ class BrowserManager:
             # reports "initializing" via get_status while it works (one short
             # headless launch). Never fatal.
             if profile.get("set_google_default", True):
-                await self._ensure_search_engine(profile_id, user_data_dir)
+                await self._ensure_search_engine(profile_id, user_data_dir, profile)
 
             if display is not None and ws_port is not None:
                 await self.vnc.start_vnc(
@@ -732,8 +750,34 @@ class BrowserManager:
                     + ", ".join(conflicting_debug_args)
                 )
 
+            user_ignore_args = []
+            normal_launch_args = []
+            for arg in user_launch_args:
+                arg_clean = arg.strip()
+                if arg_clean.lower().startswith("ignore:"):
+                    flag = arg_clean[7:].strip()
+                    if flag:
+                        user_ignore_args.append(flag)
+                elif arg_clean.lower().startswith("ignore "):
+                    flag = arg_clean[7:].strip()
+                    if flag:
+                        user_ignore_args.append(flag)
+                else:
+                    normal_launch_args.append(arg_clean)
+
+            try:
+                import cloakbrowser.config
+                for ia in user_ignore_args:
+                    if ia not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+                        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append(ia)
+                if profile.get("extension_paths"):
+                    if "--disable-extensions" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+                        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--disable-extensions")
+            except Exception:
+                pass
+
             extra_args = self._build_fingerprint_args(profile)
-            extra_args += user_launch_args
+            extra_args += normal_launch_args
             extra_args.append("--remote-debugging-address=127.0.0.1")
             # Reopen the tabs the user had open when the profile was last stopped.
             # Chrome's persistent session is saved on disk but only restored when told to.
@@ -914,22 +958,21 @@ class BrowserManager:
             raise
 
     async def _ensure_search_engine(
-        self, profile_id: str, user_data_dir: Path
+        self, profile_id: str, user_data_dir: Path, profile: dict[str, Any] | None = None
     ) -> None:
-        """Make Google the default search engine, once per profile.
+        """Make configured search engine (default Google) the default search engine, once per profile.
 
         Marker-gated so it runs only on a profile's first launch. Reports
         "initializing" via get_status while it works. Never fatal: on failure the
         profile still launches (with the binary's de-Googled "No Search" default).
-
-        The marker records outcome: "google" = done (skip forever); "failed:N" =
-        N attempts spent. Retries up to SEARCH_ENGINE_MAX_ATTEMPTS, then gives up
-        so a persistently-failing profile doesn't pay an extra headless launch
-        (~5s) on every single launch, silently, forever.
         """
+        name = (profile and profile.get("search_engine_name")) or SEARCH_ENGINE_NAME
+        keyword = (profile and profile.get("search_engine_keyword")) or SEARCH_ENGINE_KEYWORD
+        url = (profile and profile.get("search_engine_url")) or SEARCH_ENGINE_URL
+
         marker = user_data_dir / SEARCH_ENGINE_MARKER
         state = marker.read_text().strip() if marker.exists() else ""
-        if state == "google":
+        if state == keyword or (state == "google" and keyword == SEARCH_ENGINE_KEYWORD):
             return
         attempts = 0
         if state.startswith("failed:"):
@@ -942,11 +985,11 @@ class BrowserManager:
 
         self._initializing.add(profile_id)
         try:
-            await self._setup_google_default(user_data_dir)
+            await self._setup_google_default(user_data_dir, name=name, keyword=keyword, url=url)
             marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text("google\n")
+            marker.write_text(f"{keyword}\n")
             logger.info(
-                "Set Google as default search engine for %s", user_data_dir.name
+                "Set %s as default search engine for %s", name, user_data_dir.name
             )
         except CloakBrowserLicenseError:
             # A license denial (out of seats, bad key, …) isn't a search-engine
@@ -971,8 +1014,14 @@ class BrowserManager:
         finally:
             self._initializing.discard(profile_id)
 
-    async def _setup_google_default(self, user_data_dir: Path) -> None:
-        """Add Google via the settings UI, then commit it as the default.
+    async def _setup_google_default(
+        self,
+        user_data_dir: Path,
+        name: str = SEARCH_ENGINE_NAME,
+        keyword: str = SEARCH_ENGINE_KEYWORD,
+        url: str = SEARCH_ENGINE_URL,
+    ) -> None:
+        """Add search engine via the settings UI, then commit it as the default.
 
         Single headless launch, no file seeding. A plain Preferences write can't
         set the default (the authoritative value is MAC-protected in Secure
@@ -980,7 +1029,7 @@ class BrowserManager:
         hand-written Web Data keyword row is deleted on load for its invalid,
         un-forgeable url_hash (strictly so on Windows). So we drive the real Add
         dialog — Chrome creates the row with a valid hash — then "Make default".
-        Every later launch then carries Google via the profile's own files.
+        Every later launch then carries the engine via the profile's own files.
         """
         ctx = await self._headless_launch(user_data_dir)
         try:
@@ -988,40 +1037,85 @@ class BrowserManager:
             await page.goto("chrome://settings/searchEngines")
             await asyncio.sleep(2)
 
-            if not await page.evaluate(_CLICK_ADD_JS):
-                raise RuntimeError("could not open the Add search engine dialog")
-            await asyncio.sleep(1.2)
+            # Check if keyword is already active default
+            active = await page.evaluate(_ACTIVE_DEFAULT_JS)
+            if active and active.get("keyword") == keyword:
+                await page.close()
+                return
 
-            # Real .fill() emits trusted events so the dialog's async field
-            # validation runs and enables the Add button; a synthetic value-set
-            # does not. Playwright pierces the cr-input's open shadow root.
-            await page.locator('cr-input[label="Name"] input').first.fill(SEARCH_ENGINE_NAME)
-            await page.locator('cr-input[label="Shortcut"] input').first.fill(SEARCH_ENGINE_KEYWORD)
-            await page.locator('cr-input[label^="URL"] input').first.fill(SEARCH_ENGINE_URL)
+            has_engine = await page.evaluate(f"""async () => {{
+                const cr = await import('chrome://resources/js/cr.js');
+                const l = await cr.sendWithPromise('getSearchEnginesList');
+                const all = [...(l.defaults || []), ...(l.others || []), ...(l.extensions || [])];
+                return all.some(e => e.keyword === '{keyword}' || (e.name && e.name.toLowerCase() === '{name.lower()}'));
+            }}""")
 
-            enabled = False
-            for _ in range(12):
-                await asyncio.sleep(0.25)
-                if await page.evaluate(_ADD_ENABLED_JS):
-                    enabled = True
-                    break
-            if not enabled:
-                raise RuntimeError("Add dialog stayed disabled after fill")
+            if not has_engine:
+                if not await page.evaluate(_CLICK_ADD_JS):
+                    raise RuntimeError("could not open the Add search engine dialog")
+                await asyncio.sleep(1.2)
 
-            if not await page.evaluate(_SUBMIT_ADD_JS):
-                raise RuntimeError("could not submit the Add dialog")
-            await asyncio.sleep(1.2)
+                # Real .fill() emits trusted events so the dialog's async field
+                # validation runs and enables the Add button; a synthetic value-set
+                # does not. Playwright pierces the cr-input's open shadow root.
+                name_input = page.locator('cr-input#searchEngine input, cr-input[label="Name"] input, cr-input[label*="名称"] input').first
+                shortcut_input = page.locator('cr-input#keyword input, cr-input[label="Shortcut"] input, cr-input[label*="快捷"] input').first
+                url_input = page.locator('cr-input#queryUrl input, cr-input[label^="URL"] input, cr-input[label*="网址"] input').first
 
-            clicked = await page.evaluate(_MAKE_GOOGLE_DEFAULT_JS)
+                await name_input.fill(name)
+                await shortcut_input.fill(keyword)
+                await url_input.fill(url)
+
+                enabled = False
+                for _ in range(12):
+                    await asyncio.sleep(0.25)
+                    if await page.evaluate(_ADD_ENABLED_JS):
+                        enabled = True
+                        break
+                if not enabled:
+                    raise RuntimeError("Add dialog stayed disabled after fill")
+
+                if not await page.evaluate(_SUBMIT_ADD_JS):
+                    raise RuntimeError("could not submit the Add dialog")
+                await asyncio.sleep(1.2)
+
+            make_default_js = f"""() => {{
+              const walk = (root, fn) => root.querySelectorAll('*').forEach(el => {{
+                if (el.shadowRoot) walk(el.shadowRoot, fn);
+                fn(el);
+              }});
+              walk(document, el => {{
+                const label = ((el.getAttribute && el.getAttribute('aria-label')) || '').trim();
+                if (el.tagName === 'CR-ICON-BUTTON' && (label.includes('{name}') || label.includes('{keyword}')) && !label.includes('AI')) el.click();
+              }});
+              return new Promise(resolve => setTimeout(() => {{
+                let clicked = false;
+                walk(document, el => {{
+                  const text = (el.textContent || '').trim();
+                  if ((el.id === 'makeDefault' || (el.tagName === 'BUTTON' && (/^Make default$/i.test(text) || text === '设为默认选项')))
+                      && !el.disabled) {{ el.click(); clicked = true; }}
+                }});
+                resolve(clicked);
+              }}, 400));
+            }}"""
+            clicked = await page.evaluate(make_default_js)
             await asyncio.sleep(1)
             active = await page.evaluate(_ACTIVE_DEFAULT_JS)
-            if not (active and active.get("keyword") == SEARCH_ENGINE_KEYWORD):
+            if not (active and active.get("keyword") == keyword):
                 raise RuntimeError(
                     f"make-default did not take (clicked={clicked}, active={active})"
                 )
+            # Close the page before closing context to avoid saving chrome://settings/searchEngines into session
+            await page.close()
         finally:
             await self._close_context(ctx, "search-init")
         await asyncio.sleep(0.5)
+
+        # Clean up any session files created during headless search-engine setup
+        # so the user's real browser launch starts with a clean new tab, NOT the settings page
+        sessions_dir = user_data_dir / "Default" / "Sessions"
+        if sessions_dir.exists():
+            shutil.rmtree(sessions_dir, ignore_errors=True)
 
     async def _headless_launch(self, user_data_dir: Path) -> Any:
         """Short headless launch used only by the one-time search-engine setup."""

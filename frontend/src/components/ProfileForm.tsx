@@ -45,6 +45,7 @@ interface ProfileFormProps {
   onReset?: () => Promise<void>;
   onDuplicate?: (includeBrowserState: boolean) => Promise<void>;
   onCancel: () => void;
+  extensionsUpdated?: number;
 }
 
 const RESOLUTION_PRESETS: Record<string, { width: number; height: number }> = {
@@ -67,7 +68,30 @@ const TAG_COLORS = [
   "#ec4899", // pink
 ];
 
-export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onReset, onDuplicate, onCancel }: ProfileFormProps) {
+const ARG_PRESETS = [
+  { label: "忽略扩展禁用", arg: "ignore: --disable-extensions", tip: "允许加载 Chrome 扩展插件（已勾选插件时会自动添加并生效）" },
+  { label: "去除自动化特征", arg: "--disable-blink-features=AutomationControlled", tip: "避免被检测到 navigator.webdriver 等自动化特征" },
+  { label: "跳过首次运行", arg: "--no-first-run", tip: "跳过首次启动向导与测试，防止首次运行特征暴露" },
+  { label: "禁用默认浏览器检查", arg: "--no-default-browser-check", tip: "禁止弹出默认浏览器设置提示" },
+  { label: "阻止后台网络探测", arg: "--disable-background-networking", tip: "防止浏览器后台发起自发性网络请求与上报" },
+  { label: "阻止组件自动更新", arg: "--disable-component-update", tip: "保持浏览器组件版本与指纹一致" },
+  { label: "禁用网页通知", arg: "--disable-notifications", tip: "阻止网页弹窗申请通知权限" },
+  { label: "窗口最大化启动", arg: "--start-maximized", tip: "窗口最大化以模拟真实桌面用户行为" },
+  { label: "静音所有标签", arg: "--mute-audio", tip: "静音浏览器所有声音输出" },
+  { label: "禁用域可靠性监控", arg: "--disable-domain-reliability", tip: "防止向 Google 上报网络错误与可靠性监测" },
+];
+
+export function ProfileForm({
+  profile,
+  hostOs,
+  viewerMode,
+  onSave,
+  onDelete,
+  onReset,
+  onDuplicate,
+  onCancel,
+  extensionsUpdated,
+}: ProfileFormProps) {
   const isEdit = profile !== null;
 
   const [form, setForm] = useState<ProfileCreateData>({
@@ -82,6 +106,9 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     auto_launch: false,
     allow_3p_cookies: true,
     set_google_default: true,
+    search_engine_name: "Google",
+    search_engine_keyword: "google.com",
+    search_engine_url: "https://www.google.com/search?q=%s",
     capture_preview: true,
     restore_session: true,
     extension_paths: [],
@@ -185,48 +212,76 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
 
   useEffect(() => {
     loadInstalledExtensions();
-  }, []);
+  }, [extensionsUpdated]);
+
+  const prevProfileIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (profile) {
-      setForm({
-        name: profile.name,
-        fingerprint_seed: profile.fingerprint_seed,
-        proxy: profile.proxy,
-        timezone: profile.timezone,
-        locale: profile.locale,
-        screen_width: profile.screen_width,
-        screen_height: profile.screen_height,
-        gpu_family: profile.gpu_family,
-        humanize: profile.humanize,
-        human_preset: profile.human_preset,
-        geoip: profile.geoip,
-        clipboard_sync: profile.clipboard_sync,
-        auto_launch: profile.auto_launch,
-        extension_paths: profile.extension_paths ?? [],
-        allow_3p_cookies: profile.allow_3p_cookies,
-        set_google_default: profile.set_google_default,
-        capture_preview: profile.capture_preview,
-        restore_session: profile.restore_session,
-        launch_args: profile.launch_args ?? [],
-        notes: profile.notes,
-        tags: profile.tags ?? [],
-      });
-      setProxyType(detectProxyType(profile.proxy));
+      if (prevProfileIdRef.current !== profile.id) {
+        prevProfileIdRef.current = profile.id;
+        setForm({
+          name: profile.name,
+          fingerprint_seed: profile.fingerprint_seed,
+          proxy: profile.proxy,
+          timezone: profile.timezone,
+          locale: profile.locale,
+          screen_width: profile.screen_width,
+          screen_height: profile.screen_height,
+          gpu_family: profile.gpu_family,
+          humanize: profile.humanize,
+          human_preset: profile.human_preset,
+          geoip: profile.geoip,
+          clipboard_sync: profile.clipboard_sync,
+          auto_launch: profile.auto_launch,
+          extension_paths: profile.extension_paths ?? [],
+          allow_3p_cookies: profile.allow_3p_cookies,
+          set_google_default: profile.set_google_default,
+          search_engine_name: profile.search_engine_name ?? "Google",
+          search_engine_keyword: profile.search_engine_keyword ?? "google.com",
+          search_engine_url: profile.search_engine_url ?? "https://www.google.com/search?q=%s",
+          capture_preview: profile.capture_preview,
+          restore_session: profile.restore_session,
+          launch_args: profile.launch_args ?? [],
+          notes: profile.notes,
+          tags: profile.tags,
+        });
+        setProxyType(detectProxyType(profile.proxy));
+        setPreviewError(false);
+        setPreviewBuster(Date.now());
+      }
     } else {
-      // New profile: default all installed extensions to checked
-      setForm((f) => ({
-        ...f,
-        extension_paths: installedExtensions.map((e) => e.path),
-      }));
+      if (prevProfileIdRef.current !== null) {
+        prevProfileIdRef.current = null;
+        setForm({
+          name: "",
+          screen_width: 1920,
+          screen_height: 1080,
+          gpu_family: "auto",
+          humanize: false,
+          human_preset: "default",
+          geoip: true,
+          clipboard_sync: true,
+          auto_launch: false,
+          allow_3p_cookies: true,
+          set_google_default: true,
+          search_engine_name: "Google",
+          search_engine_keyword: "google.com",
+          search_engine_url: "https://www.google.com/search?q=%s",
+          capture_preview: true,
+          restore_session: true,
+          extension_paths: installedExtensions.map((e) => e.path),
+          launch_args: [],
+        });
+        setPreviewError(false);
+        setPreviewBuster(Date.now());
+      }
     }
-    // Re-fetch the preview for the newly selected profile (bust the cache).
-    setPreviewError(false);
-    setPreviewBuster(Date.now());
-  }, [profile?.id, installedExtensions.length]);
+  }, [profile?.id]);
 
   useEffect(() => {
-    if (hostOs === "macos") {
+    // If native mode forces host OS to mac/windows, reset any incompatible GPU selection
+    if (hostOs === "macos" && form.gpu_family !== "auto") {
       setForm((previous) => ({ ...previous, gpu_family: "auto" }));
     }
   }, [hostOs]);
@@ -237,11 +292,33 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
 
   const toggleExtension = (extPath: string) => {
     const current = form.extension_paths ?? [];
+    let updatedPaths: string[];
     if (current.includes(extPath)) {
-      set("extension_paths", current.filter((p) => p !== extPath));
+      updatedPaths = current.filter((p) => p !== extPath);
     } else {
-      set("extension_paths", [...current, extPath]);
+      updatedPaths = [...current, extPath];
     }
+    set("extension_paths", updatedPaths);
+
+    // Keep --load-extension and ignore: --disable-extensions in launch_args in sync
+    let currentArgs = form.launch_args ?? [];
+    const hasLoadExt = currentArgs.some((a) => a.startsWith("--load-extension="));
+    if (hasLoadExt) {
+      if (updatedPaths.length > 0) {
+        const newArg = `--load-extension=${updatedPaths.join(",")}`;
+        currentArgs = currentArgs.map((a) => (a.startsWith("--load-extension=") ? newArg : a));
+      } else {
+        currentArgs = currentArgs.filter((a) => !a.startsWith("--load-extension=") && !a.startsWith("--disable-extensions-except="));
+      }
+    }
+    if (updatedPaths.length > 0) {
+      if (!currentArgs.includes("ignore: --disable-extensions")) {
+        currentArgs = [...currentArgs, "ignore: --disable-extensions"];
+      }
+    } else {
+      currentArgs = currentArgs.filter((a) => a !== "ignore: --disable-extensions");
+    }
+    set("launch_args", currentArgs);
   };
 
   const selectAllExtensions = () => {
@@ -249,15 +326,34 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
       new Set([...(form.extension_paths ?? []), ...installedExtensions.map((e) => e.path)])
     );
     set("extension_paths", allPaths);
+    let currentArgs = form.launch_args ?? [];
+    const hasLoadExt = currentArgs.some((a) => a.startsWith("--load-extension="));
+    if (hasLoadExt && allPaths.length > 0) {
+      const newArg = `--load-extension=${allPaths.join(",")}`;
+      currentArgs = currentArgs.map((a) => (a.startsWith("--load-extension=") ? newArg : a));
+    }
+    if (allPaths.length > 0 && !currentArgs.includes("ignore: --disable-extensions")) {
+      currentArgs = [...currentArgs, "ignore: --disable-extensions"];
+    }
+    set("launch_args", currentArgs);
   };
 
   const clearAllExtensions = () => {
     set("extension_paths", []);
+    const currentArgs = form.launch_args ?? [];
+    set(
+      "launch_args",
+      currentArgs.filter(
+        (a) =>
+          !a.startsWith("--load-extension=") &&
+          !a.startsWith("--disable-extensions-except=") &&
+          a !== "ignore: --disable-extensions"
+      )
+    );
   };
 
   const removeExtensionPath = (pathToRemove: string) => {
-    const current = form.extension_paths ?? [];
-    set("extension_paths", current.filter((p) => p !== pathToRemove));
+    toggleExtension(pathToRemove);
   };
 
   const [matchingGeo, setMatchingGeo] = useState(false);
@@ -425,16 +521,41 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     set("tags", (form.tags ?? []).filter((t) => t.tag !== tag));
   };
 
-  const addLaunchArg = () => {
-    const arg = launchArgInput.trim();
-    if (!arg) return;
-    if ((form.launch_args ?? []).includes(arg)) return;
-    set("launch_args", [...(form.launch_args ?? []), arg]);
-    setLaunchArgInput("");
+  const addLaunchArg = (customArg?: string) => {
+    const raw = (customArg || launchArgInput).trim();
+    if (!raw) return;
+    const current = form.launch_args ?? [];
+    if (!current.includes(raw)) {
+      set("launch_args", [...current, raw]);
+
+      // If user adds --load-extension=<paths>, auto-select matching installed extensions
+      if (raw.startsWith("--load-extension=")) {
+        const rawPaths = raw.replace("--load-extension=", "").split(",").map((p) => p.trim());
+        const validExtPaths = installedExtensions
+          .filter((e) => rawPaths.some((p) => p === e.path || p.endsWith(e.id)))
+          .map((e) => e.path);
+        if (validExtPaths.length > 0) {
+          const merged = Array.from(new Set([...(form.extension_paths ?? []), ...validExtPaths]));
+          set("extension_paths", merged);
+        }
+      }
+    }
+    if (!customArg) setLaunchArgInput("");
   };
 
   const removeLaunchArg = (idx: number) => {
-    set("launch_args", (form.launch_args ?? []).filter((_, i) => i !== idx));
+    const current = form.launch_args ?? [];
+    const removed = current[idx];
+    set("launch_args", current.filter((_, i) => i !== idx));
+
+    // If user removes --load-extension, uncheck matching extensions in form
+    if (removed && removed.startsWith("--load-extension=")) {
+      const rawPaths = removed.replace("--load-extension=", "").split(",").map((p) => p.trim());
+      const remainingExtPaths = (form.extension_paths ?? []).filter(
+        (p) => !rawPaths.some((rp) => rp === p || rp.endsWith(p.split("/").pop() || ""))
+      );
+      set("extension_paths", remainingExtPaths);
+    }
   };
 
   return (
@@ -947,9 +1068,9 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
           </div>
         </section>
 
-        {/* Compatibility */}
+        {/* Compatibility & Search Engine */}
         <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Compatibility</h3>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Compatibility & Search Engine</h3>
           <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
             <input
               type="checkbox"
@@ -959,20 +1080,98 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
             />
             Allow third-party cookies for login, SSO, and challenge flows
           </label>
-          <label className="flex items-start gap-2 text-sm text-gray-300 cursor-pointer mt-3">
-            <input
-              type="checkbox"
-              checked={form.set_google_default ?? true}
-              onChange={(e) => set("set_google_default", e.target.checked)}
-              className="rounded border-border bg-surface-2 mt-0.5"
-            />
-            <span>
-              Set Google as the default search engine
-              <span className="block text-xs text-gray-500">
-                Adds a few seconds to the profile's first launch (one-time setup).
-              </span>
-            </span>
-          </label>
+
+          <div className="mt-4 pt-3 border-t border-border/50">
+            <label className="flex items-start gap-2 text-sm text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.set_google_default ?? true}
+                onChange={(e) => set("set_google_default", e.target.checked)}
+                className="rounded border-border bg-surface-2 mt-0.5"
+              />
+              <div>
+                <span className="font-medium text-gray-200">启用默认搜索引擎设置</span>
+                <span className="block text-xs text-gray-500">
+                  首次启动或修改时自动配置（后台静默完成，启动后不会弹出设置页面），地址栏直接搜索。
+                </span>
+              </div>
+            </label>
+
+            {(form.set_google_default ?? true) && (
+              <div className="mt-3 ml-6 p-3 rounded-lg bg-surface-2 border border-border/60 space-y-3">
+                <div>
+                  <label className="text-[11px] font-medium text-gray-400 block mb-1.5">预设搜索引擎（点击快速填充）：</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: "Google", name: "Google", keyword: "google.com", url: "https://www.google.com/search?q=%s" },
+                      { label: "Bing", name: "Bing", keyword: "bing.com", url: "https://www.bing.com/search?q=%s" },
+                      { label: "百度 (Baidu)", name: "百度", keyword: "baidu.com", url: "https://www.baidu.com/s?wd=%s" },
+                      { label: "DuckDuckGo", name: "DuckDuckGo", keyword: "duckduckgo.com", url: "https://duckduckgo.com/?q=%s" },
+                    ].map((preset) => {
+                      const currentName = form.search_engine_name || "Google";
+                      const currentUrl = form.search_engine_url || "https://www.google.com/search?q=%s";
+                      const isSelected = currentName === preset.name && currentUrl === preset.url;
+                      return (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => {
+                            setForm((prev) => ({
+                              ...prev,
+                              search_engine_name: preset.name,
+                              search_engine_keyword: preset.keyword,
+                              search_engine_url: preset.url,
+                            }));
+                          }}
+                          className={`text-xs px-2.5 py-1 rounded transition flex items-center gap-1 ${
+                            isSelected
+                              ? "bg-indigo-600 text-white font-medium"
+                              : "bg-surface-3 text-gray-300 hover:text-white hover:bg-surface-4"
+                          }`}
+                        >
+                          {isSelected && <Check className="h-3 w-3" />}
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">引擎名称 (Name)</label>
+                    <input
+                      type="text"
+                      className="input text-xs w-full py-1.5"
+                      value={form.search_engine_name ?? "Google"}
+                      onChange={(e) => set("search_engine_name", e.target.value)}
+                      placeholder="Google"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">快捷字词 (Shortcut / Keyword)</label>
+                    <input
+                      type="text"
+                      className="input text-xs w-full py-1.5 font-mono"
+                      value={form.search_engine_keyword ?? "google.com"}
+                      onChange={(e) => set("search_engine_keyword", e.target.value)}
+                      placeholder="google.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">查询网址 (URL with %s)</label>
+                    <input
+                      type="text"
+                      className="input text-xs w-full py-1.5 font-mono"
+                      value={form.search_engine_url ?? "https://www.google.com/search?q=%s"}
+                      onChange={(e) => set("search_engine_url", e.target.value)}
+                      placeholder="https://www.google.com/search?q=%s"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Tags */}
@@ -1194,19 +1393,124 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
           <p className="text-xs text-gray-500 my-3">
             Unrestricted Chromium flags. Advanced arguments can override Manager-controlled behavior.
           </p>
+          {/* Preset recommendations */}
+          <div className="mb-3">
+            <div className="text-[11px] font-medium text-gray-400 mb-1.5">
+              常用安全与防关联推荐参数（点击添加 / 移除）：
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {ARG_PRESETS.map((preset) => {
+                const isActive = (form.launch_args ?? []).includes(preset.arg);
+                return (
+                  <button
+                    key={preset.arg}
+                    type="button"
+                    title={`${preset.arg} - ${preset.tip}`}
+                    onClick={() => {
+                      if (isActive) {
+                        const idx = (form.launch_args ?? []).indexOf(preset.arg);
+                        if (idx !== -1) removeLaunchArg(idx);
+                      } else {
+                        addLaunchArg(preset.arg);
+                      }
+                    }}
+                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition ${
+                      isActive
+                        ? "bg-indigo-950/80 border border-indigo-600 text-indigo-300 font-medium"
+                        : "bg-surface-2 hover:bg-surface-3 border border-border text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    <span>{isActive ? "✓" : "+"}</span>
+                    <span>{preset.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Ignored Default Arguments Section */}
+          <div className="mb-4 p-3 rounded-lg bg-surface-2/70 border border-border/70 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                已忽略的默认参数 (Ignored Default Arguments)
+              </span>
+              <span className="text-[10px] text-gray-500">
+                Playwright 默认参数抑制，防止暴露自动化特征或阻塞插件加载
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <span
+                className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border ${
+                  (form.extension_paths ?? []).length > 0 || (form.launch_args ?? []).includes("ignore: --disable-extensions")
+                    ? "bg-amber-950/60 border-amber-600/60 text-amber-200"
+                    : "bg-surface-3/50 border-border/50 text-gray-500 line-through"
+                }`}
+                title={(form.extension_paths ?? []).length > 0 ? "由于勾选了插件，已自动忽略 --disable-extensions" : "未勾选插件"}
+              >
+                <span className="font-semibold text-amber-400">ignore:</span> --disable-extensions
+                <span className="text-[10px] px-1 rounded bg-amber-900/50 text-amber-300 font-sans">
+                  {(form.extension_paths ?? []).length > 0 ? "插件加载已激活" : "未激活"}
+                </span>
+              </span>
+
+              <span
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
+                title="CloakBrowser 核心默认忽略，避免暴露 navigator.webdriver"
+              >
+                <span className="font-semibold text-emerald-400">ignore:</span> --enable-automation
+                <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
+                  系统内置防关联
+                </span>
+              </span>
+
+              <span
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
+                title="CloakBrowser 核心默认忽略，避免暴露 SwiftShader WebGL 渲染特征"
+              >
+                <span className="font-semibold text-emerald-400">ignore:</span> --enable-unsafe-swiftshader
+                <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
+                  系统内置防关联
+                </span>
+              </span>
+
+              {(form.launch_args ?? [])
+                .filter((a) => a.startsWith("ignore:") && a !== "ignore: --disable-extensions")
+                .map((arg, i) => (
+                  <span
+                    key={`custom-ignore-${i}`}
+                    className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-indigo-950/60 border-indigo-600/60 text-indigo-200"
+                  >
+                    <span className="font-semibold text-indigo-400">ignore:</span> {arg.slice(7).trim()}
+                    <span className="text-[10px] px-1 rounded bg-indigo-900/50 text-indigo-300 font-sans">
+                      自定义忽略
+                    </span>
+                  </span>
+                ))}
+            </div>
+          </div>
+
           {(form.launch_args ?? []).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3">
-              {(form.launch_args ?? []).map((arg, index) => (
-                <span
-                  key={`${arg}-${index}`}
-                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-surface-3 text-gray-300 font-mono"
-                >
-                  {arg}
-                  <button type="button" onClick={() => removeLaunchArg(index)} className="hover:opacity-70">
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
+              {(form.launch_args ?? []).map((arg, index) => {
+                const isIgnore = arg.startsWith("ignore:");
+                return (
+                  <span
+                    key={`${arg}-${index}`}
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-mono ${
+                      isIgnore
+                        ? "bg-amber-950/60 text-amber-200 border border-amber-800/60"
+                        : "bg-surface-3 text-gray-300"
+                    }`}
+                  >
+                    {isIgnore && <span className="text-[10px] text-amber-400 font-bold">IGNORE</span>}
+                    {isIgnore ? arg.slice(7).trim() : arg}
+                    <button type="button" onClick={() => removeLaunchArg(index)} className="hover:opacity-70">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           )}
           <div className="flex gap-2">
@@ -1215,9 +1519,9 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
               value={launchArgInput}
               onChange={(e) => setLaunchArgInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLaunchArg(); } }}
-              placeholder="--disable-features=Foo"
+              placeholder="--disable-features=Foo 或 ignore: --arg"
             />
-            <button type="button" onClick={addLaunchArg} className="btn-secondary text-xs">Add</button>
+            <button type="button" onClick={() => addLaunchArg()} className="btn-secondary text-xs">Add</button>
           </div>
         </details>
 

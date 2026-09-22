@@ -207,9 +207,26 @@ def test_install_webstore_stream_api(app_client):
 
 
 @pytest.mark.asyncio
-async def test_stream_install_resumable_range():
+async def test_stream_install_resumable_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import contextlib
+    from backend import extension_manager
     from backend.extension_manager import stream_install_from_webstore
+    from backend import database as db
+
+    fake_ext_dir = tmp_path / "extensions"
+    fake_ext_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(extension_manager, "EXTENSIONS_DIR", fake_ext_dir)
+    monkeypatch.setattr(db, "create_extension", MagicMock(return_value={
+        "id": "abcdefghijklmnopabcdefghijklmnop",
+        "name": "Resumable Extension",
+        "version": "1.0.0",
+        "description": "",
+        "icon_url": None,
+        "path": str(fake_ext_dir / "abcdefghijklmnopabcdefghijklmnop"),
+        "source": "webstore_id",
+        "webstore_id": "abcdefghijklmnopabcdefghijklmnop",
+        "created_at": "2026-01-01T00:00:00Z",
+    }))
 
     manifest_data = {
         "manifest_version": 3,
@@ -361,6 +378,86 @@ def test_kernel_api_endpoints(app_client):
     # 2. DELETE non-existent kernel
     resp_del = app_client.delete("/api/kernels/non_existent_version_999")
     assert resp_del.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_check_extensions_updates(monkeypatch: pytest.MonkeyPatch):
+    from backend import extension_manager
+    from backend import database as db
+
+    fake_extensions = [
+        {
+            "id": "ext1",
+            "name": "Extension One",
+            "version": "1.0.0",
+            "source": "webstore_id",
+            "webstore_id": "abcdefghijklmnopabcdefghijklmnop",
+        },
+        {
+            "id": "ext2",
+            "name": "Extension Two",
+            "version": "2.0.0",
+            "source": "webstore_id",
+            "webstore_id": "bcdefghijklmnopabcdefghijklmnopa",
+        },
+        {
+            "id": "ext3",
+            "name": "Extension Three",
+            "version": "3.0.0",
+            "source": "upload",
+            "webstore_id": None,
+        },
+    ]
+
+    monkeypatch.setattr(db, "list_extensions", lambda: fake_extensions)
+
+    xml_response = """<?xml version="1.0" encoding="UTF-8"?>
+    <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+        <app appid="abcdefghijklmnopabcdefghijklmnop">
+            <updatecheck status="ok" version="1.2.0" codebase="https://example.com/ext1.crx"/>
+        </app>
+        <app appid="bcdefghijklmnopabcdefghijklmnopa">
+            <updatecheck status="noupdate"/>
+        </app>
+    </gupdate>
+    """
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = xml_response
+
+    async def mock_get(self, url, **kwargs):
+        return mock_resp
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    result = await extension_manager.check_extensions_updates()
+    assert "updates" in result
+    assert "checked_at" in result
+
+    updates = result["updates"]
+    assert updates["ext1"]["has_update"] is True
+    assert updates["ext1"]["latest_version"] == "1.2.0"
+    assert updates["ext1"]["status"] == "update_available"
+
+    assert updates["ext2"]["has_update"] is False
+    assert updates["ext2"]["latest_version"] == "2.0.0"
+    assert updates["ext2"]["status"] == "up_to_date"
+
+    assert updates["ext3"]["has_update"] is False
+    assert updates["ext3"]["status"] == "unsupported"
+
+
+def test_check_extensions_updates_api(app_client, monkeypatch: pytest.MonkeyPatch):
+    from backend import database as db
+
+    monkeypatch.setattr(db, "list_extensions", lambda: [])
+
+    resp = app_client.post("/api/extensions/check-updates")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "updates" in data
+    assert "checked_at" in data
 
 
 

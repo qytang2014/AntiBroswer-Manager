@@ -30,6 +30,9 @@ class ProfileCreate(BaseModel):
     extension_paths: list[str] = Field(default_factory=list)
     allow_3p_cookies: bool = True
     set_google_default: bool = True
+    search_engine_name: str | None = None
+    search_engine_keyword: str | None = None
+    search_engine_url: str | None = None
     capture_preview: bool = True
     restore_session: bool = True
     notes: str | None = None
@@ -57,6 +60,9 @@ class ProfileUpdate(BaseModel):
     extension_paths: list[str] | None = None
     allow_3p_cookies: bool | None = None
     set_google_default: bool | None = None
+    search_engine_name: str | None = None
+    search_engine_keyword: str | None = None
+    search_engine_url: str | None = None
     capture_preview: bool | None = None
     restore_session: bool | None = None
     notes: str | None = Field(default=None)
@@ -119,6 +125,9 @@ class ProfileResponse(BaseModel):
     extension_paths: list[str] = Field(default_factory=list)
     allow_3p_cookies: bool = True
     set_google_default: bool = True
+    search_engine_name: str | None = None
+    search_engine_keyword: str | None = None
+    search_engine_url: str | None = None
     capture_preview: bool = True
     restore_session: bool = True
     notes: str | None = None

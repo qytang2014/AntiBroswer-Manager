@@ -77,6 +77,7 @@ from .models import (
 )
 from .extension_manager import (
     POPULAR_EXTENSIONS,
+    check_extensions_updates,
     install_extension_from_bytes,
     install_from_webstore,
     remove_extension,
@@ -677,6 +678,12 @@ async def install_webstore_stream_endpoint(id_or_url: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/extensions/check-updates")
+async def check_extension_updates_endpoint():
+    """Check for updates on all installed extensions via Chrome Web Store update service."""
+    return await check_extensions_updates()
 
 
 @app.delete("/api/extensions/{ext_id}")

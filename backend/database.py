@@ -21,8 +21,10 @@ _PROFILE_COLUMNS = (
     "id", "name", "fingerprint_seed", "proxy", "timezone", "locale",
     "screen_width", "screen_height", "gpu_family", "humanize", "human_preset",
     "geoip", "clipboard_sync", "auto_launch", "color_scheme", "launch_args",
-    "extension_paths", "allow_3p_cookies", "set_google_default", "capture_preview",
-    "restore_session", "notes", "user_data_dir", "created_at", "updated_at", "sort_order",
+    "extension_paths", "allow_3p_cookies", "set_google_default",
+    "search_engine_name", "search_engine_keyword", "search_engine_url",
+    "capture_preview", "restore_session", "notes", "user_data_dir",
+    "created_at", "updated_at", "sort_order",
 )
 
 _PROFILE_SCHEMA = """
@@ -46,6 +48,9 @@ CREATE TABLE profiles (
     extension_paths TEXT NOT NULL DEFAULT '[]',
     allow_3p_cookies BOOLEAN DEFAULT 1,
     set_google_default BOOLEAN DEFAULT 1,
+    search_engine_name TEXT,
+    search_engine_keyword TEXT,
+    search_engine_url TEXT,
     capture_preview BOOLEAN DEFAULT 1,
     restore_session BOOLEAN DEFAULT 1,
     notes TEXT,
@@ -252,6 +257,9 @@ def create_profile(
         "extension_paths": json.dumps(fields.get("extension_paths") or []),
         "allow_3p_cookies": fields.get("allow_3p_cookies", True),
         "set_google_default": fields.get("set_google_default", True),
+        "search_engine_name": fields.get("search_engine_name"),
+        "search_engine_keyword": fields.get("search_engine_keyword"),
+        "search_engine_url": fields.get("search_engine_url"),
         "capture_preview": fields.get("capture_preview", True),
         "restore_session": fields.get("restore_session", True), "notes": fields.get("notes"),
         "user_data_dir": user_data_dir, "created_at": now, "updated_at": now,

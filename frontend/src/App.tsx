@@ -97,8 +97,9 @@ interface AppContentProps {
 }
 
 function AppContent({ authRequired, onLogout }: AppContentProps) {
-  const { profiles, loading, error, create, update, remove, reorder, launch, stop, reset, duplicate } = useProfiles();
+  const { profiles, loading, error, refresh, create, update, remove, reorder, launch, stop, reset, duplicate } = useProfiles();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [extensionsVersion, setExtensionsVersion] = useState(0);
   const [view, setView] = useState<View>("empty");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
@@ -274,6 +275,10 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
         <ExtensionManagerModal
           isOpen={extensionManagerOpen}
           onClose={() => setExtensionManagerOpen(false)}
+          onExtensionsChanged={() => {
+            setExtensionsVersion((v) => v + 1);
+            refresh();
+          }}
         />
       )}
       {kernelManagerOpen && (
@@ -468,6 +473,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
               viewerMode={systemStatus?.viewer_mode ?? null}
               onSave={handleCreate}
               onCancel={() => setView("empty")}
+              extensionsUpdated={extensionsVersion}
             />
           )}
 
@@ -484,6 +490,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
                 setSelectedId(null);
                 setView("empty");
               }}
+              extensionsUpdated={extensionsVersion}
             />
           )}
 

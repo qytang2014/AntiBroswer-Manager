@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { X, Upload, Download, Trash2, CheckCircle2, AlertCircle, Loader2, Search } from "lucide-react";
-import { api, Extension, PopularExtension, WebStoreSearchResult, DownloadProgress, ApiError } from "../lib/api";
+import { X, Upload, Download, Trash2, CheckCircle2, AlertCircle, Loader2, Search, RefreshCw, ArrowUpCircle, Check } from "lucide-react";
+import { api, Extension, PopularExtension, WebStoreSearchResult, DownloadProgress, ExtensionUpdateInfo, ApiError } from "../lib/api";
 
 function CircularProgress({
   percent,
@@ -67,9 +67,12 @@ export function ExtensionManagerModal({
   const [actionLoading, setActionLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installingName, setInstallingName] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [webstoreInput, setWebstoreInput] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateMap, setUpdateMap] = useState<Record<string, ExtensionUpdateInfo>>({});
 
   const fetchExtensions = async () => {
     try {
@@ -102,12 +105,21 @@ export function ExtensionManagerModal({
 
   if (!isOpen) return null;
 
-  const handleInstallFromWebStore = async (idOrUrl?: string) => {
+  const handleInstallFromWebStore = async (idOrUrl?: string, extName?: string) => {
     const target = (idOrUrl || webstoreInput).trim();
     if (!target) return;
 
+    let displayName = extName;
+    if (!displayName) {
+      const foundPop = popular.find((p) => p.id === target || target.includes(p.id));
+      if (foundPop) displayName = foundPop.name;
+      const foundSearch = searchResults.find((s) => s.id === target || target.includes(s.id));
+      if (foundSearch) displayName = foundSearch.name;
+    }
+
     setActionLoading(true);
     setInstallingId(target);
+    setInstallingName(displayName || null);
     setFeedback(null);
     setDownloadProgress({
       stage: "connecting",
@@ -129,6 +141,7 @@ export function ExtensionManagerModal({
     } finally {
       setActionLoading(false);
       setInstallingId(null);
+      setInstallingName(null);
       setDownloadProgress(null);
     }
   };
@@ -201,6 +214,59 @@ export function ExtensionManagerModal({
       setFeedback({ type: "error", text: msg });
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdates(true);
+    setFeedback(null);
+    try {
+      const res = await api.checkExtensionUpdates();
+      setUpdateMap(res.updates);
+      const availableCount = Object.values(res.updates).filter((u) => u.has_update).length;
+      if (availableCount > 0) {
+        setFeedback({
+          type: "success",
+          text: `检查完成：发现 ${availableCount} 个插件有可用新版本！`,
+        });
+      } else {
+        setFeedback({
+          type: "success",
+          text: "检查完成：所有来自应用商店的插件均已是最新版本。",
+        });
+      }
+    } catch (err: any) {
+      const msg = err?.message || (err instanceof ApiError ? err.message : "检查更新失败");
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
+  const handleUpdateExtension = async (ext: Extension) => {
+    const target = ext.webstore_id || ext.id;
+    if (!target) return;
+    await handleInstallFromWebStore(target, ext.name);
+    setUpdateMap((prev) => {
+      const next = { ...prev };
+      const current = next[ext.id];
+      if (current) {
+        next[ext.id] = {
+          has_update: false,
+          status: "up_to_date",
+          current_version: current.latest_version ?? ext.version,
+          latest_version: current.latest_version ?? ext.version,
+        };
+      }
+      return next;
+    });
+  };
+
+  const handleUpdateAll = async () => {
+    const updatable = extensions.filter((e) => updateMap[e.id]?.has_update);
+    if (updatable.length === 0) return;
+    for (const ext of updatable) {
+      await handleUpdateExtension(ext);
     }
   };
 
@@ -315,11 +381,16 @@ export function ExtensionManagerModal({
                 {actionLoading && downloadProgress && (
                   <div className="space-y-1.5 p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-800/40">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-indigo-300 flex items-center gap-1.5">
+                      <span className="text-indigo-300 flex items-center gap-1.5 min-w-0 flex-1">
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400 shrink-0" />
-                        <span className="truncate max-w-sm">{downloadProgress.message}</span>
+                        {installingName ? (
+                          <span className="font-semibold text-white truncate shrink-0 max-w-[150px]">
+                            {installingName}:
+                          </span>
+                        ) : null}
+                        <span className="truncate">{downloadProgress.message}</span>
                       </span>
-                      <span className="text-indigo-400 font-mono text-[11px] shrink-0 font-medium">
+                      <span className="text-indigo-400 font-mono text-[11px] shrink-0 font-medium ml-2">
                         {downloadProgress.percent}%
                       </span>
                     </div>
@@ -397,7 +468,7 @@ export function ExtensionManagerModal({
                                   : "btn-secondary text-indigo-300 hover:text-white"
                               }`}
                               disabled={actionLoading || isInstalled}
-                              onClick={() => handleInstallFromWebStore(item.id)}
+                              onClick={() => handleInstallFromWebStore(item.id, item.name)}
                             >
                               {isInstalled ? (
                                 "Installed"
@@ -449,7 +520,7 @@ export function ExtensionManagerModal({
                               : "btn-secondary text-indigo-300 hover:text-white"
                           }`}
                           disabled={actionLoading || isInstalled}
-                          onClick={() => handleInstallFromWebStore(item.id)}
+                          onClick={() => handleInstallFromWebStore(item.id, item.name)}
                         >
                           {isInstalled ? "Installed" : "Install"}
                         </button>
@@ -486,10 +557,38 @@ export function ExtensionManagerModal({
         {/* Installed Extensions List */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Installed Extensions ({extensions.length})
-            </h3>
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                Installed Extensions ({extensions.length})
+              </h3>
+              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />}
+            </div>
+
+            {extensions.length > 0 && (
+              <div className="flex items-center gap-2">
+                {Object.values(updateMap).some((u) => u.has_update) && (
+                  <button
+                    type="button"
+                    onClick={handleUpdateAll}
+                    disabled={actionLoading || checkingUpdates}
+                    className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+                  >
+                    <ArrowUpCircle className="h-3.5 w-3.5" />
+                    全部更新 ({Object.values(updateMap).filter((u) => u.has_update).length})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCheckUpdates}
+                  disabled={checkingUpdates || actionLoading}
+                  className="btn-secondary text-xs px-2.5 py-1 flex items-center gap-1.5 disabled:opacity-50"
+                  title="检查所有插件是否有新版本"
+                >
+                  <RefreshCw className={`h-3 w-3 ${checkingUpdates ? "animate-spin text-indigo-400" : ""}`} />
+                  <span>{checkingUpdates ? "检查中..." : "检查更新"}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {extensions.length === 0 && !loading ? (
@@ -498,43 +597,77 @@ export function ExtensionManagerModal({
             </div>
           ) : (
             <div className="space-y-2">
-              {extensions.map((ext) => (
-                <div
-                  key={ext.id}
-                  className="p-3 rounded-lg border border-gray-800 bg-gray-800/30 flex items-center justify-between gap-3 hover:border-gray-700 transition"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {ext.icon_url ? (
-                      <img src={ext.icon_url} alt={ext.name} className="h-8 w-8 rounded shrink-0 object-contain bg-gray-900/50 p-1" />
-                    ) : (
-                      <div className="h-8 w-8 rounded shrink-0 bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center text-indigo-300 text-xs font-bold">
-                        {ext.name.charAt(0).toUpperCase()}
+              {extensions.map((ext) => {
+                const updateInfo = updateMap[ext.id];
+                return (
+                  <div
+                    key={ext.id}
+                    className="p-3 rounded-lg border border-gray-800 bg-gray-800/30 flex items-center justify-between gap-3 hover:border-gray-700 transition"
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {ext.icon_url ? (
+                        <img src={ext.icon_url} alt={ext.name} className="h-8 w-8 rounded shrink-0 object-contain bg-gray-900/50 p-1" />
+                      ) : (
+                        <div className="h-8 w-8 rounded shrink-0 bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center text-indigo-300 text-xs font-bold">
+                          {ext.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-medium text-white truncate">{ext.name}</span>
+                          <span className="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.2 rounded border border-gray-700 font-mono">
+                            v{ext.version}
+                          </span>
+                          {updateInfo?.has_update && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/60 text-amber-300 font-medium animate-pulse">
+                              <ArrowUpCircle className="h-3 w-3" />
+                              可更新至 v{updateInfo.latest_version}
+                            </span>
+                          )}
+                          {updateInfo && !updateInfo.has_update && updateInfo.status === "up_to_date" && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/50 border border-emerald-800/40 text-emerald-400">
+                              <Check className="h-2.5 w-2.5" />
+                              最新
+                            </span>
+                          )}
+                          {ext.source === "upload" && (
+                            <span className="text-[10px] text-gray-500 bg-gray-800/50 px-1.5 py-0.2 rounded">
+                              本地上传
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-gray-400 truncate max-w-md">
+                          {ext.description || ext.path}
+                        </p>
                       </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-white truncate">{ext.name}</span>
-                        <span className="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.2 rounded border border-gray-700">
-                          v{ext.version}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-gray-400 truncate max-w-md">
-                        {ext.description || ext.path}
-                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {updateInfo?.has_update && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateExtension(ext)}
+                          disabled={actionLoading}
+                          className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1 transition disabled:opacity-50"
+                          title={`更新 ${ext.name} 至 v${updateInfo.latest_version}`}
+                        >
+                          <ArrowUpCircle className="h-3.5 w-3.5" />
+                          更新
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(ext.id, ext.name)}
+                        disabled={actionLoading}
+                        className="text-gray-500 hover:text-red-400 p-1.5 rounded hover:bg-gray-800 transition"
+                        title="Delete extension"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(ext.id, ext.name)}
-                    disabled={actionLoading}
-                    className="text-gray-500 hover:text-red-400 p-1.5 rounded hover:bg-gray-800 transition"
-                    title="Delete extension"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
