@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from backend import database as db
@@ -178,6 +179,20 @@ def test_search_webstore_api(app_client):
         assert results[0]["id"] == "nngceckbapebfimnlniiiahkandclblb"
         assert results[0]["name"] == "Bitwarden Password Manager"
         assert "password manager" in results[0]["description"].lower()
+
+
+def test_search_webstore_network_error(app_client):
+    with patch("httpx.AsyncClient.get", side_effect=httpx.ConnectTimeout("Timeout")):
+        resp = app_client.get("/api/extensions/webstore/search?q=something_nonexistent_xyz")
+        assert resp.status_code == 502
+        assert "网络错误: 无法连接到 Chrome 应用商店" in resp.json()["detail"]
+
+
+def test_install_webstore_network_error(app_client):
+    with patch("httpx.AsyncClient.get", side_effect=httpx.ConnectTimeout("Timeout")):
+        resp = app_client.post("/api/extensions/install-webstore", json={"id_or_url": "nngceckbapebfimnlniiiahkandclblb"})
+        assert resp.status_code == 400
+        assert "网络错误: 无法连接到 Chrome 应用商店" in resp.json()["detail"]
 
 
 def test_probe_proxy_target():

@@ -75,6 +75,60 @@ POPULAR_EXTENSIONS = [
 ]
 
 
+import contextlib
+from collections.abc import AsyncIterator
+
+
+@contextlib.asynccontextmanager
+async def get_webstore_proxy_url() -> AsyncIterator[str | None]:
+    """Provide a proxy URL for Chrome Web Store requests.
+
+    If CloakBrowser Manager has imported proxy nodes:
+    - Selects the best node (lowest positive latency, or first available).
+    - If sing-box node (vless, vmess, trojan, etc.), spawns a temporary fast_singbox_proxy instance.
+    - Yields the local HTTP proxy URL.
+
+    If no proxy nodes are imported:
+    - Yields None (falling back to system/environment proxy with trust_env=True).
+    """
+    from .database import list_proxy_nodes
+
+    nodes = list_proxy_nodes()
+    if not nodes:
+        yield None
+        return
+
+    # Select best node: lowest positive latency, or first available
+    valid_nodes = [n for n in nodes if (n.get("last_latency_ms") or -1) > 0]
+    valid_nodes.sort(key=lambda n: n["last_latency_ms"])
+    chosen_node = valid_nodes[0] if valid_nodes else nodes[0]
+
+    protocol = (chosen_node.get("protocol") or "").lower()
+    raw_uri = chosen_node.get("raw_uri") or ""
+    parsed_config = chosen_node.get("parsed_config")
+
+    if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
+        from .singbox_runner import fast_singbox_proxy
+
+        if parsed_config:
+            try:
+                cfg = json.loads(parsed_config)
+                proxy_payload = {"type": "singbox", "config": {"outbounds": [cfg]}}
+            except Exception:
+                proxy_payload = {"type": "singbox", "config": raw_uri}
+        else:
+            proxy_payload = {"type": "singbox", "config": raw_uri}
+
+        try:
+            with fast_singbox_proxy(proxy_payload) as proxy_url:
+                yield proxy_url
+        except Exception as exc:
+            logger.warning("Failed to start fast sing-box proxy for Web Store: %s", exc)
+            yield None
+    else:
+        yield raw_uri or None
+
+
 async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
     """Search Google Chrome Web Store by keyword, or resolve ID/URL directly."""
     import html
@@ -90,52 +144,79 @@ async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         ),
         "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
     }
 
     url = f"https://chromewebstore.google.com/search/{urllib.parse.quote(query)}"
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0, trust_env=True) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:
-                logger.warning("WebStore search returned HTTP %d for '%s'", resp.status_code, query)
-                return []
-            page_text = resp.text
-    except Exception as exc:
-        logger.warning("WebStore search request failed for '%s': %s", query, exc)
-        return []
+    page_text = ""
+    req_error: Exception | None = None
+
+    async with get_webstore_proxy_url() as proxy_url:
+        try:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                follow_redirects=True,
+                timeout=20.0,
+                trust_env=True,
+            ) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    page_text = resp.text
+                else:
+                    logger.warning("WebStore search returned HTTP %d for '%s'", resp.status_code, query)
+                    req_error = RuntimeError(f"HTTP {resp.status_code}")
+        except Exception as exc:
+            logger.warning("WebStore search request failed for '%s': %s", query, exc)
+            req_error = exc
 
     results: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
-    cards = re.findall(
-        r"data-item-id=\"([a-p]{32})\"([\s\S]*?)(?=(?:data-item-id=\"[a-p]{32}\"|<\/section>|$))",
-        page_text,
-    )
-    for ext_id, chunk in cards:
-        if ext_id in seen_ids:
-            continue
-        seen_ids.add(ext_id)
+    # Pre-fill local matches from popular extensions
+    q_lower = query.lower()
+    for pop in POPULAR_EXTENSIONS:
+        if q_lower in pop["name"].lower() or q_lower in pop["id"].lower():
+            if pop["id"] not in seen_ids:
+                seen_ids.add(pop["id"])
+                results.append({
+                    "id": pop["id"],
+                    "name": pop["name"],
+                    "description": pop["description"],
+                    "icon_url": None,
+                })
 
-        name_m = re.search(r"<h2[^>]*>([\s\S]*?)</h2>", chunk)
-        name = html.unescape(re.sub(r"<[^>]+>", "", name_m.group(1)).strip()) if name_m else ext_id
+    if page_text:
+        cards = re.findall(
+            r"data-item-id=\"([a-p]{32})\"([\s\S]*?)(?=(?:data-item-id=\"[a-p]{32}\"|<\/section>|$))",
+            page_text,
+        )
+        for ext_id, chunk in cards:
+            name_m = re.search(r"<h2[^>]*>([\s\S]*?)</h2>", chunk)
+            name = html.unescape(re.sub(r"<[^>]+>", "", name_m.group(1)).strip()) if name_m else ext_id
 
-        img_m = re.search(r"<img[^>]+src=\"([^\"]+)\"", chunk)
-        icon_url = img_m.group(1) if img_m else None
+            img_m = re.search(r"<img[^>]+src=\"([^\"]+)\"", chunk)
+            icon_url = img_m.group(1) if img_m else None
 
-        desc_m = re.search(r"<p[^>]*class=\"[^\"]*rQHEi[^\"]*\"[^>]*>([\s\S]*?)</p>", chunk)
-        if not desc_m:
-            desc_m = re.search(r"<p[^>]*>([\s\S]*?)</p>", chunk)
-        desc = html.unescape(re.sub(r"<[^>]+>", "", desc_m.group(1)).strip()) if desc_m else ""
+            desc_m = re.search(r"<p[^>]*class=\"[^\"]*rQHEi[^\"]*\"[^>]*>([\s\S]*?)</p>", chunk)
+            if not desc_m:
+                desc_m = re.search(r"<p[^>]*>([\s\S]*?)</p>", chunk)
+            desc = html.unescape(re.sub(r"<[^>]+>", "", desc_m.group(1)).strip()) if desc_m else ""
 
-        results.append({
-            "id": ext_id,
-            "name": name,
-            "description": desc,
-            "icon_url": icon_url,
-        })
+            existing = next((r for r in results if r["id"] == ext_id), None)
+            if existing:
+                existing["name"] = name
+                existing["description"] = desc or existing["description"]
+                existing["icon_url"] = icon_url
+            elif ext_id not in seen_ids:
+                seen_ids.add(ext_id)
+                results.append({
+                    "id": ext_id,
+                    "name": name,
+                    "description": desc,
+                    "icon_url": icon_url,
+                })
 
     # If direct_id was detected but wasn't in top results, prioritize or include it
     if direct_id and direct_id not in seen_ids:
@@ -145,6 +226,9 @@ async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
             "description": "Direct Chrome Web Store extension ID match",
             "icon_url": None,
         })
+
+    if not results and req_error is not None:
+        raise RuntimeError("网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接")
 
     return results
 
@@ -308,28 +392,55 @@ async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
             "Must be a 32-character ID or full Web Store URL."
         )
 
-    # Google Official CRX download endpoint
-    crx_url = (
-        "https://clients2.google.com/service/update2/crx"
-        "?response=redirect&prodversion=120.0&acceptformat=crx2,crx3"
-        f"&x=id%3D{webstore_id}%26uc"
-    )
+    crx_urls = [
+        (
+            "https://clients2.google.com/service/update2/crx"
+            "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
+            f"&x=id%3D{webstore_id}%26uc"
+        ),
+        (
+            "https://clients2.googleusercontent.com/service/update2/crx"
+            "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
+            f"&x=id%3D{webstore_id}%26uc"
+        ),
+    ]
 
     logger.info("Downloading Chrome extension %s from Web Store...", webstore_id)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )
     }
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        resp = await client.get(crx_url, headers=headers)
-        if resp.status_code != 200 or not resp.content:
-            raise RuntimeError(
-                f"Failed to download extension from Chrome Web Store (HTTP {resp.status_code})"
-            )
-        file_bytes = resp.content
+    file_bytes: bytes | None = None
+    last_error: Exception | None = None
+
+    async with get_webstore_proxy_url() as proxy_url:
+        try:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                follow_redirects=True,
+                timeout=90.0,
+                trust_env=True,
+            ) as client:
+                for crx_url in crx_urls:
+                    try:
+                        resp = await client.get(crx_url, headers=headers)
+                        if resp.status_code == 200 and resp.content:
+                            file_bytes = resp.content
+                            break
+                        else:
+                            last_error = RuntimeError(f"HTTP {resp.status_code}")
+                    except Exception as exc:
+                        logger.warning("Failed to download from %s: %s", crx_url, exc)
+                        last_error = exc
+        except Exception as exc:
+            last_error = exc
+
+    if not file_bytes:
+        logger.error("Download failed for extension %s: %s", webstore_id, last_error)
+        raise RuntimeError("网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接")
 
     return await install_extension_from_bytes(
         file_bytes=file_bytes,

@@ -612,7 +612,12 @@ async def popular_extensions_endpoint():
 @app.get("/api/extensions/webstore/search")
 async def search_webstore_endpoint(q: str = ""):
     """Search Google Chrome Web Store by keyword."""
-    return await search_chrome_webstore(q)
+    try:
+        return await search_chrome_webstore(q)
+    except Exception as exc:
+        msg = str(exc).strip() or "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
+        logger.warning("Search Web Store failed for '%s': %s", q, msg)
+        raise HTTPException(status_code=502, detail=msg)
 
 
 @app.post("/api/extensions/upload")
@@ -634,8 +639,9 @@ async def install_webstore_endpoint(req: WebStoreInstallRequest):
     try:
         return await install_from_webstore(req.id_or_url)
     except Exception as exc:
-        logger.warning("Failed to install extension from Web Store: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc))
+        msg = str(exc).strip() or "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
+        logger.warning("Failed to install extension from Web Store: %s", msg)
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @app.delete("/api/extensions/{ext_id}")
