@@ -80,16 +80,13 @@ from collections.abc import AsyncIterator
 
 
 @contextlib.asynccontextmanager
-async def get_webstore_proxy_url() -> AsyncIterator[str | None]:
-    """Provide a proxy URL for Chrome Web Store requests.
+async def get_imported_proxy_url() -> AsyncIterator[str | None]:
+    """Provide a proxy URL from CloakBrowser Manager's imported nodes if available.
 
-    If CloakBrowser Manager has imported proxy nodes:
     - Selects the best node (lowest positive latency, or first available).
     - If sing-box node (vless, vmess, trojan, etc.), spawns a temporary fast_singbox_proxy instance.
     - Yields the local HTTP proxy URL.
-
-    If no proxy nodes are imported:
-    - Yields None (falling back to system/environment proxy with trust_env=True).
+    - If no proxy nodes are imported, yields None.
     """
     from .database import list_proxy_nodes
 
@@ -130,7 +127,11 @@ async def get_webstore_proxy_url() -> AsyncIterator[str | None]:
 
 
 async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
-    """Search Google Chrome Web Store by keyword, or resolve ID/URL directly."""
+    """Search Google Chrome Web Store by keyword, or resolve ID/URL directly.
+
+    Tries local network connection first. If local network fails/times out,
+    falls back to CloakBrowser Manager's imported proxy nodes.
+    """
     import html
     import urllib.parse
 
@@ -153,23 +154,42 @@ async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
     page_text = ""
     req_error: Exception | None = None
 
-    async with get_webstore_proxy_url() as proxy_url:
-        try:
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                follow_redirects=True,
-                timeout=20.0,
-                trust_env=True,
-            ) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    page_text = resp.text
-                else:
-                    logger.warning("WebStore search returned HTTP %d for '%s'", resp.status_code, query)
-                    req_error = RuntimeError(f"HTTP {resp.status_code}")
-        except Exception as exc:
-            logger.warning("WebStore search request failed for '%s': %s", query, exc)
-            req_error = exc
+    # 1. Attempt local network connection first
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=6.0,
+            trust_env=True,
+        ) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                page_text = resp.text
+            else:
+                req_error = RuntimeError(f"HTTP {resp.status_code}")
+    except Exception as exc:
+        logger.debug("Local network Web Store search failed, trying imported proxy: %s", exc)
+        req_error = exc
+
+    # 2. If local network failed, fallback to CloakBrowser imported proxy
+    if not page_text:
+        async with get_imported_proxy_url() as proxy_url:
+            if proxy_url:
+                try:
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url,
+                        follow_redirects=True,
+                        timeout=20.0,
+                        trust_env=True,
+                    ) as client:
+                        resp = await client.get(url, headers=headers)
+                        if resp.status_code == 200:
+                            page_text = resp.text
+                            req_error = None
+                        else:
+                            req_error = RuntimeError(f"HTTP {resp.status_code}")
+                except Exception as exc:
+                    logger.warning("Web Store search via imported proxy failed for '%s': %s", query, exc)
+                    req_error = exc
 
     results: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -416,27 +436,52 @@ async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
     file_bytes: bytes | None = None
     last_error: Exception | None = None
 
-    async with get_webstore_proxy_url() as proxy_url:
-        try:
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                follow_redirects=True,
-                timeout=90.0,
-                trust_env=True,
-            ) as client:
-                for crx_url in crx_urls:
-                    try:
-                        resp = await client.get(crx_url, headers=headers)
-                        if resp.status_code == 200 and resp.content:
-                            file_bytes = resp.content
-                            break
-                        else:
-                            last_error = RuntimeError(f"HTTP {resp.status_code}")
-                    except Exception as exc:
-                        logger.warning("Failed to download from %s: %s", crx_url, exc)
-                        last_error = exc
-        except Exception as exc:
-            last_error = exc
+    # 1. Attempt local network download first
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=15.0,
+            trust_env=True,
+        ) as client:
+            for crx_url in crx_urls:
+                try:
+                    resp = await client.get(crx_url, headers=headers)
+                    if resp.status_code == 200 and resp.content:
+                        file_bytes = resp.content
+                        break
+                    else:
+                        last_error = RuntimeError(f"HTTP {resp.status_code}")
+                except Exception as exc:
+                    last_error = exc
+    except Exception as exc:
+        logger.debug("Local network Web Store download failed, trying imported proxy: %s", exc)
+        last_error = exc
+
+    # 2. If local network download failed, fallback to CloakBrowser imported proxy
+    if not file_bytes:
+        async with get_imported_proxy_url() as proxy_url:
+            if proxy_url:
+                try:
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url,
+                        follow_redirects=True,
+                        timeout=90.0,
+                        trust_env=True,
+                    ) as client:
+                        for crx_url in crx_urls:
+                            try:
+                                resp = await client.get(crx_url, headers=headers)
+                                if resp.status_code == 200 and resp.content:
+                                    file_bytes = resp.content
+                                    last_error = None
+                                    break
+                                else:
+                                    last_error = RuntimeError(f"HTTP {resp.status_code}")
+                            except Exception as exc:
+                                logger.warning("Download from %s via imported proxy failed: %s", crx_url, exc)
+                                last_error = exc
+                except Exception as exc:
+                    last_error = exc
 
     if not file_bytes:
         logger.error("Download failed for extension %s: %s", webstore_id, last_error)
