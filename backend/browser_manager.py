@@ -293,12 +293,20 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
             timezone = resp.location.time_zone
     except Exception as exc:
         logger.debug("Proxy test geo lookup failed for %s: %s", ip, exc)
+
+    locale = None
+    if country:
+        from cloakbrowser.geoip import COUNTRY_LOCALE_MAP
+
+        locale = COUNTRY_LOCALE_MAP.get(country, "en-US")
+
     return {
         "ok": True,
         "ip": ip,
         "country": country,
         "city": city,
         "timezone": timezone,
+        "locale": locale,
         "latency_ms": latency_ms if latency_ms is not None else 0,
         "cached": False,
     }

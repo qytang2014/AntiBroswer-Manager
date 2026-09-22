@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import signal
@@ -23,7 +24,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import starlette.requests
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -78,6 +79,7 @@ from .extension_manager import (
     install_from_webstore,
     remove_extension,
     search_chrome_webstore,
+    stream_install_from_webstore,
 )
 from .runtime import bundle_dir
 from .settings_store import load_settings, save_settings
@@ -642,6 +644,32 @@ async def install_webstore_endpoint(req: WebStoreInstallRequest):
         msg = str(exc).strip() or "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
         logger.warning("Failed to install extension from Web Store: %s", msg)
         raise HTTPException(status_code=400, detail=msg)
+
+
+@app.get("/api/extensions/install-webstore-stream")
+async def install_webstore_stream_endpoint(id_or_url: str):
+    """Download and install an extension with real-time SSE progress events."""
+    async def event_generator():
+        try:
+            async for event in stream_install_from_webstore(id_or_url):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            err_data = {
+                "stage": "error",
+                "message": str(exc),
+                "percent": 0,
+            }
+            yield f"data: {json.dumps(err_data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.delete("/api/extensions/{ext_id}")

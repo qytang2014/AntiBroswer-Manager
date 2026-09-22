@@ -260,12 +260,60 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
     set("extension_paths", current.filter((p) => p !== pathToRemove));
   };
 
+  const [matchingGeo, setMatchingGeo] = useState(false);
+  const [geoMatchMessage, setGeoMatchMessage] = useState<string | null>(null);
+
+  const handleMatchProxyGeo = async () => {
+    if (!form.proxy) return;
+    setMatchingGeo(true);
+    setGeoMatchMessage(null);
+    try {
+      const res = await api.testProxy(form.proxy, proxyType);
+      setProxyTest(res);
+      if (!res.ok) {
+        alert(`无法获取代理 IP 信息: ${res.error || "连接失败"}`);
+        return;
+      }
+      const newTz = res.timezone || null;
+      const newLoc = res.locale || null;
+
+      if (!newTz && !newLoc) {
+        alert(`已解析代理出口 IP (${res.ip})，但未在 IP 数据库中查询到对应的时区或语言信息。`);
+        return;
+      }
+
+      const hasExistingTz = Boolean(form.timezone && form.timezone.trim());
+      const hasExistingLoc = Boolean(form.locale && form.locale.trim());
+
+      if ((hasExistingTz && form.timezone !== newTz) || (hasExistingLoc && form.locale !== newLoc)) {
+        const confirmMsg =
+          `检测到已设置的时区/语言配置：\n` +
+          `· 时区: ${form.timezone || "未设置"} -> ${newTz || "未匹配"}\n` +
+          `· 语言: ${form.locale || "未设置"} -> ${newLoc || "未匹配"}\n\n` +
+          `是否确认按代理出口 IP (${res.ip}) 覆盖现有设置？`;
+        if (!window.confirm(confirmMsg)) {
+          return;
+        }
+      }
+
+      if (newTz) set("timezone", newTz);
+      if (newLoc) set("locale", newLoc);
+      setGeoMatchMessage(`已按出口 IP (${res.ip}) 匹配设置: 时区 ${newTz || "-"} / 语言 ${newLoc || "-"}`);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "匹配代理地理信息失败";
+      alert(`匹配失败: ${message}`);
+    } finally {
+      setMatchingGeo(false);
+    }
+  };
+
   const handleTestProxy = async () => {
     if (!form.proxy) return;
     setProxyTest(null);
     setTestingProxy(true);
     try {
-      setProxyTest(await api.testProxy(form.proxy, proxyType));
+      const res = await api.testProxy(form.proxy, proxyType);
+      setProxyTest(res);
     } catch (err) {
       const message =
         err instanceof ApiError ? err.message : "Proxy test failed";
@@ -633,12 +681,21 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
                     }}
                     placeholder={`{\n  "outbounds": [\n    {\n      "type": "vless",\n      "tag": "my-proxy",\n      "server": "example.com",\n      "server_port": 443,\n      "uuid": "your-uuid",\n      "tls": { "enabled": true }\n    }\n  ]\n}`}
                   />
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200"
+                      onClick={handleMatchProxyGeo}
+                      disabled={!form.proxy || matchingGeo || testingProxy}
+                      title="根据当前代理节点的出口 IP 自动匹配并填入 Timezone 与 Locale"
+                    >
+                      {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
+                    </button>
                     <button
                       type="button"
                       className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
                       onClick={handleTestProxy}
-                      disabled={!form.proxy || testingProxy}
+                      disabled={!form.proxy || testingProxy || matchingGeo}
                     >
                       {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                       Test
@@ -653,6 +710,7 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
                     onChange={(e) => {
                       set("proxy", e.target.value || null);
                       setProxyTest(null);
+                      setGeoMatchMessage(null);
                     }}
                     placeholder={
                       proxyType === "singbox_uri"
@@ -664,9 +722,18 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
                   />
                   <button
                     type="button"
+                    className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200"
+                    onClick={handleMatchProxyGeo}
+                    disabled={!form.proxy || matchingGeo || testingProxy}
+                    title="根据当前代理节点的出口 IP 自动匹配并填入 Timezone 与 Locale"
+                  >
+                    {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
+                  </button>
+                  <button
+                    type="button"
                     className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
                     onClick={handleTestProxy}
-                    disabled={!form.proxy || testingProxy}
+                    disabled={!form.proxy || testingProxy || matchingGeo}
                   >
                     {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     Test
@@ -686,6 +753,13 @@ export function ProfileForm({ profile, hostOs, viewerMode, onSave, onDelete, onR
                       (proxyTest.latency_ms != null ? ` · ${proxyTest.latency_ms}ms` : "") +
                       (proxyTest.cached ? " (cached)" : "")
                     : proxyTest.error || "Proxy test failed"}
+                </p>
+              )}
+
+              {geoMatchMessage && (
+                <p className="text-xs mt-1 text-indigo-400 flex items-center gap-1">
+                  <span>✓</span>
+                  <span>{geoMatchMessage}</span>
                 </p>
               )}
             </div>

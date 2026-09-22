@@ -91,9 +91,19 @@ export interface ProxyTestResult {
   country?: string | null;
   city?: string | null;
   timezone?: string | null;
+  locale?: string | null;
   latency_ms?: number | null;
   error?: string | null;
   cached?: boolean;
+}
+
+export interface DownloadProgress {
+  stage: "connecting" | "downloading" | "unpacking" | "completed" | "error";
+  message: string;
+  percent: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  extension?: Extension;
 }
 
 export interface Extension {
@@ -277,11 +287,49 @@ export const api = {
 
   getPopularExtensions: () => request<PopularExtension[]>("/api/extensions/popular"),
 
+  matchProxyGeo: (proxy: string, proxy_type?: string) =>
+    request<ProxyTestResult>("/api/profiles/test-proxy", {
+      method: "POST",
+      body: JSON.stringify({ proxy, proxy_type }),
+    }),
+
   installFromWebStore: (id_or_url: string) =>
     request<Extension>("/api/extensions/install-webstore", {
       method: "POST",
       body: JSON.stringify({ id_or_url }),
     }),
+
+  installFromWebStoreStream: (
+    id_or_url: string,
+    onProgress: (progress: DownloadProgress) => void
+  ): Promise<Extension> => {
+    return new Promise((resolve, reject) => {
+      const url = `/api/extensions/install-webstore-stream?id_or_url=${encodeURIComponent(id_or_url)}`;
+      const eventSource = new EventSource(url);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data: DownloadProgress = JSON.parse(event.data);
+          onProgress(data);
+          if (data.stage === "completed" && data.extension) {
+            eventSource.close();
+            resolve(data.extension);
+          } else if (data.stage === "error") {
+            eventSource.close();
+            reject(new Error(data.message || "Failed to install extension"));
+          }
+        } catch (err) {
+          eventSource.close();
+          reject(err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        reject(new Error("网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"));
+      };
+    });
+  },
 
   searchWebStore: (query: string) =>
     request<WebStoreSearchResult[]>(`/api/extensions/webstore/search?q=${encodeURIComponent(query)}`),

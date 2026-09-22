@@ -6,11 +6,15 @@ extensions (.crx and .zip files) for profile-level usage.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -403,14 +407,37 @@ async def install_extension_from_bytes(
     )
 
 
-async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
-    """Download and install an extension directly from Google Chrome Web Store."""
+async def stream_install_from_webstore(id_or_url: str) -> AsyncIterator[dict[str, Any]]:
+    """Download and install a Chrome extension with live progress events."""
     webstore_id = extract_webstore_id(id_or_url)
     if not webstore_id:
-        raise ValueError(
-            f"Invalid Chrome Web Store ID or URL: '{id_or_url}'. "
-            "Must be a 32-character ID or full Web Store URL."
-        )
+        yield {
+            "stage": "error",
+            "message": (
+                f"Invalid Chrome Web Store ID or URL: '{id_or_url}'. "
+                "Must be a 32-character ID or full Web Store URL."
+            ),
+            "percent": 0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+        }
+        return
+
+    yield {
+        "stage": "connecting",
+        "message": f"正在连接 Chrome 应用商店下载 {webstore_id}...",
+        "percent": 0,
+        "downloaded_bytes": 0,
+        "total_bytes": 0,
+    }
+
+    part_file = Path(tempfile.gettempdir()) / f"cloak_crx_{webstore_id}_{os.getpid()}_{int(time.time() * 1000)}.part"
+    total_bytes = 0
+    downloaded_bytes = 0
+    last_yield_time = 0.0
+    last_yield_percent = -1
+    last_error: Exception | None = None
+    success = False
 
     crx_urls = [
         (
@@ -425,7 +452,6 @@ async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
         ),
     ]
 
-    logger.info("Downloading Chrome extension %s from Web Store...", webstore_id)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -433,66 +459,293 @@ async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
         )
     }
 
-    file_bytes: bytes | None = None
-    last_error: Exception | None = None
-
-    # 1. Attempt local network download first
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=15.0,
-            trust_env=True,
-        ) as client:
-            for crx_url in crx_urls:
-                try:
-                    resp = await client.get(crx_url, headers=headers)
-                    if resp.status_code == 200 and resp.content:
-                        file_bytes = resp.content
+        # Loop through connection modes: first direct local network, then imported proxy if needed
+        modes = ["local", "proxy"]
+
+        for mode in modes:
+            if success:
+                break
+
+            proxy_context = get_imported_proxy_url() if mode == "proxy" else None
+            if mode == "proxy" and not proxy_context:
+                continue
+
+            # In proxy mode, resolve proxy_url from context manager; in local mode, use None
+            if mode == "proxy":
+                async with proxy_context as proxy_url:
+                    if not proxy_url:
+                        continue
+
+                    yield {
+                        "stage": "downloading",
+                        "message": "本地连接受阻，正在切换至已导入代理节点尝试断点续传...",
+                        "percent": round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0,
+                        "downloaded_bytes": downloaded_bytes,
+                        "total_bytes": total_bytes,
+                    }
+
+                    timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=10.0)
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        if success:
+                            break
+
+                        if part_file.exists():
+                            downloaded_bytes = part_file.stat().st_size
+                        else:
+                            downloaded_bytes = 0
+
+                        if attempt > 0:
+                            dl_mb = round(downloaded_bytes / (1024 * 1024), 1)
+                            tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
+                            pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+                            yield {
+                                "stage": "downloading",
+                                "message": f"网络波动，代理断点重连中 ({attempt + 1}/{max_retries})... 已下载: {dl_mb} MB{tot_mb}",
+                                "percent": pct,
+                                "downloaded_bytes": downloaded_bytes,
+                                "total_bytes": total_bytes,
+                            }
+                            await asyncio.sleep(min(1.0 * attempt, 3.0))
+
+                        try:
+                            async with httpx.AsyncClient(
+                                proxy=proxy_url,
+                                follow_redirects=True,
+                                timeout=timeout,
+                                trust_env=True,
+                            ) as client:
+                                for crx_url in crx_urls:
+                                    req_headers = dict(headers)
+                                    if downloaded_bytes > 0:
+                                        req_headers["Range"] = f"bytes={downloaded_bytes}-"
+
+                                    try:
+                                        async with client.stream("GET", crx_url, headers=req_headers) as resp:
+                                            if resp.status_code == 206:
+                                                # Partial content (resumed from breakpoint)
+                                                content_range = resp.headers.get("content-range", "")
+                                                if "/" in content_range:
+                                                    total_str = content_range.split("/")[-1].strip()
+                                                    if total_str.isdigit():
+                                                        total_bytes = int(total_str)
+                                                open_mode = "ab"
+                                            elif resp.status_code == 200:
+                                                # Server returned full file
+                                                tot_header = resp.headers.get("content-length")
+                                                total_bytes = int(tot_header) if tot_header and tot_header.isdigit() else 0
+                                                downloaded_bytes = 0
+                                                open_mode = "wb"
+                                            elif resp.status_code == 416:
+                                                # Range Not Satisfiable: check if part file is already valid complete package
+                                                if part_file.exists() and part_file.stat().st_size > 0:
+                                                    try:
+                                                        _find_zip_offset(part_file.read_bytes())
+                                                        success = True
+                                                        break
+                                                    except Exception:
+                                                        pass
+                                                part_file.write_bytes(b"")
+                                                downloaded_bytes = 0
+                                                continue
+                                            else:
+                                                last_error = RuntimeError(f"HTTP {resp.status_code}")
+                                                continue
+
+                                            with open(part_file, open_mode) as f:
+                                                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                                                    f.write(chunk)
+                                                    downloaded_bytes += len(chunk)
+                                                    pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+                                                    now = time.monotonic()
+                                                    if pct != last_yield_percent or (now - last_yield_time >= 0.15):
+                                                        last_yield_percent = pct
+                                                        last_yield_time = now
+                                                        dl_mb = round(downloaded_bytes / (1024 * 1024), 1)
+                                                        tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
+                                                        yield {
+                                                            "stage": "downloading",
+                                                            "message": f"正在通过代理下载: {dl_mb} MB{tot_mb}",
+                                                            "percent": pct,
+                                                            "downloaded_bytes": downloaded_bytes,
+                                                            "total_bytes": total_bytes,
+                                                        }
+
+                                            if downloaded_bytes > 0 and (total_bytes == 0 or downloaded_bytes >= total_bytes):
+                                                success = True
+                                                break
+                                    except Exception as exc:
+                                        last_error = exc
+                                        logger.warning("Stream via proxy interrupted (attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
+                                    if success:
+                                        break
+                        except Exception as exc:
+                            last_error = exc
+                            logger.warning("Proxy client error (attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
+            else:
+                # Local network mode
+                timeout = httpx.Timeout(connect=6.0, read=30.0, write=15.0, pool=10.0)
+                max_retries = 3
+                for attempt in range(max_retries):
+                    if success:
                         break
+
+                    if part_file.exists():
+                        downloaded_bytes = part_file.stat().st_size
                     else:
-                        last_error = RuntimeError(f"HTTP {resp.status_code}")
-                except Exception as exc:
-                    last_error = exc
-    except Exception as exc:
-        logger.debug("Local network Web Store download failed, trying imported proxy: %s", exc)
-        last_error = exc
+                        downloaded_bytes = 0
 
-    # 2. If local network download failed, fallback to CloakBrowser imported proxy
-    if not file_bytes:
-        async with get_imported_proxy_url() as proxy_url:
-            if proxy_url:
-                try:
-                    async with httpx.AsyncClient(
-                        proxy=proxy_url,
-                        follow_redirects=True,
-                        timeout=90.0,
-                        trust_env=True,
-                    ) as client:
-                        for crx_url in crx_urls:
-                            try:
-                                resp = await client.get(crx_url, headers=headers)
-                                if resp.status_code == 200 and resp.content:
-                                    file_bytes = resp.content
-                                    last_error = None
+                    if attempt > 0:
+                        dl_mb = round(downloaded_bytes / (1024 * 1024), 1)
+                        tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
+                        pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+                        yield {
+                            "stage": "downloading",
+                            "message": f"网络波动，断点重连中 ({attempt + 1}/{max_retries})... 已下载: {dl_mb} MB{tot_mb}",
+                            "percent": pct,
+                            "downloaded_bytes": downloaded_bytes,
+                            "total_bytes": total_bytes,
+                        }
+                        await asyncio.sleep(min(1.0 * attempt, 3.0))
+
+                    try:
+                        async with httpx.AsyncClient(
+                            follow_redirects=True,
+                            timeout=timeout,
+                            trust_env=True,
+                        ) as client:
+                            for crx_url in crx_urls:
+                                req_headers = dict(headers)
+                                if downloaded_bytes > 0:
+                                    req_headers["Range"] = f"bytes={downloaded_bytes}-"
+
+                                try:
+                                    async with client.stream("GET", crx_url, headers=req_headers) as resp:
+                                        if resp.status_code == 206:
+                                            # Partial content (resumed from breakpoint)
+                                            content_range = resp.headers.get("content-range", "")
+                                            if "/" in content_range:
+                                                total_str = content_range.split("/")[-1].strip()
+                                                if total_str.isdigit():
+                                                    total_bytes = int(total_str)
+                                            open_mode = "ab"
+                                        elif resp.status_code == 200:
+                                            # Server returned full file
+                                            tot_header = resp.headers.get("content-length")
+                                            total_bytes = int(tot_header) if tot_header and tot_header.isdigit() else 0
+                                            downloaded_bytes = 0
+                                            open_mode = "wb"
+                                        elif resp.status_code == 416:
+                                            # Range Not Satisfiable
+                                            if part_file.exists() and part_file.stat().st_size > 0:
+                                                try:
+                                                    _find_zip_offset(part_file.read_bytes())
+                                                    success = True
+                                                    break
+                                                except Exception:
+                                                    pass
+                                            part_file.write_bytes(b"")
+                                            downloaded_bytes = 0
+                                            continue
+                                        else:
+                                            last_error = RuntimeError(f"HTTP {resp.status_code}")
+                                            continue
+
+                                        with open(part_file, open_mode) as f:
+                                            async for chunk in resp.aiter_bytes(chunk_size=65536):
+                                                f.write(chunk)
+                                                downloaded_bytes += len(chunk)
+                                                pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+                                                now = time.monotonic()
+                                                if pct != last_yield_percent or (now - last_yield_time >= 0.15):
+                                                    last_yield_percent = pct
+                                                    last_yield_time = now
+                                                    dl_mb = round(downloaded_bytes / (1024 * 1024), 1)
+                                                    tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
+                                                    yield {
+                                                        "stage": "downloading",
+                                                        "message": f"正在下载: {dl_mb} MB{tot_mb}",
+                                                        "percent": pct,
+                                                        "downloaded_bytes": downloaded_bytes,
+                                                        "total_bytes": total_bytes,
+                                                    }
+
+                                        if downloaded_bytes > 0 and (total_bytes == 0 or downloaded_bytes >= total_bytes):
+                                            success = True
+                                            break
+                                except Exception as exc:
+                                    last_error = exc
+                                    logger.warning("Stream interrupted (local attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
+                                if success:
                                     break
-                                else:
-                                    last_error = RuntimeError(f"HTTP {resp.status_code}")
-                            except Exception as exc:
-                                logger.warning("Download from %s via imported proxy failed: %s", crx_url, exc)
-                                last_error = exc
-                except Exception as exc:
-                    last_error = exc
+                    except Exception as exc:
+                        last_error = exc
+                        logger.warning("Local client error (attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
 
-    if not file_bytes:
-        logger.error("Download failed for extension %s: %s", webstore_id, last_error)
-        raise RuntimeError("网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接")
+        if not success or not part_file.exists() or part_file.stat().st_size == 0:
+            logger.error("Download failed for extension %s: %s", webstore_id, last_error)
+            yield {
+                "stage": "error",
+                "message": "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接",
+                "percent": 0,
+                "downloaded_bytes": downloaded_bytes,
+                "total_bytes": total_bytes,
+            }
+            return
 
-    return await install_extension_from_bytes(
-        file_bytes=file_bytes,
-        filename=f"{webstore_id}.crx",
-        source="webstore_id",
-        webstore_id=webstore_id,
-    )
+        yield {
+            "stage": "unpacking",
+            "message": "下载完成，正在解压并安装...",
+            "percent": 100,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+        }
+
+        try:
+            file_bytes = part_file.read_bytes()
+            ext = await install_extension_from_bytes(
+                file_bytes=file_bytes,
+                filename=f"{webstore_id}.crx",
+                source="webstore_id",
+                webstore_id=webstore_id,
+            )
+            yield {
+                "stage": "completed",
+                "message": f"成功安装扩展 {ext['name']}！",
+                "percent": 100,
+                "downloaded_bytes": downloaded_bytes,
+                "total_bytes": total_bytes,
+                "extension": ext,
+            }
+        except Exception as exc:
+            logger.error("Failed to unpack extension %s: %s", webstore_id, exc)
+            yield {
+                "stage": "error",
+                "message": f"解压安装失败: {exc}",
+                "percent": 0,
+                "downloaded_bytes": downloaded_bytes,
+                "total_bytes": total_bytes,
+            }
+    finally:
+        if part_file.exists():
+            try:
+                part_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
+    """Download and install an extension directly from Google Chrome Web Store."""
+    last_event: dict[str, Any] | None = None
+    async for event in stream_install_from_webstore(id_or_url):
+        last_event = event
+
+    if not last_event or last_event.get("stage") != "completed":
+        err_msg = last_event.get("message") if last_event else "下载安装失败"
+        raise RuntimeError(err_msg)
+
+    return last_event["extension"]
 
 
 def remove_extension(ext_id: str) -> bool:

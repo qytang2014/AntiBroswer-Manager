@@ -1,6 +1,52 @@
 import React, { useState, useEffect } from "react";
 import { X, Upload, Download, Trash2, CheckCircle2, AlertCircle, Loader2, Search } from "lucide-react";
-import { api, Extension, PopularExtension, WebStoreSearchResult, ApiError } from "../lib/api";
+import { api, Extension, PopularExtension, WebStoreSearchResult, DownloadProgress, ApiError } from "../lib/api";
+
+function CircularProgress({
+  percent,
+  size = 30,
+  strokeWidth = 3,
+}: {
+  percent: number;
+  size?: number;
+  strokeWidth?: number;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const offset = circumference - (clamped / 100) * circumference;
+
+  return (
+    <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
+      <svg className="transform -rotate-90" width={size} height={size}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="transparent"
+          className="text-gray-700"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="transparent"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className="text-indigo-400 transition-all duration-200 ease-in-out"
+        />
+      </svg>
+      <span className="absolute text-[8px] font-bold text-indigo-300">
+        {clamped}%
+      </span>
+    </div>
+  );
+}
 
 interface ExtensionManagerModalProps {
   isOpen: boolean;
@@ -21,6 +67,7 @@ export function ExtensionManagerModal({
   const [actionLoading, setActionLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [webstoreInput, setWebstoreInput] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -56,24 +103,33 @@ export function ExtensionManagerModal({
   if (!isOpen) return null;
 
   const handleInstallFromWebStore = async (idOrUrl?: string) => {
-    const target = idOrUrl || webstoreInput;
-    if (!target.trim()) return;
+    const target = (idOrUrl || webstoreInput).trim();
+    if (!target) return;
 
     setActionLoading(true);
     setInstallingId(target);
     setFeedback(null);
+    setDownloadProgress({
+      stage: "connecting",
+      message: "正在连接 Chrome 应用商店...",
+      percent: 0,
+    });
+
     try {
-      const installed = await api.installFromWebStore(target.trim());
-      setFeedback({ type: "success", text: `Successfully installed "${installed.name}"!` });
+      const installed = await api.installFromWebStoreStream(target, (progress) => {
+        setDownloadProgress(progress);
+      });
+      setFeedback({ type: "success", text: `成功安装扩展 "${installed.name}"！` });
       if (!idOrUrl) setWebstoreInput("");
       await fetchExtensions();
       onExtensionsChanged?.();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Failed to install from Web Store";
+    } catch (err: any) {
+      const msg = err?.message || (err instanceof ApiError ? err.message : "Failed to install from Web Store");
       setFeedback({ type: "error", text: msg });
     } finally {
       setActionLoading(false);
       setInstallingId(null);
+      setDownloadProgress(null);
     }
   };
 
@@ -102,8 +158,8 @@ export function ExtensionManagerModal({
           text: `No extensions found for "${target}". Try another keyword or paste direct ID/URL.`,
         });
       }
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Failed to search Chrome Web Store";
+    } catch (err: any) {
+      const msg = err?.message || (err instanceof ApiError ? err.message : "Failed to search Chrome Web Store");
       setFeedback({ type: "error", text: msg });
     } finally {
       setSearching(false);
@@ -255,6 +311,27 @@ export function ExtensionManagerModal({
                   </button>
                 </div>
 
+                {/* Progress bar for Web Store downloads */}
+                {actionLoading && downloadProgress && (
+                  <div className="space-y-1.5 p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-800/40">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-indigo-300 flex items-center gap-1.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400 shrink-0" />
+                        <span className="truncate max-w-sm">{downloadProgress.message}</span>
+                      </span>
+                      <span className="text-indigo-400 font-mono text-[11px] shrink-0 font-medium">
+                        {downloadProgress.percent}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="bg-indigo-500 h-full rounded-full transition-all duration-200 ease-out"
+                        style={{ width: `${Math.max(0, Math.min(100, downloadProgress.percent))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* Search Results */}
                 {searchResults.length > 0 && (
                   <div className="space-y-1.5 max-h-56 overflow-y-auto border border-gray-800/80 rounded-lg p-2 bg-gray-950/40">
@@ -272,7 +349,7 @@ export function ExtensionManagerModal({
                       const isInstalled = extensions.some(
                         (e) => e.webstore_id === item.id || e.name.toLowerCase() === item.name.toLowerCase()
                       );
-                      const isThisInstalling = actionLoading && installingId === item.id;
+                      const isThisInstalling = actionLoading && (installingId === item.id || installingId?.includes(item.id));
 
                       return (
                         <div
@@ -298,27 +375,40 @@ export function ExtensionManagerModal({
                               )}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            className={`text-xs px-2.5 py-1 rounded transition shrink-0 flex items-center gap-1 ${
-                              isInstalled
-                                ? "bg-gray-800 text-gray-400 cursor-default"
-                                : "btn-secondary text-indigo-300 hover:text-white"
-                            }`}
-                            disabled={actionLoading || isInstalled}
-                            onClick={() => handleInstallFromWebStore(item.id)}
-                          >
-                            {isThisInstalling ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : isInstalled ? (
-                              "Installed"
-                            ) : (
-                              <>
-                                <Download className="h-3 w-3" />
-                                Install
-                              </>
-                            )}
-                          </button>
+                          {isThisInstalling ? (
+                            <div className="flex flex-col items-end gap-1 shrink-0 w-24">
+                              <div className="flex justify-between w-full text-[10px] text-indigo-300">
+                                <span className="truncate max-w-[50px]">{downloadProgress?.stage === "unpacking" ? "解压中" : "下载中"}</span>
+                                <span className="font-mono font-bold">{downloadProgress?.percent ?? 0}%</span>
+                              </div>
+                              <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                                <div
+                                  className="bg-indigo-500 h-full rounded-full transition-all duration-200"
+                                  style={{ width: `${Math.max(0, Math.min(100, downloadProgress?.percent ?? 0))}%` }}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className={`text-xs px-2.5 py-1 rounded transition shrink-0 flex items-center gap-1 ${
+                                isInstalled
+                                  ? "bg-gray-800 text-gray-400 cursor-default"
+                                  : "btn-secondary text-indigo-300 hover:text-white"
+                              }`}
+                              disabled={actionLoading || isInstalled}
+                              onClick={() => handleInstallFromWebStore(item.id)}
+                            >
+                              {isInstalled ? (
+                                "Installed"
+                              ) : (
+                                <>
+                                  <Download className="h-3 w-3" />
+                                  Install
+                                </>
+                              )}
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -333,6 +423,7 @@ export function ExtensionManagerModal({
                   const isInstalled = extensions.some(
                     (e) => e.webstore_id === item.id || e.name.toLowerCase().includes(item.name.toLowerCase())
                   );
+                  const isThisInstalling = actionLoading && (installingId === item.id || installingId?.includes(item.id));
                   return (
                     <div
                       key={item.id}
@@ -342,18 +433,27 @@ export function ExtensionManagerModal({
                         <div className="text-xs font-semibold text-white truncate">{item.name}</div>
                         <div className="text-[11px] text-gray-400 truncate">{item.description}</div>
                       </div>
-                      <button
-                        type="button"
-                        className={`text-xs px-2.5 py-1 rounded transition shrink-0 ${
-                          isInstalled
-                            ? "bg-gray-700/50 text-gray-400 cursor-default"
-                            : "btn-secondary text-indigo-300 hover:text-white"
-                        }`}
-                        disabled={actionLoading || isInstalled}
-                        onClick={() => handleInstallFromWebStore(item.id)}
-                      >
-                        {isInstalled ? "Installed" : "Install"}
-                      </button>
+                      {isThisInstalling ? (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <CircularProgress percent={downloadProgress?.percent ?? 0} />
+                          {downloadProgress?.stage === "unpacking" && (
+                            <span className="text-[10px] text-indigo-300 animate-pulse">解压中</span>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className={`text-xs px-2.5 py-1 rounded transition shrink-0 ${
+                            isInstalled
+                              ? "bg-gray-700/50 text-gray-400 cursor-default"
+                              : "btn-secondary text-indigo-300 hover:text-white"
+                          }`}
+                          disabled={actionLoading || isInstalled}
+                          onClick={() => handleInstallFromWebStore(item.id)}
+                        >
+                          {isInstalled ? "Installed" : "Install"}
+                        </button>
+                      )}
                     </div>
                   );
                 })}

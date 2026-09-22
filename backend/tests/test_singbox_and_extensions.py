@@ -189,10 +189,82 @@ def test_search_webstore_network_error(app_client):
 
 
 def test_install_webstore_network_error(app_client):
-    with patch("httpx.AsyncClient.get", side_effect=httpx.ConnectTimeout("Timeout")):
+    with patch("httpx.AsyncClient.stream", side_effect=httpx.ConnectTimeout("Timeout")):
         resp = app_client.post("/api/extensions/install-webstore", json={"id_or_url": "nngceckbapebfimnlniiiahkandclblb"})
         assert resp.status_code == 400
         assert "网络错误: 无法连接到 Chrome 应用商店" in resp.json()["detail"]
+
+
+def test_install_webstore_stream_api(app_client):
+    with patch("httpx.AsyncClient.stream", side_effect=httpx.ConnectTimeout("Timeout")):
+        resp = app_client.get("/api/extensions/install-webstore-stream?id_or_url=nngceckbapebfimnlniiiahkandclblb")
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        body = resp.text
+        assert "connecting" in body
+        assert "error" in body
+        assert "网络错误: 无法连接到 Chrome 应用商店" in body
+
+
+@pytest.mark.asyncio
+async def test_stream_install_resumable_range():
+    import contextlib
+    from backend.extension_manager import stream_install_from_webstore
+
+    manifest_data = {
+        "manifest_version": 3,
+        "name": "Resumable Extension",
+        "version": "1.0.0",
+    }
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_data))
+    full_bytes = zip_buffer.getvalue()
+    midpoint = len(full_bytes) // 2
+
+    call_count = 0
+
+    @contextlib.asynccontextmanager
+    async def mock_stream(method, url, headers=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock()
+
+        if call_count == 1:
+            # First attempt: returns first half, then raises TransportError
+            resp.status_code = 200
+            resp.headers = {"content-length": str(len(full_bytes))}
+            async def aiter_bytes(chunk_size=65536):
+                yield full_bytes[:midpoint]
+                raise httpx.TransportError("Network disconnect mid-download")
+            resp.aiter_bytes = aiter_bytes
+            yield resp
+        else:
+            # Second attempt: client sends Range header, server returns 206
+            assert headers and f"bytes={midpoint}-" in headers.get("Range", "")
+            resp.status_code = 206
+            resp.headers = {
+                "content-range": f"bytes {midpoint}-{len(full_bytes) - 1}/{len(full_bytes)}",
+                "content-length": str(len(full_bytes) - midpoint),
+            }
+            async def aiter_bytes(chunk_size=65536):
+                yield full_bytes[midpoint:]
+            resp.aiter_bytes = aiter_bytes
+            yield resp
+
+    with patch("httpx.AsyncClient.stream", side_effect=mock_stream):
+        events = []
+        async for ev in stream_install_from_webstore("abcdefghijklmnopabcdefghijklmnop"):
+            events.append(ev)
+
+        stages = [e["stage"] for e in events]
+        assert "connecting" in stages
+        assert "downloading" in stages
+        assert "unpacking" in stages
+        assert "completed" in stages
+
+        completed = next(e for e in events if e["stage"] == "completed")
+        assert completed["extension"]["name"] == "Resumable Extension"
 
 
 def test_probe_proxy_target():

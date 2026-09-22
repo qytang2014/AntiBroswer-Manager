@@ -204,6 +204,7 @@ class ProxyTestResponse(BaseModel):
     country: str | None = None
     city: str | None = None
     timezone: str | None = None
+    locale: str | None = None
     latency_ms: int | None = None
     error: str | None = None
     cached: bool = False
