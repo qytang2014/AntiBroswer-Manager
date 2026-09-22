@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-uv.lock
 
 # Node
 node_modules/
@@ -36,5 +35,5 @@ publish-docker.sh
 .beads
 debug
 backend/version.txt
-.plans
 docs
+.plans

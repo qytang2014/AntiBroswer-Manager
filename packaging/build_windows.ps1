@@ -30,6 +30,13 @@ $BuildVenv = if ($env:PACKAGING_VENV) { $env:PACKAGING_VENV } else { Join-Path $
 
 Write-Host "[build] CloakBrowser Manager $Version (Windows)"
 
+# 0. Clean prior build artifacts and caches.
+Write-Host "[build] cleaning prior build artifacts and caches"
+if (Test-Path $Dist) { Remove-Item -Recurse -Force $Dist }
+if (Test-Path $Build) { Remove-Item -Recurse -Force $Build }
+Get-ChildItem -Path (Join-Path $Root "backend"), (Join-Path $Root "packaging") -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+Get-ChildItem -Path (Join-Path $Root "backend"), (Join-Path $Root "packaging") -Recurse -File -Filter "*.pyc" -ErrorAction SilentlyContinue | Remove-Item -Force
+
 # Bake the version into the bundle so the frozen app can log its own build
 # (no .git at runtime). manager.spec ships backend/version.txt as data.
 [IO.File]::WriteAllText((Join-Path $Root "backend/version.txt"), $Version)
@@ -41,15 +48,14 @@ npm ci
 npm run build
 Pop-Location
 
-# 2. Build venv with runtime + build deps.
-$VenvPy = Join-Path $BuildVenv "Scripts\python.exe"
-if (-not (Test-Path $VenvPy)) {
-  Write-Host "[build] creating build venv at $BuildVenv"
-  python -m venv $BuildVenv
+# 2. Clean-room build venv with runtime + build deps using uv.
+if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
+  throw "[error] 'uv' is required for packaging but was not found in PATH. Install via: irm https://astral.sh/uv/install.ps1 | iex"
 }
-& $VenvPy -m pip install --disable-pip-version-check -q `
-  -r (Join-Path $Root "backend\requirements.txt") `
-  -r (Join-Path $Root "packaging\requirements-build.txt")
+Write-Host "[build] syncing build venv with uv at $BuildVenv"
+$env:UV_PROJECT_ENVIRONMENT = $BuildVenv
+& uv sync --group build --frozen
+$VenvPy = Join-Path $BuildVenv "Scripts\python.exe"
 
 # 3. Freeze.
 Write-Host "[build] pyinstaller"

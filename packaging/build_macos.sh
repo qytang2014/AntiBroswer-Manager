@@ -23,6 +23,12 @@ BUILD_VENV="${PACKAGING_VENV:-$ROOT/.venv-build}"
 
 echo "[build] CloakBrowser Manager $VERSION (macOS)"
 
+# 0. Clean prior build artifacts, caches, and intermediate outputs.
+echo "[build] cleaning prior build artifacts and caches"
+rm -rf "$DIST" "$BUILD" "$ROOT/dist_arm"
+find "$ROOT/backend" "$ROOT/packaging" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$ROOT/backend" "$ROOT/packaging" -type f -name "*.pyc" -delete 2>/dev/null || true
+
 # Bake the version into the bundle so the frozen app can log its own build
 # (no .git at runtime). manager.spec ships backend/version.txt as data.
 printf '%s' "$VERSION" > "$ROOT/backend/version.txt"
@@ -31,48 +37,23 @@ printf '%s' "$VERSION" > "$ROOT/backend/version.txt"
 echo "[build] frontend"
 ( cd frontend && npm ci && npm run build )
 
-# 2. Clean-room build venv with runtime + build deps.
-# Auto-select Python 3.10+ if current python3 is older (e.g. pyenv 3.8/3.9).
-if [ -z "${PYTHON:-}" ]; then
-  PYTHON="python3"
-  PY_MINOR="$("$PYTHON" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
-  if [ "$PY_MINOR" -lt 10 ]; then
-    for cand in /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.10 /opt/homebrew/bin/python3 /usr/local/bin/python3.12 /usr/local/bin/python3.11 /usr/local/bin/python3.10; do
-      if [ -x "$cand" ]; then
-        C_MINOR="$("$cand" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
-        if [ "$C_MINOR" -ge 10 ]; then
-          PYTHON="$cand"
-          break
-        fi
-      fi
-    done
-  fi
+# 2. Clean-room build venv with runtime + build deps using uv.
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[error] 'uv' is required for packaging but was not found in PATH." >&2
+  echo "[error] Install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  exit 1
 fi
 
-# If existing build venv was created by Python < 3.10, clear it
-if [ -d "$BUILD_VENV" ]; then
-  VENV_PY_MINOR="$("$BUILD_VENV/bin/python" -c 'import sys; print(sys.version_info.minor if sys.version_info.major == 3 else 0)' 2>/dev/null || echo 0)"
-  if [ "$VENV_PY_MINOR" -lt 10 ]; then
-    echo "[build] clearing outdated build venv (Python 3.$VENV_PY_MINOR < 3.10)"
-    rm -rf "$BUILD_VENV"
-  fi
-fi
-
-if [ ! -x "$BUILD_VENV/bin/python" ]; then
-  echo "[build] creating build venv at $BUILD_VENV ($PYTHON)"
-  "$PYTHON" -m venv "$BUILD_VENV"
-fi
+echo "[build] syncing build venv with uv at $BUILD_VENV"
+UV_PROJECT_ENVIRONMENT="$BUILD_VENV" uv sync --group build --frozen
 
 if [ -z "${CLOAKBROWSER_SRC:-}" ] && [ -d "$ROOT/../CloakBrowser-Proxy" ]; then
   CLOAKBROWSER_SRC="$ROOT/../CloakBrowser-Proxy"
 fi
 
-"$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check -q \
-  -r backend/requirements.txt -r packaging/requirements-build.txt
-
 if [ -n "${CLOAKBROWSER_SRC:-}" ] && [ -d "$CLOAKBROWSER_SRC" ]; then
   echo "[build] installing cloakbrowser from local directory: $CLOAKBROWSER_SRC"
-  "$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check -q -e "$CLOAKBROWSER_SRC[geoip]"
+  uv pip install --python "$BUILD_VENV/bin/python" -q -e "$CLOAKBROWSER_SRC[geoip]"
 fi
 
 # 2a. Pin cryptography to the self-contained universal2 wheel (static OpenSSL).
@@ -82,10 +63,10 @@ fi
 # frozen app die at launch: `dlopen(_rust.abi3.so): Symbol not found:
 # _SSL_get0_group_name`. The universal2 wheel statically links OpenSSL (no
 # external libssl) and is fat, so BOTH arches get an identical static extension
-# and the later lipo merge is a no-op. --force-reinstall replaces whatever the
+# and the later lipo merge is a no-op. --reinstall replaces whatever the
 # requirements step resolved; --only-binary forbids a source build.
-"$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check -q \
-  --force-reinstall --no-deps --only-binary=:all: 'cryptography>=44,<49'
+uv pip install --python "$BUILD_VENV/bin/python" -q \
+  --reinstall --no-deps --only-binary=:all: 'cryptography>=44,<49'
 
 # 3. Freeze.
 echo "[build] pyinstaller"

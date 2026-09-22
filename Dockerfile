@@ -41,9 +41,16 @@ RUN wget -q https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvnc
 
 WORKDIR /app
 
-# Python deps
-COPY backend/requirements.txt /app/backend/
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+# Python deps via uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never
+
+COPY pyproject.toml uv.lock ./
+RUN uv export --no-dev --frozen --output-file /tmp/requirements.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Backend code
 COPY backend/ /app/backend/

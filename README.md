@@ -150,9 +150,8 @@ CloakBrowser Manager runs on your own machine, and every profile inherits the Cl
 ### Native backend
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8080
+uv sync
+uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8080
 ```
 
 ### Frontend

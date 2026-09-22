@@ -14,7 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 VENV_DIR = ROOT / ".venv"
-SETUP_MARKER = VENV_DIR / ".manager-setup.json"
+LEGACY_SETUP_MARKER = VENV_DIR / ".manager-setup.json"
+FRONTEND_MARKER = VENV_DIR / ".manager-frontend.json"
 FRONTEND_DIR = ROOT / "frontend"
 SERVER_URL = "http://127.0.0.1:8080"
 
@@ -31,10 +32,63 @@ def _file_hash(path: Path) -> str:
 
 def _load_setup_state() -> dict[str, str]:
     try:
-        value = json.loads(SETUP_MARKER.read_text())
+        value = json.loads(FRONTEND_MARKER.read_text())
         return value if isinstance(value, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def _find_or_install_uv() -> str:
+    """Locate or guide the installation of the uv package manager."""
+    uv_bin = "uv.exe" if os.name == "nt" else "uv"
+    uv_path = shutil.which(uv_bin)
+    if uv_path:
+        return uv_path
+
+    common_paths = [
+        Path.home() / ".local" / "bin" / uv_bin,
+        Path.home() / ".cargo" / "bin" / uv_bin,
+    ]
+    for p in common_paths:
+        if p.is_file() and os.access(p, os.X_OK):
+            os.environ["PATH"] = f"{p.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+            return str(p)
+
+    print("[setup] 'uv' is required to manage dependencies and start CloakBrowser Manager.", flush=True)
+
+    if os.name == "nt":
+        install_cmd = 'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
+    else:
+        install_cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+    should_install = False
+    if sys.stdin.isatty():
+        try:
+            choice = input("[setup] Would you like to automatically install uv now? [Y/n]: ").strip().lower()
+            should_install = choice in {"", "y", "yes"}
+        except (EOFError, KeyboardInterrupt):
+            print("\n[setup] Installation cancelled by user.", flush=True)
+            should_install = False
+
+    if should_install:
+        print(f"[setup] Running: {install_cmd}", flush=True)
+        try:
+            subprocess.run(install_cmd, shell=True, check=True)
+            for p in common_paths:
+                if p.is_file() and os.access(p, os.X_OK):
+                    os.environ["PATH"] = f"{p.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+                    return str(p)
+            found = shutil.which(uv_bin)
+            if found:
+                return found
+        except Exception as exc:
+            print(f"[error] Automated installation of uv failed: {exc}", file=sys.stderr, flush=True)
+
+    raise RuntimeError(
+        "'uv' is required to manage dependencies.\n"
+        f"Please install it manually:\n  {install_cmd}\n"
+        "Or see: https://docs.astral.sh/uv/getting-started/installation/"
+    )
 
 
 def _run(command: list[str], cwd: Path = ROOT) -> None:
@@ -50,21 +104,19 @@ def _ensure_environment() -> Path:
             "Native Manager supports Windows and macOS; use Docker on Linux"
         )
 
+    # Clean legacy pip virtual environment if detected
+    if LEGACY_SETUP_MARKER.exists():
+        print("[setup] Detected legacy pip environment; resetting .venv for uv", flush=True)
+        shutil.rmtree(VENV_DIR, ignore_errors=True)
+
+    uv_path = _find_or_install_uv()
+    _run([uv_path, "sync", "--no-dev"])
+
     python = _venv_python()
     if not python.exists():
-        print("[setup] Creating Python environment", flush=True)
-        venv.EnvBuilder(with_pip=True).create(VENV_DIR)
+        raise RuntimeError(f"Virtual environment python binary not found at {python}")
 
     state = _load_setup_state()
-    requirements = ROOT / "backend" / "requirements.txt"
-    requirements_hash = _file_hash(requirements)
-    if state.get("requirements") != requirements_hash:
-        _run([
-            str(python), "-m", "pip", "install", "--disable-pip-version-check",
-            "-r", str(requirements),
-        ])
-        state["requirements"] = requirements_hash
-
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if not npm:
         raise RuntimeError("Node.js 18 or newer is required to build the Manager UI")
@@ -84,7 +136,7 @@ def _ensure_environment() -> Path:
     if not index_path.exists() or index_path.stat().st_mtime < source_mtime:
         _run([npm, "run", "build"], cwd=FRONTEND_DIR)
 
-    SETUP_MARKER.write_text(json.dumps(state, indent=2))
+    FRONTEND_MARKER.write_text(json.dumps(state, indent=2))
     return python
 
 

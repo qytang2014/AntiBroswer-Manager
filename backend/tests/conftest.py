@@ -16,14 +16,18 @@ import pytest
 # main.py:381 also does `from cloakbrowser.config import CHROMIUM_VERSION`.
 # ---------------------------------------------------------------------------
 
-_proxy_repo = Path(__file__).resolve().parents[3] / "CloakBrowser-Proxy"
-if _proxy_repo.exists() and str(_proxy_repo) not in sys.path:
-    sys.path.insert(0, str(_proxy_repo))
+try:
+    import cloakbrowser
+    _mock_cloakbrowser = cloakbrowser
+except ImportError:
+    _proxy_repo = Path(__file__).resolve().parents[3] / "CloakBrowser-Proxy"
+    if _proxy_repo.exists() and str(_proxy_repo) not in sys.path:
+        sys.path.insert(0, str(_proxy_repo))
+    _mock_cloakbrowser = types.ModuleType("cloakbrowser")
+    _mock_cloakbrowser.__path__ = [str(_proxy_repo / "cloakbrowser")] if (_proxy_repo / "cloakbrowser").exists() else []
+    sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
 
-_mock_cloakbrowser = types.ModuleType("cloakbrowser")
-_mock_cloakbrowser.__path__ = [str(_proxy_repo / "cloakbrowser")] if (_proxy_repo / "cloakbrowser").exists() else []
 _mock_cloakbrowser.launch_persistent_context_async = AsyncMock()  # type: ignore[attr-defined]
-sys.modules.setdefault("cloakbrowser", _mock_cloakbrowser)
 
 try:
     import cloakbrowser.config as _real_config
@@ -40,7 +44,7 @@ except Exception:
     _mock_config.get_archive_ext = lambda: ".tar.gz"
     _mock_config.get_archive_name = lambda: "mock.tar.gz"
     _mock_config.get_binary_dir = lambda: Path("/tmp/mock_bin")
-    _mock_config.get_binary_path = lambda: Path("/tmp/mock_bin/mock")
+    _mock_config.get_binary_path = lambda *a, **kw: Path("/tmp/mock_bin/mock")
     _mock_config.get_download_url = lambda *a, **kw: "https://mock.download.com"
     _mock_config.get_effective_version = lambda *a, **kw: "0.0.0-test"
     _mock_config.get_fallback_download_url = lambda *a, **kw: "https://mock.download.com"

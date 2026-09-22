@@ -216,7 +216,7 @@ async def test_stream_install_resumable_range(tmp_path: Path, monkeypatch: pytes
     fake_ext_dir = tmp_path / "extensions"
     fake_ext_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(extension_manager, "EXTENSIONS_DIR", fake_ext_dir)
-    monkeypatch.setattr(db, "create_extension", MagicMock(return_value={
+    mock_ext = {
         "id": "abcdefghijklmnopabcdefghijklmnop",
         "name": "Resumable Extension",
         "version": "1.0.0",
@@ -226,7 +226,9 @@ async def test_stream_install_resumable_range(tmp_path: Path, monkeypatch: pytes
         "source": "webstore_id",
         "webstore_id": "abcdefghijklmnopabcdefghijklmnop",
         "created_at": "2026-01-01T00:00:00Z",
-    }))
+    }
+    monkeypatch.setattr(db, "create_extension", MagicMock(return_value=mock_ext))
+    monkeypatch.setattr(extension_manager, "create_extension", MagicMock(return_value=mock_ext))
 
     manifest_data = {
         "manifest_version": 3,
