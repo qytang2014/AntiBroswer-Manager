@@ -536,11 +536,15 @@ wheels = [
 [[package]]
 name = "cloakbrowser"
 version = "0.5.10"
-source = { git = "https://github.com/qytang2014/CloakBrowser-Proxy.git?rev=feature%2Fsingbox-support#e1d9094407fa82eba6d7f021ec05a86be9121f72" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "playwright" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/64/1e508d0f49f6e1b0646bfe0e87e81ab5757096cc55e61340513ebf3af4f7/cloakbrowser-0.5.10.tar.gz", hash = "sha256:143ffcc22b7480870920fa0941436e22facdabb6f8f24035c6927e67538ad6da", size = 5755341, upload-time = "2026-08-30T03:56:55.091Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/bb/06e84b852c965d895abfa9c334f1ade04e1a88662858926dfda6f79b4e87/cloakbrowser-0.5.10-py3-none-any.whl", hash = "sha256:2315a5aed8992c29212231f9924db6e5f444b0b6cb96b5f3a2241f306dc0e37f", size = 134753, upload-time = "2026-08-30T03:56:53.423Z" },
 ]
 
 [package.optional-dependencies]
@@ -576,7 +580,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cloakbrowser", extras = ["geoip"], git = "https://github.com/qytang2014/CloakBrowser-Proxy.git?rev=feature%2Fsingbox-support" },
+    { name = "cloakbrowser", extras = ["geoip"] },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "pydantic", specifier = ">=2.0" },

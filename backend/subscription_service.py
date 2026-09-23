@@ -53,7 +53,7 @@ def parse_multiline_nodes(
     text: str, subscription_id: str | None = None
 ) -> list[dict[str, Any]]:
     """Parse multiline text containing proxy URIs into proxy node dicts."""
-    from cloakbrowser.singbox.parser import _parse_uri
+    from backend.singbox.parser import _parse_uri
 
     # Try decoding base64 if text appears to be base64-encoded subscription
     raw_stripped = text.strip()

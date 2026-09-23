@@ -81,21 +81,6 @@ _mock_license.license_error_for_code = lambda code: None  # type: ignore[attr-de
 _mock_license.read_denial_file = lambda path: None  # type: ignore[attr-defined]
 sys.modules["cloakbrowser.license"] = _mock_license
 
-# Mock cloakbrowser.singbox or attach real implementation if available
-try:
-    from pathlib import Path
-    _proxy_repo = Path(__file__).resolve().parents[3] / "CloakBrowser-Proxy"
-    if _proxy_repo.exists() and str(_proxy_repo) not in sys.path:
-        sys.path.insert(0, str(_proxy_repo))
-    import cloakbrowser.singbox as _real_sb
-    import cloakbrowser.singbox.parser as _real_sb_parser
-    import cloakbrowser.singbox.manager as _real_sb_manager
-    _mock_cloakbrowser.singbox = _real_sb
-    sys.modules["cloakbrowser.singbox"] = _real_sb
-    sys.modules["cloakbrowser.singbox.parser"] = _real_sb_parser
-    sys.modules["cloakbrowser.singbox.manager"] = _real_sb_manager
-except Exception:
-    pass
 
 
 from backend import database as db  # noqa: E402

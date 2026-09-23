@@ -159,7 +159,7 @@ def _validate_proxy(proxy: Any) -> None:
 
     if isinstance(proxy, dict) and proxy.get("type") == "singbox":
         try:
-            from cloakbrowser.singbox.parser import build_singbox_config
+            from backend.singbox.parser import build_singbox_config
             build_singbox_config(proxy["config"])
             return
         except Exception as exc:
@@ -584,6 +584,8 @@ class RunningProfile:
     # context_async on the returned context). Read on close to tell a seat/
     # license denial apart from a real crash or a user-initiated close.
     denial_path: str | None = None
+    singbox_proc: Any = None
+
 
 
 class BrowserManager:
@@ -832,67 +834,82 @@ class BrowserManager:
                 }
                 launch_options["env"] = {**os.environ, "DISPLAY": f":{display}"}
 
-            last_cdp_error: Exception | None = None
-            for attempt in range(1, CDP_START_ATTEMPTS + 1):
-                cdp_port = self._reserve_cdp_port()
-                launch_options["args"] = [
-                    *extra_args,
-                    f"--remote-debugging-port={cdp_port}",
-                ]
+            _singbox_proc = None
+            if isinstance(proxy, dict) and proxy.get("type") == "singbox":
                 try:
-                    context = await launch_persistent_context_async(**launch_options)
-                    # An over-cap/denied seat leaves the browser booting but never
-                    # serving a usable CDP endpoint — so waiting on CDP would just
-                    # time out (or worse). The wrapper wrote the reason to a denial
-                    # file; check it immediately and each CDP poll so a denial bails
-                    # in ~1s instead of waiting out CDP that will never come.
-                    denial_path = getattr(context, "_cloak_denial_path", None)
-                    lic = self._denial_error(denial_path)
-                    if lic is not None:
-                        raise lic
-                    await self._wait_for_cdp(cdp_port, denial_path=denial_path)
-                    break
-                except asyncio.CancelledError:
-                    if context is not None:
-                        await self._close_context(context, profile_id)
-                    self._release_cdp_port(cdp_port)
-                    context = None
-                    cdp_port = None
-                    raise
+                    from backend.singbox.manager import handle_singbox_proxy
+                    _singbox_proc, _local_url = await asyncio.to_thread(handle_singbox_proxy, proxy)
+                    if _local_url:
+                        launch_options["proxy"] = {"server": _local_url}
                 except Exception as exc:
-                    last_cdp_error = exc
-                    # Grab the denial path before dropping the context: a denial
-                    # that lands during _wait_for_cdp surfaces as a TimeoutError,
-                    # not the license exception, so check the file explicitly.
-                    dp = getattr(context, "_cloak_denial_path", None) if context is not None else None
-                    if context is not None:
-                        await self._close_context(context, profile_id)
-                    self._release_cdp_port(cdp_port)
-                    context = None
-                    cdp_port = None
-                    # A license denial (out of seats, bad/expired key, server
-                    # unreachable, local config) is deterministic — retrying just
-                    # wastes ~10s and re-denies. Fail fast with the real reason,
-                    # whether it raised as the license exception or as a timeout.
-                    if isinstance(exc, CloakBrowserLicenseError):
-                        raise
-                    lic = self._denial_error(dp)
-                    if lic is not None:
-                        raise lic from exc
-                    logger.warning(
-                        "Browser/CDP startup attempt %d/%d failed for %s: %s",
-                        attempt,
-                        CDP_START_ATTEMPTS,
-                        profile_id,
-                        exc,
-                    )
-            else:
-                raise RuntimeError(
-                    f"Unable to start verified CDP for profile {profile_id}"
-                ) from last_cdp_error
+                    raise RuntimeError(f"Failed to start sing-box proxy: {exc}") from exc
 
-            if context is None or cdp_port is None:
-                raise RuntimeError(f"Browser startup did not complete for profile {profile_id}")
+            last_cdp_error: Exception | None = None
+            try:
+                for attempt in range(1, CDP_START_ATTEMPTS + 1):
+                    cdp_port = self._reserve_cdp_port()
+                    launch_options["args"] = [
+                        *extra_args,
+                        f"--remote-debugging-port={cdp_port}",
+                    ]
+                    try:
+                        context = await launch_persistent_context_async(**launch_options)
+                        # An over-cap/denied seat leaves the browser booting but never
+                        # serving a usable CDP endpoint — so waiting on CDP would just
+                        # time out (or worse). The wrapper wrote the reason to a denial
+                        # file; check it immediately and each CDP poll so a denial bails
+                        # in ~1s instead of waiting out CDP that will never come.
+                        denial_path = getattr(context, "_cloak_denial_path", None)
+                        lic = self._denial_error(denial_path)
+                        if lic is not None:
+                            raise lic
+                        await self._wait_for_cdp(cdp_port, denial_path=denial_path)
+                        break
+                    except asyncio.CancelledError:
+                        if context is not None:
+                            await self._close_context(context, profile_id)
+                        self._release_cdp_port(cdp_port)
+                        context = None
+                        cdp_port = None
+                        raise
+                    except Exception as exc:
+                        last_cdp_error = exc
+                        # Grab the denial path before dropping the context: a denial
+                        # that lands during _wait_for_cdp surfaces as a TimeoutError,
+                        # not the license exception, so check the file explicitly.
+                        dp = getattr(context, "_cloak_denial_path", None) if context is not None else None
+                        if context is not None:
+                            await self._close_context(context, profile_id)
+                        self._release_cdp_port(cdp_port)
+                        context = None
+                        cdp_port = None
+                        # A license denial (out of seats, bad/expired key, server
+                        # unreachable, local config) is deterministic — retrying just
+                        # wastes ~10s and re-denies. Fail fast with the real reason,
+                        # whether it raised as the license exception or as a timeout.
+                        if isinstance(exc, CloakBrowserLicenseError):
+                            raise
+                        lic = self._denial_error(dp)
+                        if lic is not None:
+                            raise lic from exc
+                        logger.warning(
+                            "Browser/CDP startup attempt %d/%d failed for %s: %s",
+                            attempt,
+                            CDP_START_ATTEMPTS,
+                            profile_id,
+                            exc,
+                        )
+                else:
+                    raise RuntimeError(
+                        f"Unable to start verified CDP for profile {profile_id}"
+                    ) from last_cdp_error
+
+                if context is None or cdp_port is None:
+                    raise RuntimeError(f"Browser startup did not complete for profile {profile_id}")
+            except BaseException:
+                if _singbox_proc is not None:
+                    _singbox_proc.terminate()
+                raise
 
             if self.runtime.viewer_mode == "vnc":
                 # Capture copied text so the Manager clipboard endpoint can read it.
@@ -925,6 +942,7 @@ class BrowserManager:
                 user_data_dir=user_data_dir,
                 capture_preview=bool(profile.get("capture_preview", True)),
                 denial_path=getattr(context, "_cloak_denial_path", None),
+                singbox_proc=_singbox_proc,
             )
             context.on(
                 "close",
@@ -1197,6 +1215,8 @@ class BrowserManager:
             running.screenshot_task.cancel()
         if close_context:
             await self._close_context(running.context, running.profile_id)
+        if running.singbox_proc is not None:
+            running.singbox_proc.terminate()
         if running.display is not None:
             await self.vnc.stop_vnc(running.display)
         self._release_cdp_port(running.cdp_port)

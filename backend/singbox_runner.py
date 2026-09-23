@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from cloakbrowser.singbox.downloader import ensure_singbox
-from cloakbrowser.singbox.parser import build_singbox_config
+from backend.singbox.downloader import ensure_singbox
+from backend.singbox.parser import build_singbox_config
 
 logger = logging.getLogger("proxy_manager.singbox_runner")
 
