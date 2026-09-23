@@ -867,6 +867,13 @@ class BrowserManager:
             resolved_tz, resolved_locale, net_args = await asyncio.to_thread(
                 _resolve_profile_network_fingerprint_sync, proxy, profile
             )
+            # The Free kernel is an unpatched Chromium build, so it will show an unsupported 
+            # flag infobar for "--no-sandbox" (which is injected by the launcher).
+            # We suppress all infobars with --test-type.
+            if not is_pro_binary:
+                if "--test-type" not in extra_args:
+                    extra_args.append("--test-type")
+
             extra_args.extend(net_args)
 
             launch_options: dict[str, Any] = {
