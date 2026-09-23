@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
@@ -130,7 +130,20 @@ export function ProfileForm({
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
   const [proxyDropdownOpen, setProxyDropdownOpen] = useState(false);
   const [proxySearch, setProxySearch] = useState("");
+  const [expandedSubIds, setExpandedSubIds] = useState<Set<string>>(new Set());
   const proxyDropdownRef = useRef<HTMLDivElement>(null);
+
+  const toggleExpandGroup = (groupId: string) => {
+    setExpandedSubIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
 
   const loadManagedProxies = useCallback(async () => {
     try {
@@ -758,7 +771,16 @@ export function ProfileForm({
                   <button
                     type="button"
                     aria-label="Proxy node"
-                    onClick={() => setProxyDropdownOpen(!proxyDropdownOpen)}
+                    onClick={() => {
+                      if (!proxyDropdownOpen) {
+                        if (selectedManagedNode?.subscription_id) {
+                          setExpandedSubIds(new Set([selectedManagedNode.subscription_id]));
+                        } else if (selectedManagedNode && !selectedManagedNode.subscription_id) {
+                          setExpandedSubIds(new Set(["__manual__"]));
+                        }
+                      }
+                      setProxyDropdownOpen(!proxyDropdownOpen);
+                    }}
                     className="w-full input flex items-center justify-between py-2 text-left cursor-pointer hover:border-gray-600 transition"
                   >
                     {!form.proxy ? (
@@ -814,18 +836,37 @@ export function ProfileForm({
                   {/* Dropdown popup */}
                   {proxyDropdownOpen && (
                     <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-2 max-h-80 flex flex-col">
-                      {/* Search box */}
-                      <div className="relative pb-2 border-b border-gray-800">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
-                        <input
-                          type="text"
-                          placeholder="搜索节点名称、订阅或协议..."
-                          value={proxySearch}
-                          onChange={(e) => setProxySearch(e.target.value)}
-                          className="input w-full pl-8 py-1.5 text-xs"
-                          onClick={(e) => e.stopPropagation()}
-                          autoFocus
-                        />
+                      {/* Search box & quick expand/collapse */}
+                      <div className="flex items-center gap-2 pb-2 border-b border-gray-800">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+                          <input
+                            type="text"
+                            placeholder="搜索节点名称、订阅或协议..."
+                            value={proxySearch}
+                            onChange={(e) => setProxySearch(e.target.value)}
+                            className="input w-full pl-8 py-1.5 text-xs"
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
+                          />
+                        </div>
+                        {groupedSubscriptions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (expandedSubIds.size > 0) {
+                                setExpandedSubIds(new Set());
+                              } else {
+                                setExpandedSubIds(
+                                  new Set([...groupedSubscriptions.map((g) => g.id), "__manual__"])
+                                );
+                              }
+                            }}
+                            className="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded hover:bg-gray-800 shrink-0 whitespace-nowrap"
+                          >
+                            {expandedSubIds.size > 0 ? "全部折叠" : "全部展开"}
+                          </button>
+                        )}
                       </div>
 
                       {/* Options list */}
@@ -869,7 +910,7 @@ export function ProfileForm({
                           </div>
                         )}
 
-                        {/* Subscription groups */}
+                        {/* Subscription groups (collapsible accordion) */}
                         {groupedSubscriptions.map((group) => {
                           const query = proxySearch.trim().toLowerCase();
                           const filteredNodes = group.nodes.filter(
@@ -880,51 +921,78 @@ export function ProfileForm({
                               group.name.toLowerCase().includes(query)
                           );
                           if (filteredNodes.length === 0) return null;
+                          const isExpanded = query.length > 0 || expandedSubIds.has(group.id);
+                          const containsSelected = group.nodes.some((n) => n.raw_uri === form.proxy);
+
                           return (
-                            <div key={group.id} className="pt-2">
-                              <div className="px-2 py-1 text-[11px] font-semibold text-gray-400 flex items-center gap-1.5 uppercase tracking-wide">
-                                <span>📁 订阅: {group.name}</span>
-                                <span className="text-[10px] text-gray-500 font-normal">
-                                  ({filteredNodes.length}个节点)
-                                </span>
+                            <div key={group.id} className="pt-1.5">
+                              <div
+                                onClick={() => toggleExpandGroup(group.id)}
+                                className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between transition select-none ${
+                                  containsSelected
+                                    ? "bg-indigo-950/40 text-indigo-200 hover:bg-indigo-950/60"
+                                    : "hover:bg-gray-800 text-gray-300"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                                  )}
+                                  <span className="text-xs font-medium truncate">📁 订阅: {group.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                  {containsSelected && (
+                                    <span className="text-[10px] text-indigo-400 bg-indigo-950 border border-indigo-800/60 px-1 py-0.2 rounded font-medium">
+                                      当前选择
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-gray-500 bg-gray-800/80 px-1.5 py-0.5 rounded">
+                                    {filteredNodes.length}个节点
+                                  </span>
+                                </div>
                               </div>
-                              <div className="space-y-0.5">
-                                {filteredNodes.map((n) => {
-                                  const isSelected = form.proxy === n.raw_uri;
-                                  return (
-                                    <div
-                                      key={n.id}
-                                      onClick={() => {
-                                        set("proxy", n.raw_uri);
-                                        setProxyType(detectProxyType(n.raw_uri));
-                                        setProxyTest(null);
-                                        setGeoMatchMessage(null);
-                                        setProxyDropdownOpen(false);
-                                      }}
-                                      className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
-                                        isSelected
-                                          ? "bg-indigo-950/60 border border-indigo-800/50 text-white"
-                                          : "hover:bg-gray-800 text-gray-300"
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                                        <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
-                                          {n.protocol}
-                                        </span>
-                                        <span className="text-xs truncate">{n.name}</span>
+
+                              {isExpanded && (
+                                <div className="pl-3.5 pr-1 py-0.5 space-y-0.5 border-l border-gray-800 ml-4 mt-0.5">
+                                  {filteredNodes.map((n) => {
+                                    const isSelected = form.proxy === n.raw_uri;
+                                    return (
+                                      <div
+                                        key={n.id}
+                                        onClick={() => {
+                                          set("proxy", n.raw_uri);
+                                          setProxyType(detectProxyType(n.raw_uri));
+                                          setProxyTest(null);
+                                          setGeoMatchMessage(null);
+                                          setProxyDropdownOpen(false);
+                                        }}
+                                        className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                          isSelected
+                                            ? "bg-indigo-950/70 border border-indigo-800/60 text-white"
+                                            : "hover:bg-gray-800/80 text-gray-300"
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                                          <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
+                                            {n.protocol}
+                                          </span>
+                                          <span className="text-xs truncate">{n.name}</span>
+                                        </div>
+                                        {isSelected && (
+                                          <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                        )}
                                       </div>
-                                      {isSelected && (
-                                        <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
 
-                        {/* Manual nodes group */}
+                        {/* Manual nodes group (collapsible accordion) */}
                         {manualNodes.length > 0 && (() => {
                           const query = proxySearch.trim().toLowerCase();
                           const filteredManual = manualNodes.filter(
@@ -934,46 +1002,73 @@ export function ProfileForm({
                               n.protocol.toLowerCase().includes(query)
                           );
                           if (filteredManual.length === 0) return null;
+                          const isExpanded = query.length > 0 || expandedSubIds.has("__manual__");
+                          const containsSelected = manualNodes.some((n) => n.raw_uri === form.proxy);
+
                           return (
-                            <div className="pt-2">
-                              <div className="px-2 py-1 text-[11px] font-semibold text-gray-400 flex items-center gap-1.5 uppercase tracking-wide">
-                                <span>📌 手动导入节点</span>
-                                <span className="text-[10px] text-gray-500 font-normal">
-                                  ({filteredManual.length}个节点)
-                                </span>
+                            <div className="pt-1.5">
+                              <div
+                                onClick={() => toggleExpandGroup("__manual__")}
+                                className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between transition select-none ${
+                                  containsSelected
+                                    ? "bg-indigo-950/40 text-indigo-200 hover:bg-indigo-950/60"
+                                    : "hover:bg-gray-800 text-gray-300"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                                  )}
+                                  <span className="text-xs font-medium truncate">📌 手动导入节点</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                  {containsSelected && (
+                                    <span className="text-[10px] text-indigo-400 bg-indigo-950 border border-indigo-800/60 px-1 py-0.2 rounded font-medium">
+                                      当前选择
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-gray-500 bg-gray-800/80 px-1.5 py-0.5 rounded">
+                                    {filteredManual.length}个节点
+                                  </span>
+                                </div>
                               </div>
-                              <div className="space-y-0.5">
-                                {filteredManual.map((n) => {
-                                  const isSelected = form.proxy === n.raw_uri;
-                                  return (
-                                    <div
-                                      key={n.id}
-                                      onClick={() => {
-                                        set("proxy", n.raw_uri);
-                                        setProxyType(detectProxyType(n.raw_uri));
-                                        setProxyTest(null);
-                                        setGeoMatchMessage(null);
-                                        setProxyDropdownOpen(false);
-                                      }}
-                                      className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
-                                        isSelected
-                                          ? "bg-indigo-950/60 border border-indigo-800/50 text-white"
-                                          : "hover:bg-gray-800 text-gray-300"
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                                        <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
-                                          {n.protocol}
-                                        </span>
-                                        <span className="text-xs truncate">{n.name}</span>
+
+                              {isExpanded && (
+                                <div className="pl-3.5 pr-1 py-0.5 space-y-0.5 border-l border-gray-800 ml-4 mt-0.5">
+                                  {filteredManual.map((n) => {
+                                    const isSelected = form.proxy === n.raw_uri;
+                                    return (
+                                      <div
+                                        key={n.id}
+                                        onClick={() => {
+                                          set("proxy", n.raw_uri);
+                                          setProxyType(detectProxyType(n.raw_uri));
+                                          setProxyTest(null);
+                                          setGeoMatchMessage(null);
+                                          setProxyDropdownOpen(false);
+                                        }}
+                                        className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                          isSelected
+                                            ? "bg-indigo-950/70 border border-indigo-800/60 text-white"
+                                            : "hover:bg-gray-800/80 text-gray-300"
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                                          <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
+                                            {n.protocol}
+                                          </span>
+                                          <span className="text-xs truncate">{n.name}</span>
+                                        </div>
+                                        {isSelected && (
+                                          <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                        )}
                                       </div>
-                                      {isSelected && (
-                                        <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })()}
