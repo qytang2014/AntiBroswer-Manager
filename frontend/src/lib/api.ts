@@ -31,6 +31,7 @@ export interface Profile {
   search_engine_url?: string | null;
   capture_preview: boolean;
   restore_session: boolean;
+  browser_version?: string | null;
   notes: string | null;
   user_data_dir: string;
   created_at: string;
@@ -77,6 +78,7 @@ export interface ProfileCreateData {
   search_engine_url?: string | null;
   capture_preview?: boolean;
   restore_session?: boolean;
+  browser_version?: string | null;
   notes?: string | null;
   tags?: { tag: string; color: string | null }[];
 }

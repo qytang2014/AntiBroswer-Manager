@@ -110,6 +110,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [proxyManagerOpen, setProxyManagerOpen] = useState(false);
   const [extensionManagerOpen, setExtensionManagerOpen] = useState(false);
   const [kernelManagerOpen, setKernelManagerOpen] = useState(false);
+  const [kernelsVersion, setKernelsVersion] = useState(0);
   const [kernelBannerDismissed, setKernelBannerDismissed] = useState(false);
   const [activeDownload, setActiveDownload] = useState<KernelDownloadProgress | null>(null);
   const [stopped, setStopped] = useState(false);
@@ -326,7 +327,10 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
         <KernelManagerModal
           isOpen={kernelManagerOpen}
           onClose={handleCloseKernelManager}
-          onKernelChanged={refreshSystemStatus}
+          onKernelChanged={() => {
+            refreshSystemStatus();
+            setKernelsVersion((v) => v + 1);
+          }}
         />
       )}
       {activeDownload && !kernelManagerOpen && (
@@ -541,6 +545,8 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
               onSave={handleCreate}
               onCancel={() => setView("empty")}
               extensionsUpdated={extensionsVersion}
+              kernelsUpdated={kernelsVersion}
+              onOpenKernelManager={() => setKernelManagerOpen(true)}
             />
           )}
 
@@ -558,6 +564,8 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
                 setView("empty");
               }}
               extensionsUpdated={extensionsVersion}
+              kernelsUpdated={kernelsVersion}
+              onOpenKernelManager={() => setKernelManagerOpen(true)}
             />
           )}
 

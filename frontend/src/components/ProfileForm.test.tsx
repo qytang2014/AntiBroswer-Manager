@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "../lib/api";
 import type { Profile } from "../lib/api";
 import { ProfileForm } from "./ProfileForm";
 
@@ -111,4 +112,126 @@ describe("ProfileForm duplicate split button", () => {
     expect(screen.getByText(/添加节点 \/ 打开代理管理/)).toBeTruthy();
   });
 });
+
+describe("ProfileForm kernel version selection and validation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders installed kernel options and triggers onOpenKernelManager", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "145.0.7632.109.2",
+          name: "Chromium 145 (官方稳定版)",
+          tier: "free",
+          platform: "mac-arm64",
+          description: "Official stable",
+          installed: true,
+        },
+      ],
+    });
+
+    const onOpenKernelManager = vi.fn();
+    render(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onOpenKernelManager={onOpenKernelManager}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /管理\/下载更多内核/ });
+    expect(btn).toBeTruthy();
+    fireEvent.click(btn);
+    expect(onOpenKernelManager).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Chromium 145 \(官方稳定版\)/)).toBeTruthy();
+    });
+  });
+
+  it("shows warning when selected kernel is not installed / deleted", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "151.0.7895.120",
+          name: "Chromium 151 (尝鲜测试版)",
+          tier: "pro",
+          platform: "mac-arm64",
+          description: "Pro test",
+          installed: true,
+        },
+      ],
+    });
+
+    const deletedKernelProfile = {
+      ...profile("stopped"),
+      browser_version: "145.0.7632.109.2",
+    };
+
+    render(
+      <ProfileForm
+        profile={deletedKernelProfile}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/该环境绑定的内核版本 \(v145.0.7632.109.2\) 本地已被删除或不存在/),
+      ).toBeTruthy();
+    });
+  });
+
+  it("warns about inline proxy auth argument on older kernel", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [],
+    });
+
+    const oldKernelProfile = {
+      ...profile("stopped"),
+      browser_version: "145.0.7632.109.2",
+      launch_args: ["--proxy-server=http://user:pass@127.0.0.1:8080"],
+    };
+
+    render(
+      <ProfileForm
+        profile={oldKernelProfile}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/当前选中的内核版本 \(v145.0.7632.109.2\) 原生不支持命令行内联代理凭证/)).toBeTruthy();
+    expect(screen.getByText(/检测到包含账号密码的内联代理参数/)).toBeTruthy();
+  });
+});
+
 

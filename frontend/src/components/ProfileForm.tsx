@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api";
 import type {
   Extension,
   HostOS,
+  KernelItem,
   Profile,
   ProfileCreateData,
   ProxyNode,
@@ -46,6 +47,8 @@ interface ProfileFormProps {
   onDuplicate?: (includeBrowserState: boolean) => Promise<void>;
   onCancel: () => void;
   extensionsUpdated?: number;
+  kernelsUpdated?: number;
+  onOpenKernelManager?: () => void;
 }
 
 const RESOLUTION_PRESETS: Record<string, { width: number; height: number }> = {
@@ -91,11 +94,14 @@ export function ProfileForm({
   onDuplicate,
   onCancel,
   extensionsUpdated,
+  kernelsUpdated,
+  onOpenKernelManager,
 }: ProfileFormProps) {
   const isEdit = profile !== null;
 
   const [form, setForm] = useState<ProfileCreateData>({
     name: "",
+    browser_version: profile?.browser_version ?? null,
     screen_width: 1920,
     screen_height: 1080,
     gpu_family: "auto",
@@ -232,6 +238,25 @@ export function ProfileForm({
     loadInstalledExtensions();
   }, [extensionsUpdated]);
 
+  const [installedKernels, setInstalledKernels] = useState<KernelItem[]>([]);
+  const [kernelsLoading, setKernelsLoading] = useState(false);
+
+  const loadInstalledKernels = useCallback(async () => {
+    setKernelsLoading(true);
+    try {
+      const res = await api.listKernels();
+      setInstalledKernels(res.kernels.filter((k) => k.installed));
+    } catch (err) {
+      console.error("Failed to load kernels in form:", err);
+    } finally {
+      setKernelsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadInstalledKernels();
+  }, [loadInstalledKernels, kernelsUpdated]);
+
   const prevProfileIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -240,6 +265,7 @@ export function ProfileForm({
         prevProfileIdRef.current = profile.id;
         setForm({
           name: profile.name,
+          browser_version: profile.browser_version ?? null,
           fingerprint_seed: profile.fingerprint_seed,
           proxy: profile.proxy,
           timezone: profile.timezone,
@@ -273,6 +299,7 @@ export function ProfileForm({
         prevProfileIdRef.current = null;
         setForm({
           name: "",
+          browser_version: null,
           screen_width: 1920,
           screen_height: 1080,
           gpu_family: "auto",
@@ -522,6 +549,21 @@ export function ProfileForm({
     set("tags", (form.tags ?? []).filter((t) => t.tag !== tag));
   };
 
+  const isSelectedKernelMissing = Boolean(
+    form.browser_version &&
+    installedKernels.length > 0 &&
+    !installedKernels.some((k) => k.version === form.browser_version)
+  );
+
+  const isOldKernel = Boolean(
+    form.browser_version &&
+    ["144.", "145.", "146.", "147."].some((prefix) => form.browser_version?.startsWith(prefix))
+  );
+
+  const hasInlineProxyAuthArg = (form.launch_args ?? []).some(
+    (arg) => arg.startsWith("--proxy-server=") && arg.includes("@")
+  );
+
   const addLaunchArg = (customArg?: string) => {
     const raw = (customArg || launchArgInput).trim();
     if (!raw) return;
@@ -739,6 +781,59 @@ export function ProfileForm({
                   </svg>
                 </button>
               </div>
+            </div>
+            <div className="col-span-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <label className="label mb-0">Chromium 内核版本 (Kernel Version)</label>
+                  {kernelsLoading && <Loader2 className="h-3 w-3 animate-spin text-gray-500" />}
+                </div>
+                {onOpenKernelManager && (
+                  <button
+                    type="button"
+                    onClick={onOpenKernelManager}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1"
+                  >
+                    <Plus className="h-3 w-3" />
+                    管理/下载更多内核
+                  </button>
+                )}
+              </div>
+              <select
+                className="input"
+                value={form.browser_version ?? ""}
+                onChange={(e) => set("browser_version", e.target.value ? e.target.value : null)}
+              >
+                <option value="">默认推荐 (跟随系统默认/最新内核)</option>
+                {isSelectedKernelMissing && (
+                  <option value={form.browser_version!} disabled>
+                    ⚠️ v{form.browser_version} (本地已删除 - 启动将自动回退)
+                  </option>
+                )}
+                {installedKernels.map((k) => (
+                  <option key={k.version} value={k.version}>
+                    {k.name} (v{k.version}) - {k.tier === "free" ? "免费无限制" : "Pro 授权"}
+                  </option>
+                ))}
+              </select>
+
+              {isSelectedKernelMissing && (
+                <div className="mt-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-600/50 flex items-start gap-2 text-xs text-amber-300">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                  <div>
+                    <p className="font-medium">
+                      该环境绑定的内核版本 (v{form.browser_version}) 本地已被删除或不存在。
+                    </p>
+                    <p className="text-[11px] text-amber-400/80 mt-0.5">
+                      启动时系统将遵循安全策略自动回退到默认可用内核，您也可以在此重新选择其它已安装内核。
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                官方稳定版 (v145) 为免费内核，不受 Pro 授权与席位并发限制；如需更高级指纹防护可选用 Pro 内核。
+              </p>
             </div>
           </div>
         </section>
@@ -1679,6 +1774,35 @@ export function ProfileForm({
           <p className="text-xs text-gray-500 my-3">
             Unrestricted Chromium flags. Advanced arguments can override Manager-controlled behavior.
           </p>
+
+          {isOldKernel && (
+            <div className="mb-3 p-2.5 rounded-lg bg-blue-950/40 border border-blue-600/50 flex items-start gap-2 text-xs text-blue-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-blue-400 mt-0.5" />
+              <div>
+                <p className="font-medium">
+                  当前选中的内核版本 (v{form.browser_version}) 原生不支持命令行内联代理凭证。
+                </p>
+                <p className="text-[11px] text-blue-300/80 mt-0.5">
+                  请直接在上方「Network (网络代理)」中配置代理节点，系统会自动通过 CDP 协议安全无缝注入鉴权，切勿在此处手动添加带账号密码的 <code>--proxy-server=http://user:pass@host</code> 参数。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {hasInlineProxyAuthArg && (
+            <div className="mb-3 p-2.5 rounded-lg bg-rose-950/50 border border-rose-600/60 flex items-start gap-2 text-xs text-rose-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
+              <div>
+                <p className="font-medium">
+                  检测到包含账号密码的内联代理参数：<code>--proxy-server=...</code>
+                </p>
+                <p className="text-[11px] text-rose-300/80 mt-0.5">
+                  在 Chromium 148 以下内核中使用此参数会导致浏览器启动失败。请移除该命令行参数并在「Network」配置项中设置代理。
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Preset recommendations */}
           <div className="mb-3">
             <div className="text-[11px] font-medium text-gray-400 mb-1.5">

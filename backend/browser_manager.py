@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from cloakbrowser import launch_persistent_context_async
+from cloakbrowser.config import get_binary_path
+from cloakbrowser.download import _is_executable, binary_info
 from cloakbrowser.license import (
     CloakBrowserLicenseError,
     license_error_for_code,
@@ -585,6 +587,8 @@ class RunningProfile:
     # license denial apart from a real crash or a user-initiated close.
     denial_path: str | None = None
     singbox_proc: Any = None
+    kernel_version: str | None = None
+    is_fallback: bool = False
 
 
 
@@ -737,21 +741,6 @@ class BrowserManager:
 
             _init_profile_defaults(user_data_dir)
 
-            # One-time per profile (opt-out via set_google_default): make Google
-            # the default search engine. Runs before the user-facing launch;
-            # reports "initializing" via get_status while it works (one short
-            # headless launch). Never fatal.
-            if profile.get("set_google_default", True):
-                await self._ensure_search_engine(profile_id, user_data_dir, profile)
-
-            if display is not None and ws_port is not None:
-                await self.vnc.start_vnc(
-                    display,
-                    ws_port,
-                    width=profile.get("screen_width", 1920),
-                    height=profile.get("screen_height", 1080),
-                )
-
             user_launch_args = profile.get("launch_args") or []
             conflicting_debug_args = [
                 arg for arg in user_launch_args
@@ -777,6 +766,74 @@ class BrowserManager:
                         user_ignore_args.append(flag)
                 else:
                     normal_launch_args.append(arg_clean)
+
+            # 1. Resolve requested kernel version and apply Option A fallback if missing
+            requested_kernel = profile.get("browser_version") or None
+            effective_kernel = requested_kernel
+            is_fallback = False
+
+            if requested_kernel:
+                is_ready = False
+                for pro_candidate in (False, True):
+                    bp = get_binary_path(requested_kernel, pro=pro_candidate)
+                    if bp.exists() and _is_executable(bp):
+                        is_ready = True
+                        break
+
+                if not is_ready:
+                    info = binary_info()
+                    fallback_kernel = info.get("version")
+                    logger.warning(
+                        "Profile %s 绑定的内核 %s 未在本地安装，已自动回退到系统当前默认可用内核 %s",
+                        profile_id,
+                        requested_kernel,
+                        fallback_kernel,
+                    )
+                    effective_kernel = fallback_kernel
+                    is_fallback = True
+
+            # 2. Launch arguments version compatibility validation
+            for arg in normal_launch_args:
+                if arg.startswith("--proxy-server=") and "@" in arg:
+                    if effective_kernel and any(effective_kernel.startswith(f"{v}.") for v in ("144", "145", "146", "147")):
+                        raise ValueError(
+                            f"Chromium {effective_kernel} 内核不支持在命令行参数中直接传递代理密码 ({arg})。"
+                            "请在 Profile 的『网络代理』设置项中配置代理，系统将自动进行安全的代理鉴权。"
+                        )
+
+            # 3. Determine if the effective kernel is a Free/Keyless build or Pro build.
+            # If it's a Free build (such as 145 or platform default free build), run with license_key = None.
+            # This completely exempts the launch from Pro license validation, expiration, and seat concurrency limits!
+            is_pro_binary = False
+            if effective_kernel:
+                bp_pro = get_binary_path(effective_kernel, pro=True)
+                if bp_pro.exists() and _is_executable(bp_pro):
+                    is_pro_binary = True
+            elif self.license_key:
+                is_pro_binary = True
+
+            effective_license_key = self.license_key if is_pro_binary else None
+
+            # One-time per profile (opt-out via set_google_default): make Google
+            # the default search engine. Runs before the user-facing launch;
+            # reports "initializing" via get_status while it works (one short
+            # headless launch). Never fatal.
+            if profile.get("set_google_default", True):
+                await self._ensure_search_engine(
+                    profile_id,
+                    user_data_dir,
+                    profile,
+                    browser_version=effective_kernel,
+                    license_key=effective_license_key,
+                )
+
+            if display is not None and ws_port is not None:
+                await self.vnc.start_vnc(
+                    display,
+                    ws_port,
+                    width=profile.get("screen_width", 1920),
+                    height=profile.get("screen_height", 1080),
+                )
 
             try:
                 import cloakbrowser.config
@@ -824,7 +881,8 @@ class BrowserManager:
                 "geoip": False if proxy else bool(profile.get("geoip", False)),
                 "color_scheme": profile.get("color_scheme") or None,
                 "extension_paths": profile.get("extension_paths") or [],
-                "license_key": self.license_key,
+                "license_key": effective_license_key,
+                "browser_version": effective_kernel,
                 "release_channel": self.release_channel,
             }
             if display is not None:
@@ -848,6 +906,7 @@ class BrowserManager:
             try:
                 for attempt in range(1, CDP_START_ATTEMPTS + 1):
                     cdp_port = self._reserve_cdp_port()
+
                     launch_options["args"] = [
                         *extra_args,
                         f"--remote-debugging-port={cdp_port}",
@@ -906,9 +965,22 @@ class BrowserManager:
 
                 if context is None or cdp_port is None:
                     raise RuntimeError(f"Browser startup did not complete for profile {profile_id}")
-            except BaseException:
+            except BaseException as exc:
                 if _singbox_proc is not None:
                     _singbox_proc.terminate()
+                
+                # A TargetClosedError immediately upon launch usually indicates the browser process
+                # exited cleanly but prematurely. When switching from a newer kernel (e.g. 151) 
+                # to an older kernel (e.g. 145), Chromium's profile downgrade protection kicks in
+                # and aborts the startup. Surface a helpful error message instead of a generic one.
+                if is_fallback is False:
+                    err_str = str(exc) + (str(exc.__cause__) if exc.__cause__ else "")
+                    if "Target page, context or browser has been closed" in err_str:
+                        raise RuntimeError(
+                            f"启动失败: 内核降级导致数据不兼容。该 Profile 曾由高版本内核启动，"
+                            f"现无法被旧版内核 ({effective_kernel}) 加载。请切回高版本内核或新建环境。"
+                        ) from exc
+                
                 raise
 
             if self.runtime.viewer_mode == "vnc":
@@ -943,6 +1015,8 @@ class BrowserManager:
                 capture_preview=bool(profile.get("capture_preview", True)),
                 denial_path=getattr(context, "_cloak_denial_path", None),
                 singbox_proc=_singbox_proc,
+                kernel_version=effective_kernel,
+                is_fallback=is_fallback,
             )
             context.on(
                 "close",
@@ -991,7 +1065,12 @@ class BrowserManager:
             raise
 
     async def _ensure_search_engine(
-        self, profile_id: str, user_data_dir: Path, profile: dict[str, Any] | None = None
+        self,
+        profile_id: str,
+        user_data_dir: Path,
+        profile: dict[str, Any] | None = None,
+        browser_version: str | None = None,
+        license_key: str | None = None,
     ) -> None:
         """Make configured search engine (default Google) the default search engine, once per profile.
 
@@ -1018,7 +1097,14 @@ class BrowserManager:
 
         self._initializing.add(profile_id)
         try:
-            await self._setup_google_default(user_data_dir, name=name, keyword=keyword, url=url)
+            await self._setup_google_default(
+                user_data_dir,
+                name=name,
+                keyword=keyword,
+                url=url,
+                browser_version=browser_version,
+                license_key=license_key,
+            )
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(f"{keyword}\n")
             logger.info(
@@ -1053,6 +1139,8 @@ class BrowserManager:
         name: str = SEARCH_ENGINE_NAME,
         keyword: str = SEARCH_ENGINE_KEYWORD,
         url: str = SEARCH_ENGINE_URL,
+        browser_version: str | None = None,
+        license_key: str | None = None,
     ) -> None:
         """Add search engine via the settings UI, then commit it as the default.
 
@@ -1064,7 +1152,11 @@ class BrowserManager:
         dialog — Chrome creates the row with a valid hash — then "Make default".
         Every later launch then carries the engine via the profile's own files.
         """
-        ctx = await self._headless_launch(user_data_dir)
+        ctx = await self._headless_launch(
+            user_data_dir,
+            browser_version=browser_version,
+            license_key=license_key,
+        )
         try:
             page = await ctx.new_page()
             await page.goto("chrome://settings/searchEngines")
@@ -1150,14 +1242,20 @@ class BrowserManager:
         if sessions_dir.exists():
             shutil.rmtree(sessions_dir, ignore_errors=True)
 
-    async def _headless_launch(self, user_data_dir: Path) -> Any:
+    async def _headless_launch(
+        self,
+        user_data_dir: Path,
+        browser_version: str | None = None,
+        license_key: str | None = None,
+    ) -> Any:
         """Short headless launch used only by the one-time search-engine setup."""
         for lock_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
             (user_data_dir / lock_file).unlink(missing_ok=True)
         return await launch_persistent_context_async(
             user_data_dir=str(user_data_dir),
             headless=True,
-            license_key=self.license_key,
+            browser_version=browser_version,
+            license_key=license_key,
             release_channel=self.release_channel,
         )
 

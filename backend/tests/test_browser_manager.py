@@ -566,3 +566,149 @@ def test_init_idempotent(tmp_path: Path):
     # Second call should NOT overwrite (file already exists)
     _init_profile_defaults(tmp_path)
     assert bookmarks_path.read_text() == "SENTINEL"
+
+
+# ── Kernel version selection & launch args validation ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_launch_rejects_inline_proxy_auth_on_old_kernel(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME, license_key="test-key")
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+
+    profile = {
+        "id": "prof-1",
+        "user_data_dir": str(tmp_path / "user_data"),
+        "launch_args": ["--proxy-server=http://user:pass@1.2.3.4:8080"],
+        "browser_version": "145.0.7632.109.2",
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="不支持在命令行参数中直接传递代理密码"):
+        await manager.launch(profile)
+
+
+@pytest.mark.asyncio
+async def test_launch_kernel_resolution_and_fallback(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME, license_key="test-key")
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+
+    # Mock launch_persistent_context_async
+    captured_options = {}
+
+    async def mock_launch(**kwargs):
+        captured_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("backend.browser_manager.launch_persistent_context_async", mock_launch)
+    monkeypatch.setattr(manager, "_wait_for_cdp", AsyncMock())
+    monkeypatch.setattr(manager, "_reserve_cdp_port", lambda: 55000)
+
+    # 1. Non-existent kernel -> Option A fallback
+    profile = {
+        "id": "prof-fallback",
+        "user_data_dir": str(tmp_path / "p1"),
+        "browser_version": "999.0.0.0",
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running = await manager.launch(profile)
+    assert running.is_fallback is True
+    assert captured_options["browser_version"] != "999.0.0.0"
+    await manager.stop("prof-fallback")
+
+    # 2. Free kernel (e.g. 145) -> license_key is None (unrestricted)
+    monkeypatch.setattr("backend.browser_manager.get_binary_path", lambda ver, pro=False: (
+        tmp_path / f"bin-{ver}-{'pro' if pro else 'free'}"
+    ))
+    monkeypatch.setattr("backend.browser_manager._is_executable", lambda p: True)
+
+    # Simulate free binary exists, pro binary does not
+    def fake_get_binary_path(ver, pro=False):
+        p = tmp_path / f"bin-{ver}-{'pro' if pro else 'free'}"
+        if not pro and ver == "145.0.7632.109.2":
+            p.touch()
+        elif pro and ver == "151.0.7922.108.3":
+            p.touch()
+        return p
+
+    monkeypatch.setattr("backend.browser_manager.get_binary_path", fake_get_binary_path)
+
+    profile_free = {
+        "id": "prof-free",
+        "user_data_dir": str(tmp_path / "p2"),
+        "browser_version": "145.0.7632.109.2",
+    }
+    Path(profile_free["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running_free = await manager.launch(profile_free)
+    assert running_free.kernel_version == "145.0.7632.109.2"
+    assert running_free.is_fallback is False
+    assert captured_options["license_key"] is None  # Free kernel has no license key passed
+    await manager.stop("prof-free")
+
+    # 3. Pro kernel -> license_key is preserved
+    profile_pro = {
+        "id": "prof-pro",
+        "user_data_dir": str(tmp_path / "p3"),
+        "browser_version": "151.0.7922.108.3",
+    }
+    Path(profile_pro["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running_pro = await manager.launch(profile_pro)
+    assert running_pro.kernel_version == "151.0.7922.108.3"
+    assert captured_options["license_key"] == "test-key"
+    await manager.stop("prof-pro")
+
+
+@pytest.mark.asyncio
+async def test_headless_search_engine_setup_uses_free_kernel_license(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME, license_key="pro-key")
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+
+    captured_headless_options = {}
+
+    async def mock_headless_launch(user_data_dir, browser_version=None, license_key=None):
+        captured_headless_options["browser_version"] = browser_version
+        captured_headless_options["license_key"] = license_key
+        mock_ctx = MagicMock()
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value={"keyword": "google.com"})
+        mock_ctx.new_page = AsyncMock(return_value=mock_page)
+        return mock_ctx
+
+    monkeypatch.setattr(manager, "_headless_launch", mock_headless_launch)
+    monkeypatch.setattr(manager, "_close_context", AsyncMock())
+    monkeypatch.setattr(manager, "_wait_for_cdp", AsyncMock())
+    monkeypatch.setattr(manager, "_reserve_cdp_port", lambda: 55001)
+
+    # Free binary exists, Pro does not
+    monkeypatch.setattr("backend.browser_manager.get_binary_path", lambda ver, pro=False: (
+        tmp_path / f"bin-{ver}-{'pro' if pro else 'free'}"
+    ))
+    (tmp_path / "bin-145.0.7632.109.2-free").touch()
+    monkeypatch.setattr("backend.browser_manager._is_executable", lambda p: True)
+
+    async def mock_launch(**kwargs):
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("backend.browser_manager.launch_persistent_context_async", mock_launch)
+
+    profile_free = {
+        "id": "prof-free-init",
+        "user_data_dir": str(tmp_path / "p-free-init"),
+        "browser_version": "145.0.7632.109.2",
+        "set_google_default": True,
+    }
+    Path(profile_free["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running = await manager.launch(profile_free)
+    assert captured_headless_options["browser_version"] == "145.0.7632.109.2"
+    assert captured_headless_options["license_key"] is None  # Must NOT pass Pro license key!
+    await manager.stop("prof-free-init")
+
+

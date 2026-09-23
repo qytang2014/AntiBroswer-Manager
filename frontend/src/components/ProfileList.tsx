@@ -56,8 +56,16 @@ function SortableProfileRow({ profile, selected, draggable, onSelect }: RowProps
         <StatusIndicator status={profile.status} />
         <span className="text-sm font-medium truncate">{profile.name}</span>
       </div>
-      <div className="flex items-center gap-2 mt-1 ml-4">
+      <div className="flex items-center gap-2 mt-1 ml-4 flex-wrap">
         {profile.proxy && <span className="text-xs text-gray-500">Proxy</span>}
+        {profile.browser_version && (
+          <span
+            className="text-[10px] px-1.5 py-0.2 rounded bg-surface-2 text-indigo-300 font-mono border border-border"
+            title={`内核版本: ${profile.browser_version}`}
+          >
+            v{profile.browser_version.split(".")[0]}
+          </span>
+        )}
       </div>
       {profile.tags.length > 0 && (
         <div className="flex gap-1 mt-1.5 ml-4 flex-wrap">
