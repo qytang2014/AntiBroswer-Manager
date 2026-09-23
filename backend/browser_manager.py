@@ -154,6 +154,9 @@ def _normalize_proxy(raw: Any, proxy_type: str | None = None) -> Any:
 
 def _validate_proxy(proxy: Any) -> None:
     """Validate proxy URL or sing-box configuration dict."""
+    if proxy is None or proxy == "direct":
+        return
+
     if isinstance(proxy, dict) and proxy.get("type") == "singbox":
         try:
             from cloakbrowser.singbox.parser import build_singbox_config
@@ -197,8 +200,11 @@ async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str,
             if now - cached_time < _PROXY_CACHE_TTL:
                 return {**cached_result, "cached": True}
 
-        proxy = _normalize_proxy(raw_proxy, proxy_type)
-        _validate_proxy(proxy)  # raises ValueError on bad format -> 400 in the route
+        if not raw_proxy or proxy_type == "direct" or raw_proxy == "direct":
+            proxy = None
+        else:
+            proxy = _normalize_proxy(raw_proxy, proxy_type)
+            _validate_proxy(proxy)  # raises ValueError on bad format -> 400 in the route
         res = await asyncio.to_thread(_test_proxy_sync, proxy)
         if res.get("ok"):
             _PROXY_TEST_CACHE[cache_key] = (time.monotonic(), res)
@@ -229,6 +235,7 @@ def _probe_proxy_target(target_proxy_url: str) -> tuple[str | None, int | None, 
     latency_ms = None
     exit_ip = None
     last_err = None
+    trust_env = False if target_proxy_url is None else True
 
     # 1. Pure RTT latency check (fast 204 HTTP response, 2.5s timeout)
     for test_url in _FAST_SPEED_TEST_URLS:
@@ -239,6 +246,7 @@ def _probe_proxy_target(target_proxy_url: str) -> tuple[str | None, int | None, 
                 proxy=target_proxy_url,
                 timeout=httpx.Timeout(2.5),
                 follow_redirects=True,
+                trust_env=trust_env,
             )
             if resp.status_code in (200, 204):
                 latency_ms = max(1, round((time.monotonic() - t0) * 1000))
@@ -255,6 +263,7 @@ def _probe_proxy_target(target_proxy_url: str) -> tuple[str | None, int | None, 
                 ip_url,
                 proxy=target_proxy_url,
                 timeout=httpx.Timeout(2.5),
+                trust_env=trust_env,
             )
             if resp.status_code == 200:
                 raw_ip = resp.text.strip()
@@ -278,7 +287,9 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
     last_err = None
 
     try:
-        if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+        if not proxy or proxy == "direct":
+            ip, latency_ms, last_err = _probe_proxy_target(None)
+        elif isinstance(proxy, dict) and proxy.get("type") == "singbox":
             from backend.singbox_runner import fast_singbox_proxy
 
             with fast_singbox_proxy(proxy) as target_proxy_url:
@@ -788,6 +799,10 @@ class BrowserManager:
             proxy = _normalize_proxy(raw_proxy) if raw_proxy else None
             if proxy:
                 _validate_proxy(proxy)
+            else:
+                # Explicitly bypass OS system proxy for true direct connection
+                if not any(a.startswith("--no-proxy-server") or a.startswith("--proxy-server") for a in extra_args):
+                    extra_args.append("--no-proxy-server")
 
             # Resolve network fingerprint (WebRTC, Timezone, Locale) safely without leaking local IP
             resolved_tz, resolved_locale, net_args = await asyncio.to_thread(

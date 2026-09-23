@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X, Loader2 } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
-import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial } from "./lib/api";
+import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial, type KernelDownloadProgress } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
 import { ProfileForm } from "./components/ProfileForm";
 import { ProfileViewer } from "./components/ProfileViewer";
@@ -111,6 +111,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [extensionManagerOpen, setExtensionManagerOpen] = useState(false);
   const [kernelManagerOpen, setKernelManagerOpen] = useState(false);
   const [kernelBannerDismissed, setKernelBannerDismissed] = useState(false);
+  const [activeDownload, setActiveDownload] = useState<KernelDownloadProgress | null>(null);
   const [stopped, setStopped] = useState(false);
 
   const refreshSystemStatus = useCallback(() => {
@@ -132,6 +133,41 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   useEffect(() => {
     refreshSystemStatus();
     api.checkUpdate().then(setUpdateInfo).catch(() => setUpdateInfo(null));
+  }, [refreshSystemStatus]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let isSubscribed = true;
+
+    const checkDownloadStatus = async () => {
+      try {
+        const res = await api.getKernelDownloadStatus();
+        if (!isSubscribed) return;
+        if (res.active && res.task) {
+          setActiveDownload(res.task);
+          timer = setTimeout(checkDownloadStatus, 1500);
+        } else {
+          setActiveDownload((prev) => {
+            if (prev) {
+              refreshSystemStatus();
+            }
+            return null;
+          });
+          timer = setTimeout(checkDownloadStatus, 4000);
+        }
+      } catch {
+        if (isSubscribed) {
+          timer = setTimeout(checkDownloadStatus, 6000);
+        }
+      }
+    };
+
+    checkDownloadStatus();
+
+    return () => {
+      isSubscribed = false;
+      clearTimeout(timer);
+    };
   }, [refreshSystemStatus]);
 
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
@@ -288,7 +324,33 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           onKernelChanged={refreshSystemStatus}
         />
       )}
-      {systemStatus && systemStatus.binary_installed === false && !kernelBannerDismissed && (
+      {activeDownload && !kernelManagerOpen && (
+        <div className="bg-blue-950/80 border-b border-blue-800/60 px-4 py-2 text-xs flex items-center justify-between text-blue-200">
+          <div className="flex items-center gap-2 min-w-0">
+            <Loader2 className="h-4 w-4 text-blue-400 shrink-0 animate-spin" />
+            <span className="truncate">
+              <strong>正在后台下载内核{activeDownload.version ? ` (${activeDownload.version})` : ""}:</strong>{" "}
+              {activeDownload.message || `已完成 ${activeDownload.percent}%`}
+            </span>
+            <div className="w-24 bg-gray-800 rounded-full h-1.5 overflow-hidden ml-2 shrink-0 hidden sm:block">
+              <div
+                className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                style={{ width: `${Math.min(Math.max(activeDownload.percent || 0, 0), 100)}%` }}
+              />
+            </div>
+            <span className="font-mono text-[11px] text-blue-300 shrink-0">{activeDownload.percent}%</span>
+          </div>
+          <div className="flex items-center gap-3 shrink-0 ml-3">
+            <button
+              onClick={() => setKernelManagerOpen(true)}
+              className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition"
+            >
+              查看详情
+            </button>
+          </div>
+        </div>
+      )}
+      {systemStatus && systemStatus.binary_installed === false && !kernelBannerDismissed && !activeDownload && (
         <div className="bg-amber-950/70 border-b border-amber-800/60 px-4 py-2 text-xs flex items-center justify-between text-amber-200">
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />

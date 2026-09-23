@@ -13,7 +13,7 @@ import os
 import platform
 import shutil
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -546,3 +546,170 @@ def delete_kernel(version: str, tier: str = "free") -> bool:
         shutil.rmtree(dest_dir, ignore_errors=True)
         return True
     return False
+
+
+class KernelDownloadManager:
+    """Manages background downloading of Chromium kernels with multi-subscriber SSE support.
+
+    Ensures that closing the UI modal does not abort the download in progress, and allows
+    reconnecting clients to resume viewing real-time download progress.
+    """
+
+    def __init__(self) -> None:
+        self._current_task: asyncio.Task | None = None
+        self._current_info: dict[str, Any] | None = None
+        self._finished_time: float | None = None
+        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._on_completed_callbacks: list[Callable[[], None]] = []
+
+    def register_on_completed(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be called when a download successfully completes."""
+        self._on_completed_callbacks.append(callback)
+
+    def get_status(self) -> dict[str, Any]:
+        """Return the current download status."""
+        active = self._current_task is not None and not self._current_task.done()
+        if not active and self._finished_time is not None:
+            # Expire finished task info after 30 seconds
+            if time.time() - self._finished_time > 30:
+                self._current_info = None
+                self._finished_time = None
+
+        return {
+            "active": active,
+            "task": self._current_info,
+        }
+
+    def start_download(
+        self,
+        version: str,
+        tier: str = "free",
+        license_key: str | None = None,
+        release_channel: str | None = None,
+    ) -> None:
+        """Start downloading a kernel in the background if not already downloading."""
+        if self._current_task is not None and not self._current_task.done():
+            if (
+                self._current_info
+                and self._current_info.get("version") == version
+                and self._current_info.get("tier") == tier
+            ):
+                return
+            raise RuntimeError(
+                f"已有内核正在下载中: Chromium {self._current_info.get('version')} ({self._current_info.get('tier')})"
+            )
+
+        self._finished_time = None
+        self._current_info = {
+            "version": version,
+            "tier": tier,
+            "stage": "connecting",
+            "message": f"正在准备下载 Chromium {version} ({tier})...",
+            "percent": 0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_mb": None,
+            "binary_path": None,
+        }
+        self._current_task = asyncio.create_task(
+            self._download_worker(version, tier, license_key, release_channel)
+        )
+
+    async def _download_worker(
+        self,
+        version: str,
+        tier: str,
+        license_key: str | None,
+        release_channel: str | None,
+    ) -> None:
+        try:
+            async for event in stream_download_kernel(
+                version=version,
+                tier=tier,
+                license_key=license_key,
+                release_channel=release_channel,
+            ):
+                event_data = {
+                    "version": version,
+                    "tier": tier,
+                    **event,
+                }
+                self._current_info = event_data
+                await self._broadcast(event_data)
+
+            if self._current_info and self._current_info.get("stage") == "completed":
+                for cb in self._on_completed_callbacks:
+                    try:
+                        cb()
+                    except Exception as exc:
+                        logger.warning("Error running kernel download completion callback: %s", exc)
+        except asyncio.CancelledError:
+            logger.info("Kernel download worker cancelled for %s (%s)", version, tier)
+            err_data = {
+                "version": version,
+                "tier": tier,
+                "stage": "error",
+                "message": "内核下载已被中止",
+                "percent": 0,
+            }
+            self._current_info = err_data
+            await self._broadcast(err_data)
+            raise
+        except Exception as exc:
+            logger.exception("Kernel download worker error for %s: %s", version, exc)
+            err_data = {
+                "version": version,
+                "tier": tier,
+                "stage": "error",
+                "message": str(exc),
+                "percent": 0,
+            }
+            self._current_info = err_data
+            await self._broadcast(err_data)
+        finally:
+            self._finished_time = time.time()
+
+    async def _broadcast(self, event: dict[str, Any]) -> None:
+        for q in list(self._subscribers):
+            try:
+                q.put_nowait(event)
+            except Exception:
+                pass
+
+    async def subscribe(
+        self,
+        version: str | None = None,
+        tier: str | None = None,
+        license_key: str | None = None,
+        release_channel: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Subscribe to download events for the current or newly initiated task."""
+        if version:
+            if self._current_task is None or self._current_task.done():
+                self.start_download(
+                    version=version,
+                    tier=tier or "free",
+                    license_key=license_key,
+                    release_channel=release_channel,
+                )
+
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._subscribers.add(q)
+
+        try:
+            if self._current_info:
+                yield self._current_info
+                if self._current_info.get("stage") in ("completed", "error"):
+                    return
+
+            while True:
+                event = await q.get()
+                yield event
+                if event.get("stage") in ("completed", "error"):
+                    break
+        finally:
+            self._subscribers.discard(q)
+
+
+kernel_download_manager = KernelDownloadManager()
+

@@ -98,4 +98,17 @@ describe("ProfileForm duplicate split button", () => {
     expect(onDuplicate).toHaveBeenLastCalledWith(true);
     expect(screen.queryByRole("menu")).toBeNull();
   });
+
+  it("renders default Direct option and action to open proxy manager", () => {
+    renderForm("stopped");
+    const trigger = screen.getByRole("button", { name: /Proxy node/i });
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain("直连 / Direct");
+
+    // Click to open custom dropdown
+    fireEvent.click(trigger);
+    expect(screen.getAllByText(/纯直连 \/ Direct/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/添加节点 \/ 打开代理管理/)).toBeTruthy();
+  });
 });
+

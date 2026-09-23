@@ -50,6 +50,7 @@ from .models import (
     BatchTestRequest,
     BatchTestResult,
     ClipboardRequest,
+    KernelDownloadStatusResponse,
     KernelItem,
     KernelListResponse,
     LaunchResponse,
@@ -86,6 +87,7 @@ from .extension_manager import (
 )
 from .kernel_manager import (
     delete_kernel,
+    kernel_download_manager,
     list_available_kernels,
     stream_download_kernel,
 )
@@ -312,6 +314,7 @@ class AuthMiddleware:
 
 # Singleton browser manager
 browser_mgr = BrowserManager(license_key=LICENSE_KEY, release_channel=RELEASE_CHANNEL)
+kernel_download_manager.register_on_completed(browser_mgr.resolve_binary_status)
 
 # Frontend build directory (React production build). bundle_dir() resolves to
 # the PyInstaller extraction root when frozen, else the manager repo root.
@@ -726,20 +729,24 @@ async def list_kernels_endpoint():
     return list_available_kernels()
 
 
+@app.get("/api/kernels/download-status", response_model=KernelDownloadStatusResponse)
+async def get_kernel_download_status_endpoint():
+    """Get the current background kernel download task status."""
+    return kernel_download_manager.get_status()
+
+
 @app.get("/api/kernels/download-stream")
 async def download_kernel_stream_endpoint(version: str, tier: str = "free"):
     """Download and extract a Chromium stealth kernel with real-time SSE progress events."""
     async def event_generator():
         try:
-            async for event in stream_download_kernel(
+            async for event in kernel_download_manager.subscribe(
                 version=version,
                 tier=tier,
                 license_key=browser_mgr.license_key,
                 release_channel=browser_mgr.release_channel,
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            # Re-evaluate status after install
-            browser_mgr.resolve_binary_status()
         except Exception as exc:
             err_data = {
                 "stage": "error",

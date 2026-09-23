@@ -97,6 +97,31 @@ async def test_proxy_test_caching():
         assert mock_sync.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_direct_proxy_testing_and_api(app_client):
+    _PROXY_TEST_CACHE.clear()
+    mock_result = {
+        "ok": True,
+        "ip": "203.0.113.1",
+        "country": "US",
+        "city": "Los Angeles",
+        "latency_ms": 35,
+        "cached": False,
+    }
+    with patch("backend.browser_manager._test_proxy_sync", return_value=mock_result):
+        # 1. Direct call to run_test_proxy with None
+        res = await run_test_proxy(None, "direct")
+        assert res["ok"] is True
+        assert res["ip"] == "203.0.113.1"
+
+        # 2. HTTP POST /api/profiles/test-proxy with {"proxy": null}
+        resp = app_client.post("/api/profiles/test-proxy", json={"proxy": None, "proxy_type": "direct"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["ip"] == "203.0.113.1"
+
+
 def test_extension_manager_unpack_and_db(tmp_db):
     # Create a mock zip extension with manifest.json
     manifest_data = {
@@ -381,6 +406,14 @@ def test_kernel_api_endpoints(app_client):
     resp_del = app_client.delete("/api/kernels/non_existent_version_999")
     assert resp_del.status_code == 404
 
+    # 3. GET /api/kernels/download-status
+    resp_status = app_client.get("/api/kernels/download-status")
+    assert resp_status.status_code == 200
+    status_data = resp_status.json()
+    assert "active" in status_data
+    assert isinstance(status_data["active"], bool)
+
+
 
 @pytest.mark.asyncio
 async def test_check_extensions_updates(monkeypatch: pytest.MonkeyPatch):
@@ -460,6 +493,48 @@ def test_check_extensions_updates_api(app_client, monkeypatch: pytest.MonkeyPatc
     data = resp.json()
     assert "updates" in data
     assert "checked_at" in data
+
+
+@pytest.mark.asyncio
+async def test_kernel_download_manager_lifecycle(monkeypatch: pytest.MonkeyPatch):
+    from backend.kernel_manager import KernelDownloadManager
+    import backend.kernel_manager as km
+
+    async def mock_stream_download(version, tier="free", **kwargs):
+        yield {"stage": "connecting", "message": "conn", "percent": 0, "downloaded_bytes": 0, "total_bytes": 100}
+        yield {"stage": "downloading", "message": "dl", "percent": 50, "downloaded_bytes": 50, "total_bytes": 100}
+        yield {"stage": "completed", "message": "done", "percent": 100, "downloaded_bytes": 100, "total_bytes": 100}
+
+    monkeypatch.setattr(km, "stream_download_kernel", mock_stream_download)
+
+    kdm = KernelDownloadManager()
+    completed_called = False
+
+    def on_done():
+        nonlocal completed_called
+        completed_called = True
+
+    kdm.register_on_completed(on_done)
+
+    # Initial status
+    status = kdm.get_status()
+    assert status["active"] is False
+    assert status["task"] is None
+
+    # Subscribe triggers download
+    events = []
+    async for ev in kdm.subscribe(version="100.0.0.0", tier="free"):
+        events.append(ev)
+
+    assert len(events) >= 3
+    assert events[-1]["stage"] == "completed"
+    assert completed_called is True
+
+    # After completion, status has task info
+    status = kdm.get_status()
+    assert status["active"] is False
+    assert status["task"]["stage"] == "completed"
+
 
 
 

@@ -204,7 +204,7 @@ class ClipboardRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    proxy: str = Field(min_length=1, max_length=65536)
+    proxy: str | None = None
     proxy_type: str | None = None
 
 
@@ -306,4 +306,22 @@ class KernelListResponse(BaseModel):
     active_version: str | None = None
     installed: bool = False
     kernels: list[KernelItem]
+
+
+class KernelDownloadTask(BaseModel):
+    version: str
+    tier: str = "free"
+    stage: str
+    message: str = ""
+    percent: int = 0
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    speed_mb: float | None = None
+    binary_path: str | None = None
+
+
+class KernelDownloadStatusResponse(BaseModel):
+    active: bool = False
+    task: KernelDownloadTask | None = None
+
 

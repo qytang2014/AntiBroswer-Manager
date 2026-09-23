@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   X,
   Cpu,
@@ -41,7 +41,9 @@ export function KernelManagerModal({
     text: string;
   } | null>(null);
 
-  const fetchKernels = async () => {
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const fetchKernels = useCallback(async () => {
     try {
       setLoading(true);
       const data = await api.listKernels();
@@ -53,24 +55,96 @@ export function KernelManagerModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const attachStream = useCallback((version: string, tier: "pro" | "free" = "free") => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const ac = new AbortController();
+    abortControllerRef.current = ac;
+
+    setDownloadingVersion(version);
+
+    api.downloadKernelStream(
+      version,
+      tier,
+      (prog) => {
+        setDownloadProgress(prog);
+        if (prog.version) {
+          setDownloadingVersion(prog.version);
+        }
+      },
+      ac.signal
+    ).then((res) => {
+      if (ac.signal.aborted) return;
+      if (res.ok) {
+        setFeedback({
+          type: "success",
+          text: `内核 ${version} 安装成功！`,
+        });
+        fetchKernels();
+        onKernelChanged?.();
+      }
+    }).catch((err) => {
+      if (ac.signal.aborted) return;
+      console.error("Kernel download failed:", err);
+      const msg = err instanceof Error ? err.message : "内核下载失败";
+      setFeedback({ type: "error", text: msg });
+    }).finally(() => {
+      if (!ac.signal.aborted) {
+        setDownloadingVersion(null);
+      }
+    });
+  }, [fetchKernels, onKernelChanged]);
+
+  const checkActiveDownload = useCallback(async () => {
+    try {
+      const res = await api.getKernelDownloadStatus();
+      if (res.active && res.task) {
+        setDownloadingVersion(res.task.version || "downloading");
+        setDownloadProgress(res.task);
+        attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free");
+      } else if (res.task && res.task.stage === "completed") {
+        setFeedback({
+          type: "success",
+          text: `内核 ${res.task.version || ""} 已在后台安装完成！`,
+        });
+        fetchKernels();
+        onKernelChanged?.();
+      }
+    } catch (err) {
+      console.warn("Failed to check kernel download status:", err);
+    }
+  }, [attachStream, fetchKernels, onKernelChanged]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
+
     if (isOpen) {
       window.addEventListener("keydown", handleKeyDown);
       fetchKernels();
+      checkActiveDownload();
       setFeedback(null);
     } else {
-      // Clear progress when modal is closed (unless downloading)
-      if (!downloadingVersion) {
-        setDownloadProgress(null);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
       }
+      setDownloadingVersion(null);
+      setDownloadProgress(null);
     }
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, [isOpen, onClose, fetchKernels, checkActiveDownload]);
 
   const handleDownload = async (kernel: KernelItem) => {
     if (downloadingVersion) return;
@@ -83,24 +157,7 @@ export function KernelManagerModal({
     });
     setFeedback(null);
 
-    try {
-      await api.downloadKernelStream(kernel.version, kernel.tier, (prog) => {
-        setDownloadProgress(prog);
-      });
-
-      setFeedback({
-        type: "success",
-        text: `内核 ${kernel.name} (${kernel.version}) 安装成功！`,
-      });
-      await fetchKernels();
-      onKernelChanged?.();
-    } catch (err) {
-      console.error("Kernel download failed:", err);
-      const msg = err instanceof Error ? err.message : "内核下载失败";
-      setFeedback({ type: "error", text: msg });
-    } finally {
-      setDownloadingVersion(null);
-    }
+    attachStream(kernel.version, kernel.tier);
   };
 
   const handleDelete = async (kernel: KernelItem) => {

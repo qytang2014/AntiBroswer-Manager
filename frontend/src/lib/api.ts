@@ -188,6 +188,8 @@ export interface KernelListResponse {
 }
 
 export interface KernelDownloadProgress {
+  version?: string;
+  tier?: string;
   stage: "connecting" | "downloading" | "verifying" | "extracting" | "completed" | "error";
   message: string;
   percent: number;
@@ -196,6 +198,12 @@ export interface KernelDownloadProgress {
   speed_mb?: number;
   binary_path?: string;
 }
+
+export interface KernelDownloadStatusResponse {
+  active: boolean;
+  task: KernelDownloadProgress | null;
+}
+
 
 export interface UpdateInfo {
   current: string;
@@ -293,10 +301,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  testProxy: (proxy: string, proxy_type?: string) =>
+  testProxy: (proxy?: string | null, proxy_type?: string | null) =>
     request<ProxyTestResult>("/api/profiles/test-proxy", {
       method: "POST",
-      body: JSON.stringify({ proxy, proxy_type }),
+      body: JSON.stringify({ proxy: proxy || null, proxy_type: proxy_type || (proxy ? undefined : "direct") }),
     }),
 
   updateProfile: (id: string, data: Partial<ProfileCreateData>) =>
@@ -481,14 +489,25 @@ export const api = {
   // Kernel Management
   listKernels: () => request<KernelListResponse>("/api/kernels"),
 
+  getKernelDownloadStatus: () =>
+    request<KernelDownloadStatusResponse>("/api/kernels/download-status"),
+
   downloadKernelStream: (
     version: string,
     tier: "pro" | "free" = "free",
-    onProgress?: (progress: KernelDownloadProgress) => void
+    onProgress?: (progress: KernelDownloadProgress) => void,
+    signal?: AbortSignal
   ): Promise<{ ok: boolean; binary_path?: string }> => {
     return new Promise((resolve, reject) => {
       const url = `/api/kernels/download-stream?version=${encodeURIComponent(version)}&tier=${encodeURIComponent(tier)}`;
       const eventSource = new EventSource(url);
+
+      if (signal) {
+        signal.addEventListener("abort", () => {
+          eventSource.close();
+          resolve({ ok: false });
+        });
+      }
 
       eventSource.onmessage = (event) => {
         try {

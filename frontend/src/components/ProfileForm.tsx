@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp, Copy, Loader2, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
@@ -128,6 +128,9 @@ export function ProfileForm({
   const [managedNodes, setManagedNodes] = useState<ProxyNode[]>([]);
   const [subsMap, setSubsMap] = useState<Map<string, string>>(new Map());
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+  const [proxyDropdownOpen, setProxyDropdownOpen] = useState(false);
+  const [proxySearch, setProxySearch] = useState("");
+  const proxyDropdownRef = useRef<HTMLDivElement>(null);
 
   const loadManagedProxies = useCallback(async () => {
     try {
@@ -151,6 +154,9 @@ export function ProfileForm({
       if (extDropdownRef.current && !extDropdownRef.current.contains(e.target as Node)) {
         setExtDropdownOpen(false);
       }
+      if (proxyDropdownRef.current && !proxyDropdownRef.current.contains(e.target as Node)) {
+        setProxyDropdownOpen(false);
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -168,7 +174,6 @@ export function ProfileForm({
   const [duplicateMenuOpen, setDuplicateMenuOpen] = useState(false);
   const duplicateMenuRef = useRef<HTMLDivElement>(null);
   const duplicateTriggerRef = useRef<HTMLButtonElement>(null);
-  const [testingProxy, setTestingProxy] = useState(false);
   const [proxyTest, setProxyTest] = useState<ProxyTestResult | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -360,21 +365,20 @@ export function ProfileForm({
   const [geoMatchMessage, setGeoMatchMessage] = useState<string | null>(null);
 
   const handleMatchProxyGeo = async () => {
-    if (!form.proxy) return;
     setMatchingGeo(true);
     setGeoMatchMessage(null);
     try {
-      const res = await api.testProxy(form.proxy, proxyType);
+      const res = await api.testProxy(form.proxy, form.proxy ? proxyType : "direct");
       setProxyTest(res);
       if (!res.ok) {
-        alert(`无法获取代理 IP 信息: ${res.error || "连接失败"}`);
+        alert(`无法获取网络 IP 信息: ${res.error || "连接失败"}`);
         return;
       }
       const newTz = res.timezone || null;
       const newLoc = res.locale || null;
 
       if (!newTz && !newLoc) {
-        alert(`已解析代理出口 IP (${res.ip})，但未在 IP 数据库中查询到对应的时区或语言信息。`);
+        alert(`已解析出口 IP (${res.ip})，但未在 IP 数据库中查询到对应的时区或语言信息。`);
         return;
       }
 
@@ -386,7 +390,7 @@ export function ProfileForm({
           `检测到已设置的时区/语言配置：\n` +
           `· 时区: ${form.timezone || "未设置"} -> ${newTz || "未匹配"}\n` +
           `· 语言: ${form.locale || "未设置"} -> ${newLoc || "未匹配"}\n\n` +
-          `是否确认按代理出口 IP (${res.ip}) 覆盖现有设置？`;
+          `是否确认按出口 IP (${res.ip}) 覆盖现有设置？`;
         if (!window.confirm(confirmMsg)) {
           return;
         }
@@ -396,26 +400,10 @@ export function ProfileForm({
       if (newLoc) set("locale", newLoc);
       setGeoMatchMessage(`已按出口 IP (${res.ip}) 匹配设置: 时区 ${newTz || "-"} / 语言 ${newLoc || "-"}`);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "匹配代理地理信息失败";
+      const message = err instanceof ApiError ? err.message : "匹配地理信息失败";
       alert(`匹配失败: ${message}`);
     } finally {
       setMatchingGeo(false);
-    }
-  };
-
-  const handleTestProxy = async () => {
-    if (!form.proxy) return;
-    setProxyTest(null);
-    setTestingProxy(true);
-    try {
-      const res = await api.testProxy(form.proxy, proxyType);
-      setProxyTest(res);
-    } catch (err) {
-      const message =
-        err instanceof ApiError ? err.message : "Proxy test failed";
-      setProxyTest({ ok: false, error: message });
-    } finally {
-      setTestingProxy(false);
     }
   };
 
@@ -557,6 +545,18 @@ export function ProfileForm({
       set("extension_paths", remainingExtPaths);
     }
   };
+
+  const selectedManagedNode = managedNodes.find((n) => n.raw_uri === form.proxy);
+
+  const groupedSubscriptions = Array.from(subsMap.entries())
+    .map(([subId, subName]) => ({
+      id: subId,
+      name: subName,
+      nodes: managedNodes.filter((n) => n.subscription_id === subId),
+    }))
+    .filter((g) => g.nodes.length > 0);
+
+  const manualNodes = managedNodes.filter((n) => !n.subscription_id);
 
   return (
     <>
@@ -737,134 +737,324 @@ export function ProfileForm({
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
-                  <label className="label mb-0">Proxy Protocol</label>
-                  <button
-                    type="button"
-                    onClick={() => setIsProxyModalOpen(true)}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 underline font-medium flex items-center gap-1"
-                  >
-                    管理代理
-                  </button>
+                  <label className="label mb-0">Proxy Node</label>
+                  <span className="text-[10px] text-gray-500 font-normal">
+                    (代理管理已导入节点)
+                  </span>
                 </div>
-                <select
-                  className="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-indigo-500 max-w-[260px] truncate"
-                  value={
-                    managedNodes.find((n) => n.raw_uri === form.proxy)
-                      ? `node:${managedNodes.find((n) => n.raw_uri === form.proxy)!.id}`
-                      : proxyType
-                  }
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val.startsWith("node:")) {
-                      const nodeId = val.slice(5);
-                      const node = managedNodes.find((n) => n.id === nodeId);
-                      if (node) {
-                        set("proxy", node.raw_uri);
-                        setProxyType(detectProxyType(node.raw_uri));
-                        setProxyTest(null);
-                      }
-                    } else {
-                      setProxyType(val as any);
-                      setProxyTest(null);
-                    }
-                  }}
+                <button
+                  type="button"
+                  onClick={() => setIsProxyModalOpen(true)}
+                  className="text-xs text-cyan-400 hover:text-cyan-300 underline font-medium flex items-center gap-1"
                 >
-                  <optgroup label="自定义协议 / Custom">
-                    <option value="standard">Standard (HTTP/SOCKS5)</option>
-                    <option value="singbox_uri">Sing-box Node URI (VLESS/VMess/Hysteria2/TUIC)</option>
-                    <option value="singbox_sub">Sing-box Subscription URL</option>
-                    <option value="singbox_json">Sing-box Native JSON</option>
-                  </optgroup>
-                  {managedNodes.length > 0 && (
-                    <optgroup label="已保存的节点 / Managed Nodes">
-                      {managedNodes.map((n) => {
-                        const subName = n.subscription_id ? subsMap.get(n.subscription_id) : null;
-                        const prefix = subName ? `[${subName}]` : "[手动]";
-                        return (
-                          <option key={n.id} value={`node:${n.id}`}>
-                            {prefix} {n.name} ({n.protocol.toUpperCase()})
-                          </option>
-                        );
-                      })}
-                    </optgroup>
-                  )}
-                </select>
+                  <Plus className="h-3 w-3" />
+                  管理代理
+                </button>
               </div>
 
-              {proxyType === "singbox_json" ? (
-                <div className="space-y-2">
-                  <textarea
-                    className="input w-full font-mono text-xs h-28 resize-y"
-                    value={form.proxy ?? ""}
-                    onChange={(e) => {
-                      set("proxy", e.target.value || null);
-                      setProxyTest(null);
-                    }}
-                    placeholder={`{\n  "outbounds": [\n    {\n      "type": "vless",\n      "tag": "my-proxy",\n      "server": "example.com",\n      "server_port": 443,\n      "uuid": "your-uuid",\n      "tls": { "enabled": true }\n    }\n  ]\n}`}
-                  />
-                  <div className="flex justify-end gap-2">
+              {/* Unified Proxy Selector & Match Button */}
+              <div className="flex gap-2 items-center">
+                <div className="relative flex-1" ref={proxyDropdownRef}>
+                  <button
+                    type="button"
+                    aria-label="Proxy node"
+                    onClick={() => setProxyDropdownOpen(!proxyDropdownOpen)}
+                    className="w-full input flex items-center justify-between py-2 text-left cursor-pointer hover:border-gray-600 transition"
+                  >
+                    {!form.proxy ? (
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <Globe className="h-4 w-4 text-emerald-400 shrink-0" />
+                        <span className="text-xs text-gray-200 truncate">
+                          🌐 纯直连 / Direct (强制跳过系统代理)
+                        </span>
+                      </div>
+                    ) : selectedManagedNode ? (
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <Network className="h-4 w-4 text-indigo-400 shrink-0" />
+                        <div className="min-w-0 flex-1 truncate text-xs text-gray-200">
+                          {selectedManagedNode.subscription_id && subsMap.get(selectedManagedNode.subscription_id) && (
+                            <span className="text-indigo-300 font-medium mr-1.5">
+                              [{subsMap.get(selectedManagedNode.subscription_id)}]
+                            </span>
+                          )}
+                          <span>{selectedManagedNode.name}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                        <span className="text-xs text-amber-300 truncate">
+                          自定义代理配置 (未导入代理管理)
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                      {!form.proxy ? (
+                        <span className="text-emerald-400 font-medium text-[10px] bg-emerald-950/60 border border-emerald-800/50 rounded px-1.5 py-0.5">
+                          直连模式
+                        </span>
+                      ) : selectedManagedNode ? (
+                        <span className="text-indigo-400 font-semibold text-[10px] bg-indigo-950/60 border border-indigo-800/50 rounded px-1.5 py-0.5 uppercase">
+                          {selectedManagedNode.protocol}
+                        </span>
+                      ) : (
+                        <span className="text-amber-400 font-medium text-[10px] bg-amber-950/60 border border-amber-800/50 rounded px-1.5 py-0.5 uppercase">
+                          {proxyType}
+                        </span>
+                      )}
+                      {proxyDropdownOpen ? (
+                        <ChevronUp className="h-4 w-4 text-gray-400 shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Dropdown popup */}
+                  {proxyDropdownOpen && (
+                    <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-2 max-h-80 flex flex-col">
+                      {/* Search box */}
+                      <div className="relative pb-2 border-b border-gray-800">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+                        <input
+                          type="text"
+                          placeholder="搜索节点名称、订阅或协议..."
+                          value={proxySearch}
+                          onChange={(e) => setProxySearch(e.target.value)}
+                          className="input w-full pl-8 py-1.5 text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Options list */}
+                      <div className="flex-1 overflow-y-auto py-1 space-y-1">
+                        {/* Direct connection option */}
+                        <div
+                          onClick={() => {
+                            set("proxy", null);
+                            setProxyTest(null);
+                            setGeoMatchMessage(null);
+                            setProxyDropdownOpen(false);
+                          }}
+                          className={`p-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition ${
+                            !form.proxy
+                              ? "bg-emerald-950/50 border border-emerald-800/40 text-white"
+                              : "hover:bg-gray-800 text-gray-300"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Globe className="h-4 w-4 text-emerald-400 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-emerald-300">
+                                🌐 纯直连 / Direct
+                              </div>
+                              <div className="text-[10px] text-gray-400">
+                                强制跳过系统代理 (--no-proxy-server)，使用本机真实网络直连
+                              </div>
+                            </div>
+                          </div>
+                          {!form.proxy && <Check className="h-4 w-4 text-emerald-400 shrink-0" />}
+                        </div>
+
+                        {/* Custom configuration indicator if unmanaged */}
+                        {form.proxy && !selectedManagedNode && (
+                          <div className="p-2 rounded-md bg-amber-950/40 border border-amber-800/40 flex items-center justify-between text-xs text-amber-300">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                              <span className="truncate font-mono">⚠️ 自定义配置 ({proxyType})</span>
+                            </div>
+                            <Check className="h-4 w-4 text-amber-400 shrink-0" />
+                          </div>
+                        )}
+
+                        {/* Subscription groups */}
+                        {groupedSubscriptions.map((group) => {
+                          const query = proxySearch.trim().toLowerCase();
+                          const filteredNodes = group.nodes.filter(
+                            (n) =>
+                              !query ||
+                              n.name.toLowerCase().includes(query) ||
+                              n.protocol.toLowerCase().includes(query) ||
+                              group.name.toLowerCase().includes(query)
+                          );
+                          if (filteredNodes.length === 0) return null;
+                          return (
+                            <div key={group.id} className="pt-2">
+                              <div className="px-2 py-1 text-[11px] font-semibold text-gray-400 flex items-center gap-1.5 uppercase tracking-wide">
+                                <span>📁 订阅: {group.name}</span>
+                                <span className="text-[10px] text-gray-500 font-normal">
+                                  ({filteredNodes.length}个节点)
+                                </span>
+                              </div>
+                              <div className="space-y-0.5">
+                                {filteredNodes.map((n) => {
+                                  const isSelected = form.proxy === n.raw_uri;
+                                  return (
+                                    <div
+                                      key={n.id}
+                                      onClick={() => {
+                                        set("proxy", n.raw_uri);
+                                        setProxyType(detectProxyType(n.raw_uri));
+                                        setProxyTest(null);
+                                        setGeoMatchMessage(null);
+                                        setProxyDropdownOpen(false);
+                                      }}
+                                      className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                        isSelected
+                                          ? "bg-indigo-950/60 border border-indigo-800/50 text-white"
+                                          : "hover:bg-gray-800 text-gray-300"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
+                                          {n.protocol}
+                                        </span>
+                                        <span className="text-xs truncate">{n.name}</span>
+                                      </div>
+                                      {isSelected && (
+                                        <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Manual nodes group */}
+                        {manualNodes.length > 0 && (() => {
+                          const query = proxySearch.trim().toLowerCase();
+                          const filteredManual = manualNodes.filter(
+                            (n) =>
+                              !query ||
+                              n.name.toLowerCase().includes(query) ||
+                              n.protocol.toLowerCase().includes(query)
+                          );
+                          if (filteredManual.length === 0) return null;
+                          return (
+                            <div className="pt-2">
+                              <div className="px-2 py-1 text-[11px] font-semibold text-gray-400 flex items-center gap-1.5 uppercase tracking-wide">
+                                <span>📌 手动导入节点</span>
+                                <span className="text-[10px] text-gray-500 font-normal">
+                                  ({filteredManual.length}个节点)
+                                </span>
+                              </div>
+                              <div className="space-y-0.5">
+                                {filteredManual.map((n) => {
+                                  const isSelected = form.proxy === n.raw_uri;
+                                  return (
+                                    <div
+                                      key={n.id}
+                                      onClick={() => {
+                                        set("proxy", n.raw_uri);
+                                        setProxyType(detectProxyType(n.raw_uri));
+                                        setProxyTest(null);
+                                        setGeoMatchMessage(null);
+                                        setProxyDropdownOpen(false);
+                                      }}
+                                      className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                        isSelected
+                                          ? "bg-indigo-950/60 border border-indigo-800/50 text-white"
+                                          : "hover:bg-gray-800 text-gray-300"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded shrink-0">
+                                          {n.protocol}
+                                        </span>
+                                        <span className="text-xs truncate">{n.name}</span>
+                                      </div>
+                                      {isSelected && (
+                                        <Check className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Footer action to open proxy manager */}
+                      <div className="pt-2 mt-2 border-t border-gray-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProxyDropdownOpen(false);
+                            setIsProxyModalOpen(true);
+                          }}
+                          className="w-full text-left px-2 py-1.5 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/30 rounded flex items-center gap-1.5 font-medium transition"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          ➕ 添加节点 / 打开代理管理...
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Match Proxy Geo button (also tests connection and latency) */}
+                <button
+                  type="button"
+                  className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200 shrink-0 h-[38px] px-3"
+                  onClick={handleMatchProxyGeo}
+                  disabled={matchingGeo}
+                  title={
+                    form.proxy
+                      ? "根据当前代理节点的出口 IP 自动测试并匹配填入 Timezone 与 Locale"
+                      : "测试本机真实直连出口 IP 并自动匹配填入 Timezone 与 Locale (强制跳过系统代理)"
+                  }
+                >
+                  {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
+                </button>
+              </div>
+
+              {/* Legacy custom proxy textarea / input fallback if unmanaged */}
+              {form.proxy && !selectedManagedNode && (
+                <div className="mt-2 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-gray-400">
+                    <span>自定义代理地址 (Custom Raw Proxy):</span>
                     <button
                       type="button"
-                      className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200"
-                      onClick={handleMatchProxyGeo}
-                      disabled={!form.proxy || matchingGeo || testingProxy}
-                      title="根据当前代理节点的出口 IP 自动匹配并填入 Timezone 与 Locale"
+                      onClick={() => setIsProxyModalOpen(true)}
+                      className="underline text-amber-200 hover:text-white font-medium"
                     >
-                      {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
-                      onClick={handleTestProxy}
-                      disabled={!form.proxy || testingProxy || matchingGeo}
-                    >
-                      {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                      Test
+                      导入到代理管理
                     </button>
                   </div>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <input
-                    className="input flex-1 font-mono text-xs"
-                    value={form.proxy ?? ""}
-                    onChange={(e) => {
-                      set("proxy", e.target.value || null);
-                      setProxyTest(null);
-                      setGeoMatchMessage(null);
-                    }}
-                    placeholder={
-                      proxyType === "singbox_uri"
-                        ? "vless://uuid@host:443?type=ws&security=tls#node"
-                        : proxyType === "singbox_sub"
-                        ? "https://my-proxy-provider.com/sub/token"
-                        : "http://user:pass@host:port"
-                    }
-                  />
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200"
-                    onClick={handleMatchProxyGeo}
-                    disabled={!form.proxy || matchingGeo || testingProxy}
-                    title="根据当前代理节点的出口 IP 自动匹配并填入 Timezone 与 Locale"
-                  >
-                    {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
-                    onClick={handleTestProxy}
-                    disabled={!form.proxy || testingProxy || matchingGeo}
-                  >
-                    {testingProxy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                    Test
-                  </button>
+                  {proxyType === "singbox_json" ? (
+                    <textarea
+                      className="input w-full font-mono text-xs h-28 resize-y"
+                      value={form.proxy ?? ""}
+                      onChange={(e) => {
+                        set("proxy", e.target.value || null);
+                        setProxyTest(null);
+                      }}
+                      placeholder={`{\n  "outbounds": [\n    {\n      "type": "vless",\n      "tag": "my-proxy",\n      "server": "example.com",\n      "server_port": 443,\n      "uuid": "your-uuid",\n      "tls": { "enabled": true }\n    }\n  ]\n}`}
+                    />
+                  ) : (
+                    <input
+                      className="input w-full font-mono text-xs"
+                      value={form.proxy ?? ""}
+                      onChange={(e) => {
+                        set("proxy", e.target.value || null);
+                        setProxyTest(null);
+                        setGeoMatchMessage(null);
+                      }}
+                      placeholder="http://user:pass@host:port"
+                    />
+                  )}
                 </div>
               )}
 
-              {proxyTest && !testingProxy && (
+              {/* Test & Latency results */}
+              {proxyTest && (
                 <p
-                  className={`text-xs mt-1 ${proxyTest.ok ? "text-emerald-400" : "text-red-400"}`}
+                  className={`text-xs mt-1.5 ${proxyTest.ok ? "text-emerald-400" : "text-red-400"}`}
                 >
                   {proxyTest.ok
                     ? `✓ ${proxyTest.ip}` +
@@ -873,10 +1063,11 @@ export function ProfileForm({
                         : "") +
                       (proxyTest.latency_ms != null ? ` · ${proxyTest.latency_ms}ms` : "") +
                       (proxyTest.cached ? " (cached)" : "")
-                    : proxyTest.error || "Proxy test failed"}
+                    : proxyTest.error || "网络测速/连接失败"}
                 </p>
               )}
 
+              {/* Geo matching notification */}
               {geoMatchMessage && (
                 <p className="text-xs mt-1 text-indigo-400 flex items-center gap-1">
                   <span>✓</span>
@@ -1540,7 +1731,10 @@ export function ProfileForm({
     </form>
     <ProxyManagerModal
       isOpen={isProxyModalOpen}
-      onClose={() => setIsProxyModalOpen(false)}
+      onClose={() => {
+        setIsProxyModalOpen(false);
+        loadManagedProxies();
+      }}
       onNodesChanged={loadManagedProxies}
     />
   </>

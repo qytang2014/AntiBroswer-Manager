@@ -79,7 +79,7 @@ _mock_license.CloakBrowserLicenseError = type(  # type: ignore[attr-defined]
 )
 _mock_license.license_error_for_code = lambda code: None  # type: ignore[attr-defined]
 _mock_license.read_denial_file = lambda path: None  # type: ignore[attr-defined]
-sys.modules.setdefault("cloakbrowser.license", _mock_license)
+sys.modules["cloakbrowser.license"] = _mock_license
 
 # Mock cloakbrowser.singbox or attach real implementation if available
 try:
@@ -136,6 +136,8 @@ def app_client(tmp_db: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main.browser_mgr, "cleanup_stale", AsyncMock())
     monkeypatch.setattr(main.browser_mgr, "cleanup_all", AsyncMock())
     monkeypatch.setattr(main.browser_mgr.vnc, "cleanup_stale", AsyncMock())
+    monkeypatch.setattr(main.browser_mgr, "license_key", None)
+    main.browser_mgr.resolve_binary_status()
 
     from starlette.testclient import TestClient
 
