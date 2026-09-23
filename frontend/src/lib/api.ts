@@ -499,14 +499,23 @@ export const api = {
     signal?: AbortSignal
   ): Promise<{ ok: boolean; binary_path?: string }> => {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        resolve({ ok: false });
+        return;
+      }
+
       const url = `/api/kernels/download-stream?version=${encodeURIComponent(version)}&tier=${encodeURIComponent(tier)}`;
       const eventSource = new EventSource(url);
 
       if (signal) {
-        signal.addEventListener("abort", () => {
-          eventSource.close();
-          resolve({ ok: false });
-        });
+        signal.addEventListener(
+          "abort",
+          () => {
+            eventSource.close();
+            resolve({ ok: false });
+          },
+          { once: true }
+        );
       }
 
       eventSource.onmessage = (event) => {

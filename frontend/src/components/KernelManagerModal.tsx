@@ -42,18 +42,32 @@ export function KernelManagerModal({
   } | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onKernelChangedRef = useRef(onKernelChanged);
+  onKernelChangedRef.current = onKernelChanged;
 
-  const fetchKernels = useCallback(async () => {
+  const handledCompletionVersionRef = useRef<string | null>(null);
+  const handledErrorRef = useRef<string | null>(null);
+
+  const fetchKernels = useCallback(async (silent = false, minDelayMs = 0) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      const start = Date.now();
       const data = await api.listKernels();
+      if (minDelayMs > 0) {
+        const remaining = minDelayMs - (Date.now() - start);
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+        }
+      }
       setKernelData(data);
     } catch (err) {
       console.error("Failed to load kernels:", err);
       const msg = err instanceof ApiError ? err.message : "获取内核列表失败";
       setFeedback({ type: "error", text: msg });
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -79,12 +93,13 @@ export function KernelManagerModal({
     ).then((res) => {
       if (ac.signal.aborted) return;
       if (res.ok) {
+        handledCompletionVersionRef.current = version;
         setFeedback({
           type: "success",
           text: `内核 ${version} 安装成功！`,
         });
-        fetchKernels();
-        onKernelChanged?.();
+        fetchKernels(true);
+        onKernelChangedRef.current?.();
       }
     }).catch((err) => {
       if (ac.signal.aborted) return;
@@ -96,7 +111,7 @@ export function KernelManagerModal({
         setDownloadingVersion(null);
       }
     });
-  }, [fetchKernels, onKernelChanged]);
+  }, [fetchKernels]);
 
   const checkActiveDownload = useCallback(async () => {
     try {
@@ -106,25 +121,42 @@ export function KernelManagerModal({
         setDownloadProgress(res.task);
         attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free");
       } else if (res.task && res.task.stage === "completed") {
-        setFeedback({
-          type: "success",
-          text: `内核 ${res.task.version || ""} 已在后台安装完成！`,
-        });
-        fetchKernels();
-        onKernelChanged?.();
+        if (handledCompletionVersionRef.current !== res.task.version) {
+          handledCompletionVersionRef.current = res.task.version || "";
+          setFeedback({
+            type: "success",
+            text: `内核 ${res.task.version || ""} 已在后台安装完成！`,
+          });
+          fetchKernels(true);
+          onKernelChangedRef.current?.();
+        }
+      } else if (res.task && res.task.stage === "error") {
+        if (handledErrorRef.current !== res.task.message) {
+          handledErrorRef.current = res.task.message || "";
+          setFeedback({
+            type: "error",
+            text: res.task.message || "后台内核下载失败",
+          });
+        }
       }
     } catch (err) {
       console.warn("Failed to check kernel download status:", err);
     }
-  }, [attachStream, fetchKernels, onKernelChanged]);
+  }, [attachStream, fetchKernels]);
 
+  // Handle Escape key
   useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen]);
 
+  // Modal lifecycle effect
+  useEffect(() => {
     if (isOpen) {
-      window.addEventListener("keydown", handleKeyDown);
       fetchKernels();
       checkActiveDownload();
       setFeedback(null);
@@ -138,13 +170,12 @@ export function KernelManagerModal({
     }
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
     };
-  }, [isOpen, onClose, fetchKernels, checkActiveDownload]);
+  }, [isOpen, fetchKernels, checkActiveDownload]);
 
   const handleDownload = async (kernel: KernelItem) => {
     if (downloadingVersion) return;
@@ -174,8 +205,8 @@ export function KernelManagerModal({
         type: "success",
         text: res.message || `内核 ${kernel.version} 已删除`,
       });
-      await fetchKernels();
-      onKernelChanged?.();
+      await fetchKernels(true);
+      onKernelChangedRef.current?.();
     } catch (err) {
       console.error("Failed to delete kernel:", err);
       const msg = err instanceof ApiError ? err.message : "删除内核失败";
@@ -191,7 +222,7 @@ export function KernelManagerModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) onCloseRef.current();
       }}
     >
       <div
@@ -215,7 +246,7 @@ export function KernelManagerModal({
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={fetchKernels}
+              onClick={() => fetchKernels(false, 400)}
               disabled={loading || !!downloadingVersion}
               className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-gray-800 transition disabled:opacity-50"
               title="刷新内核列表"
@@ -223,7 +254,7 @@ export function KernelManagerModal({
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             </button>
             <button
-              onClick={onClose}
+              onClick={onCloseRef.current}
               className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-gray-800 transition"
             >
               <X className="h-5 w-5" />
@@ -481,7 +512,7 @@ export function KernelManagerModal({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              onClose();
+              onCloseRef.current();
             }}
             className="px-4 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-medium transition cursor-pointer"
           >

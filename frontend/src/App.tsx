@@ -118,6 +118,11 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
     api.getStatus().then(setSystemStatus).catch(() => setSystemStatus(null));
   }, []);
 
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleCloseProxyManager = useCallback(() => setProxyManagerOpen(false), []);
+  const handleCloseExtensionManager = useCallback(() => setExtensionManagerOpen(false), []);
+  const handleCloseKernelManager = useCallback(() => setKernelManagerOpen(false), []);
+
   const handleQuit = useCallback(async () => {
     if (!window.confirm("Quit CloakBrowser Manager? This stops the server and closes all running profiles.")) {
       return;
@@ -297,20 +302,20 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
     <div className="h-screen flex flex-col">
       {settingsOpen && (
         <SettingsPanel
-          onClose={() => setSettingsOpen(false)}
+          onClose={handleCloseSettings}
           onSaved={setSystemStatus}
         />
       )}
       {proxyManagerOpen && (
         <ProxyManagerModal
           isOpen={proxyManagerOpen}
-          onClose={() => setProxyManagerOpen(false)}
+          onClose={handleCloseProxyManager}
         />
       )}
       {extensionManagerOpen && (
         <ExtensionManagerModal
           isOpen={extensionManagerOpen}
-          onClose={() => setExtensionManagerOpen(false)}
+          onClose={handleCloseExtensionManager}
           onExtensionsChanged={() => {
             setExtensionsVersion((v) => v + 1);
             refresh();
@@ -320,7 +325,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
       {kernelManagerOpen && (
         <KernelManagerModal
           isOpen={kernelManagerOpen}
-          onClose={() => setKernelManagerOpen(false)}
+          onClose={handleCloseKernelManager}
           onKernelChanged={refreshSystemStatus}
         />
       )}
