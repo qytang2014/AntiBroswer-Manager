@@ -38,6 +38,7 @@ class ProfileCreate(BaseModel):
     browser_version: str | None = None
     notes: str | None = None
     tags: list[TagCreate] | None = None
+    license_id: str | None = None
 
 
 class ProfileUpdate(BaseModel):
@@ -69,6 +70,7 @@ class ProfileUpdate(BaseModel):
     browser_version: str | None = Field(default=None)
     notes: str | None = Field(default=None)
     tags: list[TagCreate] | None = None
+    license_id: str | None = Field(default=None)
 
     @field_validator("gpu_family", mode="before")
     @classmethod
@@ -147,6 +149,7 @@ class ProfileResponse(BaseModel):
     # Set when the profile's last launch closed on a license denial (out of
     # seats / bad key). {message, reason, upgrade_url?}. Cleared on next launch.
     last_error: dict[str, str] | None = None
+    license_id: str | None = None
 
 
 class LaunchResponse(BaseModel):
@@ -180,16 +183,34 @@ class UpdateCheckResponse(BaseModel):
     release_url: str | None = None
 
 
+class LicenseItem(BaseModel):
+    id: str
+    name: str
+    key: str
+    is_default: bool = False
+
+
+class LicenseItemMasked(BaseModel):
+    id: str
+    name: str
+    key_masked: str
+    is_default: bool
+
+
 class SettingsResponse(BaseModel):
+    # Deprecated fields kept for backward compatibility (can remove if frontend updated)
     license_key_set: bool
     license_key_masked: str | None = None
     release_channel: str = "stable"
+    licenses: list[LicenseItemMasked] = Field(default_factory=list)
 
 
 class SettingsUpdate(BaseModel):
     # None = leave unchanged; "" = clear the license key (back to keyless).
+    # Deprecated fields kept for backward compatibility
     license_key: str | None = None
     release_channel: str | None = None
+    licenses: list[LicenseItem] | None = None
 
 
 class ProfileStatusResponse(BaseModel):

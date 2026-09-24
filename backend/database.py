@@ -24,7 +24,7 @@ _PROFILE_COLUMNS = (
     "extension_paths", "allow_3p_cookies", "set_google_default",
     "search_engine_name", "search_engine_keyword", "search_engine_url",
     "capture_preview", "restore_session", "browser_version", "notes", "user_data_dir",
-    "created_at", "updated_at", "sort_order",
+    "created_at", "updated_at", "sort_order", "license_id"
 )
 
 _PROFILE_SCHEMA = """
@@ -58,7 +58,8 @@ CREATE TABLE profiles (
     user_data_dir TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    license_id TEXT
 )
 """
 
@@ -131,6 +132,9 @@ def _rebuild_profiles(conn: sqlite3.Connection, old_columns: set[str]) -> None:
                     END
                     """
                 )
+        if "license_id" not in old_columns:
+            conn.execute("UPDATE profiles_new SET license_id = 'default-id'")
+
         conn.execute("DROP TABLE profiles")
         conn.execute("ALTER TABLE profiles_new RENAME TO profiles")
         _create_tags_table(conn)
@@ -265,6 +269,7 @@ def create_profile(
         "restore_session": fields.get("restore_session", True),
         "browser_version": fields.get("browser_version"),
         "notes": fields.get("notes"),
+        "license_id": fields.get("license_id"),
         "user_data_dir": user_data_dir, "created_at": now, "updated_at": now,
     }
     with get_db() as conn:

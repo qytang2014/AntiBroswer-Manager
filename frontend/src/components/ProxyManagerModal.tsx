@@ -302,7 +302,7 @@ export function ProxyManagerModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       {/* Main Modal Container */}
       <div className="bg-[#121624] border border-cyan-500/40 rounded-2xl w-full max-w-4xl shadow-[0_0_50px_-12px_rgba(6,182,212,0.25)] flex flex-col max-h-[90vh] overflow-hidden">
-        
+
         {/* Header (Matching Image 0) */}
         <div className="px-6 py-4 flex items-center justify-between border-b border-gray-800/80">
           <h2 className="text-lg font-bold text-cyan-400 tracking-wide">管理代理链</h2>

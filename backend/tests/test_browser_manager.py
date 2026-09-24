@@ -318,13 +318,15 @@ async def test_launch_passes_license_config(monkeypatch, tmp_path: Path):
     context = MagicMock(pages=[])
     context.add_init_script = AsyncMock()
     manager = BrowserManager(
-        NATIVE_RUNTIME, license_key="cb_test", release_channel="preview"
+        NATIVE_RUNTIME, license_key="cb_test", release_channel="preview",
+        licenses=[{"id": "lic-1", "key": "cb_test"}]
     )
     manager._wait_for_cdp = AsyncMock()
     launch = AsyncMock(return_value=context)
     monkeypatch.setattr(module, "launch_persistent_context_async", launch)
 
     profile = _launch_profile(tmp_path)
+    profile["license_id"] = "lic-1"
     profile["extension_paths"] = ["/tmp/extension"]
     profile["launch_args"] = ["--raw-flag"]
     await manager.launch(profile)
@@ -590,7 +592,7 @@ async def test_launch_rejects_inline_proxy_auth_on_old_kernel(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_launch_kernel_resolution_and_fallback(monkeypatch, tmp_path):
-    manager = BrowserManager(NATIVE_RUNTIME, license_key="test-key")
+    manager = BrowserManager(NATIVE_RUNTIME, license_key="test-key", licenses=[{"id": "lic-pro", "key": "test-key"}])
     monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
 
     # Mock launch_persistent_context_async
@@ -654,6 +656,7 @@ async def test_launch_kernel_resolution_and_fallback(monkeypatch, tmp_path):
         "id": "prof-pro",
         "user_data_dir": str(tmp_path / "p3"),
         "browser_version": "151.0.7922.108.3",
+        "license_id": "lic-pro",
     }
     Path(profile_pro["user_data_dir"]).mkdir(parents=True, exist_ok=True)
 
@@ -665,7 +668,7 @@ async def test_launch_kernel_resolution_and_fallback(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_headless_search_engine_setup_uses_free_kernel_license(monkeypatch, tmp_path):
-    manager = BrowserManager(NATIVE_RUNTIME, license_key="pro-key")
+    manager = BrowserManager(NATIVE_RUNTIME, license_key="pro-key", licenses=[{"id": "lic-pro", "key": "pro-key"}])
     monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
 
     captured_headless_options = {}

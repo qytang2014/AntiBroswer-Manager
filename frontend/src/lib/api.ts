@@ -46,6 +46,7 @@ export interface Profile {
   // Set when the last launch closed on a license denial (out of seats / bad
   // key). Cleared on the next launch. Shown under the Launch button.
   last_error: LaunchDenial | null;
+  license_id: string | null;
 }
 
 export interface LaunchDenial {
@@ -81,6 +82,7 @@ export interface ProfileCreateData {
   browser_version?: string | null;
   notes?: string | null;
   tags?: { tag: string; color: string | null }[];
+  license_id?: string | null;
 }
 
 export interface LaunchResult {
@@ -218,11 +220,23 @@ export interface ManagerSettings {
   license_key_set: boolean;
   license_key_masked: string | null;
   release_channel: string; // "stable" | "preview"
+  licenses: {
+    id: string;
+    name: string;
+    key_masked: string;
+    is_default: boolean;
+  }[];
 }
 
 export interface SettingsUpdate {
   license_key?: string | null; // omit = unchanged; "" = clear
   release_channel?: string | null;
+  licenses?: {
+    id: string;
+    name: string;
+    key: string;
+    is_default: boolean;
+  }[];
 }
 
 export class ApiError extends Error {

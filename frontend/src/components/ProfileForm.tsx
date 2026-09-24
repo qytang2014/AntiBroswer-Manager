@@ -257,6 +257,20 @@ export function ProfileForm({
     loadInstalledKernels();
   }, [loadInstalledKernels, kernelsUpdated]);
 
+  const [licenses, setLicenses] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
+  useEffect(() => {
+    api.getSettings().then((s) => {
+      setLicenses(s.licenses || []);
+      // Auto-select default license for new profiles if they don't have one set yet
+      if (!isEdit && !form.license_id) {
+        const def = (s.licenses || []).find(l => l.is_default);
+        if (def) {
+          setForm(prev => ({ ...prev, license_id: def.id }));
+        }
+      }
+    }).catch((err) => console.error("Failed to load settings:", err));
+  }, [isEdit]);
+
   const prevProfileIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -289,6 +303,7 @@ export function ProfileForm({
           launch_args: profile.launch_args ?? [],
           notes: profile.notes,
           tags: profile.tags,
+          license_id: profile.license_id ?? null,
         });
         setProxyType(detectProxyType(profile.proxy));
         setPreviewError(false);
@@ -739,6 +754,26 @@ export function ProfileForm({
                 required
               />
             </div>
+
+            <div className="col-span-2">
+              <label className="label">绑定 License 授权 (License Binding)</label>
+              <select
+                className="input"
+                value={form.license_id ?? ""}
+                onChange={(e) => set("license_id", e.target.value ? e.target.value : null)}
+              >
+                <option value="">Keyless (无授权) / 免费内核模式</option>
+                {licenses.map(l => (
+                  <option key={l.id} value={l.id}>
+                    {l.name} {l.is_default ? "(默认)" : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                可选择列表管理中的 License。如果没有选择，则回退到无 License (Keyless) 的免费内核模式。
+              </p>
+            </div>
+
             <div className="col-span-2">
               <label className="label">Fingerprint Seed</label>
               <div className="flex gap-2">

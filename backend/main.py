@@ -147,12 +147,30 @@ AUTH_TOKEN: str | None = os.environ.get("AUTH_TOKEN") or None
 # the key in the Settings UI; Docker/CI keep overriding via env vars.
 _STORED_SETTINGS = load_settings()
 
+if "license_key" in _STORED_SETTINGS and "licenses" not in _STORED_SETTINGS:
+    _key = _STORED_SETTINGS.get("license_key")
+    if _key:
+        _STORED_SETTINGS["licenses"] = [{
+            "id": "default-id",
+            "name": "默认 License",
+            "key": _key,
+            "is_default": True
+        }]
+    # We don't pop license_key immediately for backwards compatibility,
+    # but we will rely on licenses from now on.
+    save_settings(_STORED_SETTINGS)
+
 
 def _resolve_setting(env_key: str, settings_key: str) -> str | None:
     return os.environ.get(env_key) or _STORED_SETTINGS.get(settings_key) or None
 
+LICENSES: list[dict] = _STORED_SETTINGS.get("licenses", [])
 
-LICENSE_KEY: str | None = _resolve_setting("CLOAKBROWSER_LICENSE_KEY", "license_key")
+_default_license = next((lic for lic in LICENSES if lic.get("is_default")), None)
+if _default_license:
+    LICENSE_KEY: str | None = _default_license.get("key")
+else:
+    LICENSE_KEY: str | None = _resolve_setting("CLOAKBROWSER_LICENSE_KEY", "license_key")
 RELEASE_CHANNEL: str | None = _resolve_setting(
     "CLOAKBROWSER_RELEASE_CHANNEL", "release_channel"
 )
@@ -313,7 +331,11 @@ class AuthMiddleware:
 
 
 # Singleton browser manager
-browser_mgr = BrowserManager(license_key=LICENSE_KEY, release_channel=RELEASE_CHANNEL)
+browser_mgr = BrowserManager(
+    license_key=LICENSE_KEY,
+    release_channel=RELEASE_CHANNEL,
+    licenses=LICENSES,
+)
 kernel_download_manager.register_on_completed(browser_mgr.resolve_binary_status)
 
 # Frontend build directory (React production build). bundle_dir() resolves to
@@ -1366,10 +1388,20 @@ def _mask_key(key: str | None) -> str | None:
 
 
 def _settings_response() -> SettingsResponse:
+    masked_licenses = [
+        {
+            "id": lic.get("id", ""),
+            "name": lic.get("name", ""),
+            "key_masked": _mask_key(lic.get("key", "")) or "",
+            "is_default": bool(lic.get("is_default")),
+        }
+        for lic in browser_mgr.licenses
+    ]
     return SettingsResponse(
         license_key_set=bool(browser_mgr.license_key),
         license_key_masked=_mask_key(browser_mgr.license_key),
         release_channel=(browser_mgr.release_channel or "stable"),
+        licenses=masked_licenses,
     )
 
 
@@ -1419,14 +1451,41 @@ async def update_settings(payload: SettingsUpdate):
     """
     stored = load_settings()
 
-    if payload.license_key is not None:
+    if payload.licenses is not None:
+        new_licenses = []
+        old_licenses_by_id = {lic.get("id"): lic for lic in stored.get("licenses", [])}
+        for item in payload.licenses:
+            lic_dict = item.model_dump()
+            if not lic_dict["key"] and lic_dict["id"] in old_licenses_by_id:
+                lic_dict["key"] = old_licenses_by_id[lic_dict["id"]].get("key", "")
+            new_licenses.append(lic_dict)
+
+        stored["licenses"] = new_licenses
+        browser_mgr.licenses = new_licenses
+
+        # Determine new default license key for backward compatibility fields
+        default_lic = next((lic for lic in new_licenses if lic.get("is_default")), None)
+        if default_lic:
+            browser_mgr.license_key = default_lic.get("key")
+            stored["license_key"] = default_lic.get("key")
+        else:
+            browser_mgr.license_key = None
+            stored.pop("license_key", None)
+
+    elif payload.license_key is not None:
+        # Fallback for old clients
         key = payload.license_key.strip()
         if key:
             stored["license_key"] = key
             browser_mgr.license_key = key
+            # Also sync to licenses list for migration completeness if old client is used
+            stored["licenses"] = [{"id": "default-id", "name": "默认 License", "key": key, "is_default": True}]
+            browser_mgr.licenses = stored["licenses"]
         else:  # empty string = clear the key (back to keyless)
             stored.pop("license_key", None)
             browser_mgr.license_key = None
+            stored["licenses"] = []
+            browser_mgr.licenses = []
 
     if payload.release_channel is not None:
         channel = payload.release_channel.strip().lower()

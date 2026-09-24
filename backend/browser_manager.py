@@ -598,11 +598,12 @@ class BrowserManager:
         runtime_config: RuntimeConfig | None = None,
         license_key: str | None = None,
         release_channel: str | None = None,
+        licenses: list[dict] | None = None,
     ):
         self.runtime = runtime_config or resolve_runtime()
-        # App-wide license: passed to every launch so the wrapper downloads the
-        # Pro build and injects the key the Pro binary needs to boot + take a seat.
+        # App-wide default license (for backwards compatibility) and full licenses list.
         self.license_key = license_key
+        self.licenses = licenses or []
         self.release_channel = release_channel
         # Resolved at startup by resolve_binary_status(); read by GET /api/status.
         self.license_tier = "keyless"
@@ -804,15 +805,21 @@ class BrowserManager:
             # 3. Determine if the effective kernel is a Free/Keyless build or Pro build.
             # If it's a Free build (such as 145 or platform default free build), run with license_key = None.
             # This completely exempts the launch from Pro license validation, expiration, and seat concurrency limits!
+            profile_license_key = None
+            if profile.get("license_id"):
+                lic = next((l for l in self.licenses if l.get("id") == profile.get("license_id")), None)
+                if lic:
+                    profile_license_key = lic.get("key")
+
             is_pro_binary = False
             if effective_kernel:
                 bp_pro = get_binary_path(effective_kernel, pro=True)
                 if bp_pro.exists() and _is_executable(bp_pro):
                     is_pro_binary = True
-            elif self.license_key:
+            elif profile_license_key:
                 is_pro_binary = True
 
-            effective_license_key = self.license_key if is_pro_binary else None
+            effective_license_key = profile_license_key if is_pro_binary else None
 
             # One-time per profile (opt-out via set_google_default): make Google
             # the default search engine. Runs before the user-facing launch;
@@ -867,7 +874,7 @@ class BrowserManager:
             resolved_tz, resolved_locale, net_args = await asyncio.to_thread(
                 _resolve_profile_network_fingerprint_sync, proxy, profile
             )
-            # The Free kernel is an unpatched Chromium build, so it will show an unsupported 
+            # The Free kernel is an unpatched Chromium build, so it will show an unsupported
             # flag infobar for "--no-sandbox" (which is injected by the launcher).
             # We suppress all infobars with --test-type.
             if not is_pro_binary:
@@ -975,9 +982,9 @@ class BrowserManager:
             except BaseException as exc:
                 if _singbox_proc is not None:
                     _singbox_proc.terminate()
-                
+
                 # A TargetClosedError immediately upon launch usually indicates the browser process
-                # exited cleanly but prematurely. When switching from a newer kernel (e.g. 151) 
+                # exited cleanly but prematurely. When switching from a newer kernel (e.g. 151)
                 # to an older kernel (e.g. 145), Chromium's profile downgrade protection kicks in
                 # and aborts the startup. Surface a helpful error message instead of a generic one.
                 if is_fallback is False:
@@ -987,7 +994,7 @@ class BrowserManager:
                             f"启动失败: 内核降级导致数据不兼容。该 Profile 曾由高版本内核启动，"
                             f"现无法被旧版内核 ({effective_kernel}) 加载。请切回高版本内核或新建环境。"
                         ) from exc
-                
+
                 raise
 
             if self.runtime.viewer_mode == "vnc":
