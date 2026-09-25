@@ -92,7 +92,16 @@ from .models import (
     TagResponse,
     UpdateCheckResponse,
     WebStoreInstallRequest,
+    BackupBackend,
+    BackupConfigResponse,
+    BackupConfigUpdate,
+    BackupFile,
+    BackupRequest,
+    BackupTestConnectionResponse,
+    RestoreRequest,
 )
+from .backup.manager import BackupManager
+from .backup.scheduler import run_backup_scheduler
 from .extension_manager import (
     POPULAR_EXTENSIONS,
     POPULAR_FIREFOX_EXTENSIONS,
@@ -356,6 +365,7 @@ browser_mgr = BrowserManager(
     licenses=LICENSES,
 )
 kernel_download_manager.register_on_completed(browser_mgr.resolve_binary_status)
+backup_mgr = BackupManager(browser_mgr=browser_mgr)
 
 # Frontend build directory (React production build). bundle_dir() resolves to
 # the PyInstaller extraction root when frozen, else the manager repo root.
@@ -572,11 +582,13 @@ async def lifespan(app: FastAPI):
     browser_mgr._auto_launch_task = asyncio.create_task(browser_mgr.auto_launch_all())
     from .subscription_service import run_subscription_scheduler
     sub_scheduler_task = asyncio.create_task(run_subscription_scheduler())
+    backup_scheduler_task = asyncio.create_task(run_backup_scheduler(backup_mgr))
     logger.info("AntiBrowser-Manager started")
     yield
     logger.info("Shutting down — stopping all browsers...")
+    backup_scheduler_task.cancel()
     sub_scheduler_task.cancel()
-    await asyncio.gather(sub_scheduler_task, return_exceptions=True)
+    await asyncio.gather(sub_scheduler_task, backup_scheduler_task, return_exceptions=True)
     if browser_mgr._auto_launch_task and not browser_mgr._auto_launch_task.done():
         browser_mgr._auto_launch_task.cancel()
         await asyncio.gather(browser_mgr._auto_launch_task, return_exceptions=True)
@@ -1999,6 +2011,78 @@ async def cdp_page_proxy(websocket: WebSocket, profile_id: str, path: str):
 
     target_url = f"ws://127.0.0.1:{running.cdp_port}/devtools/{path}"
     await _proxy_cdp_websocket(websocket, target_url, f"CDP page proxy [{profile_id}]")
+
+
+# ── Backup & Restore ─────────────────────────────────────────────────────────
+
+
+@app.get("/api/backup/config", response_model=BackupConfigResponse)
+async def get_backup_config():
+    return backup_mgr.get_config()
+
+
+@app.put("/api/backup/config", response_model=BackupConfigResponse)
+async def update_backup_config(payload: BackupConfigUpdate):
+    return backup_mgr.update_config(payload.model_dump(exclude_unset=True))
+
+
+@app.post("/api/backup/test-connection", response_model=BackupTestConnectionResponse)
+async def test_backup_connection(payload: BackupConfigUpdate | None = None):
+    override = payload.model_dump(exclude_unset=True) if payload else None
+    ok, err = await backup_mgr.test_connection(override)
+    return BackupTestConnectionResponse(ok=ok, error=err)
+
+
+@app.post("/api/backup/now")
+async def trigger_backup_now(payload: BackupRequest | None = None):
+    include_state = payload.include_browser_state if payload else None
+    try:
+        task_id = await backup_mgr.create_backup(include_browser_state=include_state)
+        return {"task_id": task_id}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/backup/progress/{task_id}")
+async def get_backup_progress(task_id: str):
+    return StreamingResponse(
+        backup_mgr.subscribe_progress(task_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/backup/list", response_model=list[BackupFile])
+async def list_remote_backups():
+    try:
+        return await backup_mgr.list_backups()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to list backups from remote storage: {exc}")
+
+
+@app.post("/api/backup/restore")
+async def trigger_restore(payload: RestoreRequest):
+    try:
+        task_id = await backup_mgr.restore_backup(
+            filename=payload.filename,
+            decrypt_password=payload.decrypt_password,
+        )
+        return {"task_id": task_id}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/backup/{filename:path}")
+async def delete_remote_backup(filename: str):
+    try:
+        await backup_mgr.delete_backup(filename)
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ── Static Frontend ───────────────────────────────────────────────────────────

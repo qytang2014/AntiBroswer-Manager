@@ -585,6 +585,87 @@ export const api = {
 
   deleteKernel: (version: string, browser_type: string = "cloakbrowser") =>
     request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}?browser_type=${encodeURIComponent(browser_type)}`, { method: "DELETE" }),
+
+  getBackupConfig: () => request<BackupConfig>("/api/backup/config"),
+
+  updateBackupConfig: (payload: BackupConfigUpdate) =>
+    request<BackupConfig>("/api/backup/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  testBackupConnection: (payload?: BackupConfigUpdate) =>
+    request<{ ok: boolean; error: string | null }>("/api/backup/test-connection", {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    }),
+
+  triggerBackupNow: (include_browser_state?: boolean) =>
+    request<{ task_id: string }>("/api/backup/now", {
+      method: "POST",
+      body: JSON.stringify({ include_browser_state }),
+    }),
+
+  listBackups: () => request<BackupFile[]>("/api/backup/list"),
+
+  restoreBackup: (filename: string, decrypt_password?: string) =>
+    request<{ task_id: string }>("/api/backup/restore", {
+      method: "POST",
+      body: JSON.stringify({ filename, decrypt_password }),
+    }),
+
+  deleteBackup: (filename: string) =>
+    request<{ ok: boolean }>(`/api/backup/${encodeURIComponent(filename)}`, {
+      method: "DELETE",
+    }),
+
+  subscribeBackupProgress: (
+    taskId: string,
+    onProgress: (ev: BackupProgressEvent) => void,
+    signal?: AbortSignal
+  ): Promise<BackupProgressEvent> => {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error("Aborted"));
+        return;
+      }
+
+      const eventSource = new EventSource(`/api/backup/progress/${encodeURIComponent(taskId)}`);
+
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            eventSource.close();
+            reject(new Error("Aborted"));
+          },
+          { once: true }
+        );
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data: BackupProgressEvent = JSON.parse(event.data);
+          onProgress(data);
+          if (data.status === "completed") {
+            eventSource.close();
+            resolve(data);
+          } else if (data.status === "error") {
+            eventSource.close();
+            reject(new Error(data.message || data.error || "Operation failed"));
+          }
+        } catch (err) {
+          eventSource.close();
+          reject(err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        reject(new Error("Network connection to backup task lost"));
+      };
+    });
+  },
 };
 
 export interface Subscription {
@@ -627,5 +708,66 @@ export interface BatchTestResult {
   latency_ms: number | null;
   ok: boolean;
   error?: string | null;
+}
+
+export type BackupBackend = "webdav" | "s3";
+
+export interface BackupConfig {
+  backend: BackupBackend | null;
+  webdav_url: string | null;
+  webdav_username: string | null;
+  webdav_remote_path: string | null;
+  webdav_skip_ssl: boolean;
+  s3_endpoint_url: string | null;
+  s3_access_key: string | null;
+  s3_bucket: string | null;
+  s3_prefix: string | null;
+  s3_region: string | null;
+  encrypt_enabled: boolean;
+  encrypt_password_set: boolean;
+  auto_backup_interval_hours: number;
+  retain_count: number;
+  include_browser_state: boolean;
+  last_backup_at: string | null;
+}
+
+export interface BackupConfigUpdate {
+  backend?: BackupBackend | null;
+  webdav_url?: string | null;
+  webdav_username?: string | null;
+  webdav_password?: string | null;
+  webdav_remote_path?: string | null;
+  webdav_skip_ssl?: boolean;
+  s3_endpoint_url?: string | null;
+  s3_access_key?: string | null;
+  s3_secret_key?: string | null;
+  s3_bucket?: string | null;
+  s3_prefix?: string | null;
+  s3_region?: string | null;
+  encrypt_enabled?: boolean;
+  encrypt_password?: string | null;
+  auto_backup_interval_hours?: number;
+  retain_count?: number;
+  include_browser_state?: boolean;
+}
+
+export interface BackupFile {
+  name: string;
+  size_bytes: number;
+  created_at: string;
+  mode: "config" | "full";
+  encrypted: boolean;
+  checksum: string | null;
+}
+
+export interface BackupProgressEvent {
+  task_id: string;
+  type: "backup" | "restore";
+  stage: string;
+  percent: number;
+  message: string;
+  status: "running" | "completed" | "error";
+  error?: string | null;
+  filename?: string | null;
 }
 

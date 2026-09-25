@@ -48,7 +48,7 @@ hiddenimports += collect_submodules("backend")
 # Playwright ships a Node driver as data + its own PyInstaller hooks; collect it
 # fully so cloakbrowser can drive the browser over CDP. (We do NOT ship
 # Playwright's downloaded browsers — cloakbrowser fetches its own Chromium.)
-for pkg in ("playwright", "cloakbrowser", "camoufox", "browserforge", "apify_fingerprint_datapoints", "language_tags", "uvicorn", "webview"):
+for pkg in ("playwright", "cloakbrowser", "camoufox", "browserforge", "apify_fingerprint_datapoints", "language_tags", "uvicorn", "webview", "keyring", "boto3"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

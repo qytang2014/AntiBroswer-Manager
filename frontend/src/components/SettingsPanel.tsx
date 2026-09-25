@@ -11,8 +11,10 @@ import {
   Info,
   FolderTree,
   Key,
+  Cloud,
 } from "lucide-react";
 import { api, type SystemStatus, type SettingsUpdate } from "../lib/api";
+import { BackupRestorePanel } from "./BackupRestorePanel";
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -27,7 +29,7 @@ export function SettingsPanel({
   onOpenKernelManager,
   systemStatus,
 }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<"cloakbrowser" | "camoufox" | "general">("cloakbrowser");
+  const [activeTab, setActiveTab] = useState<"cloakbrowser" | "camoufox" | "general" | "backup">("cloakbrowser");
   const [licenses, setLicenses] = useState<
     { id: string; name: string; key: string; placeholder?: string; is_default: boolean }[]
   >([]);
@@ -177,6 +179,18 @@ export function SettingsPanel({
           >
             <Info className="w-3.5 h-3.5" />
             通用信息 (General)
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("backup")}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+              activeTab === "backup"
+                ? "border-purple-500 text-purple-400"
+                : "border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-700"
+            }`}
+          >
+            <Cloud className="w-3.5 h-3.5" />
+            备份与恢复 (Backup & Restore)
           </button>
         </div>
 
@@ -478,6 +492,9 @@ export function SettingsPanel({
             </div>
           )}
 
+          {/* TAB 4: Backup & Restore */}
+          {activeTab === "backup" && <BackupRestorePanel />}
+
           {error && <p className="text-xs text-red-400">{error}</p>}
         </div>
 
@@ -487,6 +504,7 @@ export function SettingsPanel({
             {activeTab === "cloakbrowser" && "配置仅作用于 CloakBrowser 内核"}
             {activeTab === "camoufox" && "Camoufox 引擎免授权开箱即用"}
             {activeTab === "general" && "系统状态正常运行中"}
+            {activeTab === "backup" && "备份包已受 AES-256-GCM 端到端加密与 SHA-256 校验保护"}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -495,17 +513,19 @@ export function SettingsPanel({
               disabled={saving}
               className="btn-secondary text-xs"
             >
-              取消 / Close
+              {activeTab === "backup" ? "完成 / Close" : "取消 / Close"}
             </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="btn-primary text-xs flex items-center gap-1.5"
-            >
-              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              <span>{saving ? "保存中…" : "保存设置"}</span>
-            </button>
+            {activeTab !== "backup" && (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="btn-primary text-xs flex items-center gap-1.5"
+              >
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>{saving ? "保存中…" : "保存设置"}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

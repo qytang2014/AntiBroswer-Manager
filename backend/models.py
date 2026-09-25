@@ -381,3 +381,74 @@ class KernelDownloadStatusResponse(BaseModel):
     task: KernelDownloadTask | None = None
 
 
+BackupBackend = Literal["webdav", "s3"]
+
+
+class BackupConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    backend: BackupBackend | None = None
+    # WebDAV specific
+    webdav_url: str | None = None
+    webdav_username: str | None = None
+    webdav_password: str | None = None  # write-only, stored in Keychain
+    webdav_remote_path: str | None = None
+    webdav_skip_ssl: bool | None = None
+    # S3 specific
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None  # write-only, stored in Keychain
+    s3_bucket: str | None = None
+    s3_prefix: str | None = None
+    s3_region: str | None = None
+    # Encryption
+    encrypt_enabled: bool | None = None
+    encrypt_password: str | None = None  # write-only, stored in Keychain
+    # Common
+    auto_backup_interval_hours: int | None = Field(default=None, ge=0)
+    retain_count: int | None = Field(default=None, ge=1, le=100)
+    include_browser_state: bool | None = None
+
+
+class BackupConfigResponse(BaseModel):
+    backend: BackupBackend | None = None
+    webdav_url: str | None = None
+    webdav_username: str | None = None
+    webdav_remote_path: str | None = None
+    webdav_skip_ssl: bool = False
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_bucket: str | None = None
+    s3_prefix: str | None = None
+    s3_region: str | None = None
+    encrypt_enabled: bool = False
+    encrypt_password_set: bool = False
+    auto_backup_interval_hours: int = 0
+    retain_count: int = 10
+    include_browser_state: bool = False
+    last_backup_at: str | None = None
+
+
+class BackupFile(BaseModel):
+    name: str
+    size_bytes: int
+    created_at: str
+    mode: Literal["config", "full"]
+    encrypted: bool
+    checksum: str | None = None
+
+
+class BackupRequest(BaseModel):
+    include_browser_state: bool | None = None
+
+
+class RestoreRequest(BaseModel):
+    filename: str
+    decrypt_password: str | None = None
+
+
+class BackupTestConnectionResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+
+

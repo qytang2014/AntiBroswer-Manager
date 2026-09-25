@@ -1,0 +1,173 @@
+"""Archive packing and unpacking operations for AntiBrowser-Manager.
+
+Creates and extracts `.tar.gz` backup bundles, utilizing SQLite online hot backup
+to ensure transactional database consistency without interrupting browser operations.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import logging
+import os
+import shutil
+import sqlite3
+import tarfile
+import tempfile
+from pathlib import Path
+from typing import Any, Callable
+
+from ..runtime import resolve_runtime
+from ..settings_store import load_settings
+
+logger = logging.getLogger("cloakbrowser.manager.backup.archiver")
+
+MANIFEST_VERSION = 1
+
+
+def _is_safe_tar_member(member: tarfile.TarInfo, target_dir: Path) -> bool:
+    """Protect against zip slip / directory traversal attacks."""
+    resolved_target = target_dir.resolve()
+    resolved_dest = (target_dir / member.name).resolve()
+    try:
+        resolved_dest.relative_to(resolved_target)
+        return True
+    except ValueError:
+        return False
+
+
+def pack(
+    dest_tar_path: Path,
+    include_browser_state: bool = False,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> dict[str, Any]:
+    """Package database, settings, extensions, and optionally browser user data into a .tar.gz archive.
+
+    Returns:
+        The manifest dict written into the archive.
+    """
+    runtime = resolve_runtime()
+    data_dir = runtime.data_dir
+    dest_tar_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if progress_callback:
+        progress_callback(10, "Initializing backup staging area...")
+
+    with tempfile.TemporaryDirectory(dir=str(dest_tar_path.parent)) as tmp_staging_str:
+        staging_dir = Path(tmp_staging_str)
+
+        # 1. Hot backup SQLite database
+        db_path = data_dir / "profiles.db"
+        staged_db_path = staging_dir / "profiles.db"
+        if db_path.exists():
+            if progress_callback:
+                progress_callback(15, "Performing consistent database hot backup...")
+            src_conn = sqlite3.connect(str(db_path))
+            dst_conn = sqlite3.connect(str(staged_db_path))
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+                src_conn.close()
+
+        # 2. Settings JSON
+        if progress_callback:
+            progress_callback(20, "Collecting system settings...")
+        settings_data = load_settings()
+        # Clean out any accidental secrets if present
+        clean_settings = {k: v for k, v in settings_data.items() if not k.endswith(("_password", "_secret_key"))}
+        staged_settings_path = staging_dir / "settings.json"
+        staged_settings_path.write_text(json.dumps(clean_settings, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # 3. Create Manifest
+        mode = "full" if include_browser_state else "config"
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "app_name": "AntiBrowser-Manager",
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "mode": mode,
+            "includes_browser_state": include_browser_state,
+            "checksum_algorithm": "sha256",
+        }
+        staged_manifest_path = staging_dir / "manifest.json"
+        staged_manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        # 4. Assemble .tar.gz
+        if progress_callback:
+            progress_callback(25, "Compressing archive files...")
+
+        with tarfile.open(dest_tar_path, "w:gz") as tar:
+            # Add manifest
+            tar.add(str(staged_manifest_path), arcname="manifest.json")
+
+            # Add database if present
+            if staged_db_path.exists():
+                tar.add(str(staged_db_path), arcname="profiles.db")
+
+            # Add settings
+            tar.add(str(staged_settings_path), arcname="settings.json")
+
+            # Add extensions directory
+            extensions_dir = data_dir / "extensions"
+            if extensions_dir.exists() and any(extensions_dir.iterdir()):
+                if progress_callback:
+                    progress_callback(30, "Archiving extensions directory...")
+                tar.add(str(extensions_dir), arcname="extensions")
+
+            # Optionally add browser profiles user data directory
+            if include_browser_state:
+                profiles_dir = data_dir / "profiles"
+                if profiles_dir.exists():
+                    if progress_callback:
+                        progress_callback(35, "Archiving browser user data directory (cookies, sessions)...")
+                    tar.add(str(profiles_dir), arcname="profiles")
+
+        if progress_callback:
+            progress_callback(40, "Archive compression complete.")
+
+        return manifest
+
+
+def unpack(
+    src_tar_path: Path,
+    extract_dir: Path,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> dict[str, Any]:
+    """Unpack a .tar.gz backup archive safely into the target extraction directory.
+
+    Returns:
+        The manifest dict parsed from the archive.
+
+    Raises:
+        ValueError: If archive is corrupted, contains malicious path traversal members, or missing manifest.
+    """
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    if progress_callback:
+        progress_callback(10, "Inspecting backup archive contents...")
+
+    with tarfile.open(src_tar_path, "r:gz") as tar:
+        # Validate member paths
+        members = tar.getmembers()
+        for member in members:
+            if not _is_safe_tar_member(member, extract_dir):
+                raise ValueError(f"Malicious archive member detected (path traversal): {member.name}")
+
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(path=extract_dir, filter="data")
+        else:
+            tar.extractall(path=extract_dir)
+
+    manifest_file = extract_dir / "manifest.json"
+    if not manifest_file.exists():
+        raise ValueError("Invalid backup archive: manifest.json is missing")
+
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Failed to read backup manifest.json: {exc}") from exc
+
+    if progress_callback:
+        progress_callback(50, "Backup archive extracted successfully.")
+
+    return manifest
