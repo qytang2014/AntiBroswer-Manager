@@ -838,6 +838,7 @@ export function ProfileForm({
                     管理/下载更多内核
                   </button>
                 )}
+              </div>
               <div className="flex items-center justify-between mt-4">
                 <label className="text-sm font-medium text-slate-300">内核类型 (Browser Type)</label>
               </div>
