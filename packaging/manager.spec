@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for CloakBrowser Manager (native Mac/Windows).
+"""PyInstaller spec for AntiBrowser-Manager (native Mac/Windows).
 
 Onedir build wrapped by the platform installer (.dmg / Inno Setup). Run from
 the manager repo root:  pyinstaller packaging/manager.spec
@@ -16,7 +16,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 # spec files don't get __file__; SPECPATH is injected by PyInstaller.
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821  (SPECPATH is a spec global)
 
-APP_NAME = "CloakBrowser Manager"
+APP_NAME = "AntiBrowser-Manager"
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 

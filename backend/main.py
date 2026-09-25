@@ -1,4 +1,4 @@
-"""CloakBrowser Manager — FastAPI application.
+"""AntiBrowser-Manager — FastAPI application.
 
 Serves the React dashboard (static files) and provides a REST API
 for browser profile management with live VNC viewing.
@@ -565,7 +565,7 @@ async def lifespan(app: FastAPI):
     browser_mgr._auto_launch_task = asyncio.create_task(browser_mgr.auto_launch_all())
     from .subscription_service import run_subscription_scheduler
     sub_scheduler_task = asyncio.create_task(run_subscription_scheduler())
-    logger.info("CloakBrowser Manager started")
+    logger.info("AntiBrowser-Manager started")
     yield
     logger.info("Shutting down — stopping all browsers...")
     sub_scheduler_task.cancel()
@@ -576,7 +576,7 @@ async def lifespan(app: FastAPI):
     await browser_mgr.cleanup_all()
 
 
-app = FastAPI(title="CloakBrowser Manager", lifespan=lifespan)
+app = FastAPI(title="AntiBrowser-Manager", lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
 
 
@@ -1453,7 +1453,7 @@ async def shutdown_manager(request: Request):
             os.kill(os.getpid(), signal.SIGINT)
 
         asyncio.create_task(_signal_self())
-    return {"ok": True, "message": "CloakBrowser Manager is shutting down"}
+    return {"ok": True, "message": "AntiBrowser-Manager is shutting down"}
 
 
 @app.get("/api/settings", response_model=SettingsResponse)

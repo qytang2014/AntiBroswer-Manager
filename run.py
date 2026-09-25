@@ -1,4 +1,4 @@
-"""Start CloakBrowser Manager natively on Windows or macOS."""
+"""Start AntiBrowser-Manager natively on Windows or macOS."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _find_or_install_uv() -> str:
             os.environ["PATH"] = f"{p.parent}{os.pathsep}{os.environ.get('PATH', '')}"
             return str(p)
 
-    print("[setup] 'uv' is required to manage dependencies and start CloakBrowser Manager.", flush=True)
+    print("[setup] 'uv' is required to manage dependencies and start AntiBrowser-Manager.", flush=True)
 
     if os.name == "nt":
         install_cmd = 'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
@@ -164,7 +164,7 @@ def main() -> int:
         return 1
 
     env = {**os.environ, "CLOAKBROWSER_MANAGER_RUNTIME": "native"}
-    print(f"[start] CloakBrowser Manager: {SERVER_URL}", flush=True)
+    print(f"[start] AntiBrowser-Manager: {SERVER_URL}", flush=True)
     # Replace this bootstrap process with app_entry.py under the venv python.
     # os.execve hands off entirely — no lingering parent, no wrapper-of-wrapper —
     # so a dev run becomes the exact same in-process server + native webview

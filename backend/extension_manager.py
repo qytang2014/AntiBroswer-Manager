@@ -85,7 +85,7 @@ from collections.abc import AsyncIterator
 
 @contextlib.asynccontextmanager
 async def get_imported_proxy_url() -> AsyncIterator[str | None]:
-    """Provide a proxy URL from CloakBrowser Manager's imported nodes if available.
+    """Provide a proxy URL from AntiBrowser-Manager's imported nodes if available.
 
     - Selects the best node (lowest positive latency, or first available).
     - If sing-box node (vless, vmess, trojan, etc.), spawns a temporary fast_singbox_proxy instance.
@@ -134,7 +134,7 @@ async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
     """Search Google Chrome Web Store by keyword, or resolve ID/URL directly.
 
     Tries local network connection first. If local network fails/times out,
-    falls back to CloakBrowser Manager's imported proxy nodes.
+    falls back to AntiBrowser-Manager's imported proxy nodes.
     """
     import html
     import urllib.parse

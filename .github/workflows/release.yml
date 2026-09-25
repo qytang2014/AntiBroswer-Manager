@@ -96,9 +96,9 @@ jobs:
       - name: Build unsigned .app
         run: bash packaging/build_macos.sh   # no CB_SIGN_IDENTITY -> unsigned
       - name: Sanity — arch of main executable
-        run: lipo -archs "dist_native/CloakBrowser Manager.app/Contents/MacOS/CloakBrowser Manager"
+        run: lipo -archs "dist_native/AntiBrowser-Manager.app/Contents/MacOS/AntiBrowser-Manager"
       - name: Tar the .app
-        run: COPYFILE_DISABLE=1 tar czpf "app-${{ matrix.arch }}.tar.gz" -C dist_native "CloakBrowser Manager.app"
+        run: COPYFILE_DISABLE=1 tar czpf "app-${{ matrix.arch }}.tar.gz" -C dist_native "AntiBrowser-Manager.app"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mac-app-${{ matrix.arch }}
@@ -124,9 +124,9 @@ jobs:
       - name: Merge -> universal .app
         run: |
           bash packaging/make_universal_app.sh \
-            "arm/CloakBrowser Manager.app" \
-            "intel/CloakBrowser Manager.app" \
-            "dist_native/CloakBrowser Manager.app"
+            "arm/AntiBrowser-Manager.app" \
+            "intel/AntiBrowser-Manager.app" \
+            "dist_native/AntiBrowser-Manager.app"
       - name: Ad-hoc sign the universal app
         # We ship UNSIGNED (no Developer ID, no notarization) to keep a personal
         # certificate name off the public binary — consistent with the ad-hoc
@@ -136,18 +136,18 @@ jobs:
         # clear the download quarantine on first launch (see README). Switch to a
         # CloakHQ org Developer ID later to drop that step + notarize.
         run: |
-          codesign --force --deep --sign - "dist_native/CloakBrowser Manager.app"
-          codesign -dvv "dist_native/CloakBrowser Manager.app" 2>&1 | grep -i "Signature=adhoc" \
+          codesign --force --deep --sign - "dist_native/AntiBrowser-Manager.app"
+          codesign -dvv "dist_native/AntiBrowser-Manager.app" 2>&1 | grep -i "Signature=adhoc" \
             && echo "ad-hoc signature OK"
       - name: Build .dmg
         run: |
-          APP="dist_native/CloakBrowser Manager.app"
+          APP="dist_native/AntiBrowser-Manager.app"
           DMG="dist_native/CloakBrowser-Manager-${{ needs.version.outputs.version }}-universal.dmg"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
           STAGE="$(mktemp -d)"
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "CloakBrowser Manager" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          hdiutil create -volname "AntiBrowser-Manager" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
           rm -rf "$STAGE"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -577,13 +577,13 @@ jobs:
           awk -v ver="$VER" '/^## \[/{ if ($0 ~ "^## \\["ver"\\]") {f=1; next} else if (f) exit } f' \
             CHANGELOG.md > notes.md || true
           if [ ! -s notes.md ]; then
-            echo "Native desktop installers for CloakBrowser Manager $TAG." > notes.md
+            echo "Native desktop installers for AntiBrowser-Manager $TAG." > notes.md
           fi
           {
             echo
             echo "---"
             echo
-            echo "**macOS (universal — Apple Silicon + Intel):** not notarized yet, so macOS blocks the first launch. Run \`xattr -rc \"/Applications/CloakBrowser Manager.app\"\` once, or use **System Settings → Privacy & Security → Open Anyway**."
+            echo "**macOS (universal — Apple Silicon + Intel):** not notarized yet, so macOS blocks the first launch. Run \`xattr -rc \"/Applications/AntiBrowser-Manager.app\"\` once, or use **System Settings → Privacy & Security → Open Anyway**."
             echo
             echo "**Windows:** if SmartScreen warns, click **More info → Run anyway**."
             echo
@@ -594,6 +594,6 @@ jobs:
           echo "=== release notes ===" && cat notes.md
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "CloakBrowser Manager $TAG" \
+            --title "AntiBrowser-Manager $TAG" \
             --notes-file notes.md \
             dist/*-universal.dmg dist/*-setup.exe dist/SHA256SUMS

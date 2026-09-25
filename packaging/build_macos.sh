@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the native macOS CloakBrowser Manager: freeze -> .app -> .dmg,
+# Build the native macOS AntiBrowser-Manager: freeze -> .app -> .dmg,
 # optionally codesign + notarize + staple.
 #
 # Runs unsigned locally when no signing env is set. CI-ready: the same script
@@ -15,13 +15,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="CloakBrowser Manager"
+APP_NAME="AntiBrowser-Manager"
 VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
 DIST="$ROOT/dist_native"
 BUILD="$ROOT/build_native"
 BUILD_VENV="${PACKAGING_VENV:-$ROOT/.venv-build}"
 
-echo "[build] CloakBrowser Manager $VERSION (macOS)"
+echo "[build] AntiBrowser-Manager $VERSION (macOS)"
 
 # 0. Clean prior build artifacts, caches, and intermediate outputs.
 echo "[build] cleaning prior build artifacts and caches"

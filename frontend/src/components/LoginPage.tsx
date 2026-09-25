@@ -33,7 +33,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
             <Lock className="h-5 w-5 text-accent" />
           </div>
           <h1 className="text-lg font-semibold text-gray-100">
-            CloakBrowser Manager
+            AntiBrowser-Manager
           </h1>
           <p className="text-xs text-gray-500 mt-1">Enter your access token</p>
         </div>

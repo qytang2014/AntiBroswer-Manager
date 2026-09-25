@@ -1,5 +1,5 @@
 /**
- * API client for CloakBrowser Manager backend.
+ * API client for AntiBrowser-Manager backend.
  */
 
 export type HostOS = "windows" | "macos" | "linux";

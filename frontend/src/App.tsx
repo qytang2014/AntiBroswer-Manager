@@ -126,7 +126,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const handleCloseKernelManager = useCallback(() => setKernelManagerOpen(false), []);
 
   const handleQuit = useCallback(async () => {
-    if (!window.confirm("Quit CloakBrowser Manager? This stops the server and closes all running profiles.")) {
+    if (!window.confirm("Quit AntiBrowser-Manager? This stops the server and closes all running profiles.")) {
       return;
     }
     setStopped(true);
@@ -293,7 +293,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-surface-0 text-center px-6">
         <Power className="h-10 w-10 text-gray-600 mb-4" />
-        <h1 className="text-lg font-medium mb-1">CloakBrowser Manager has stopped</h1>
+        <h1 className="text-lg font-medium mb-1">AntiBrowser-Manager has stopped</h1>
         <p className="text-sm text-gray-500">The server is no longer running. You can close this tab.</p>
         <p className="text-xs text-gray-600 mt-4">Relaunch the app to start it again.</p>
       </div>

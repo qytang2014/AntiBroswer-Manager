@@ -1,4 +1,4 @@
-"""Native/frozen entry point for CloakBrowser Manager.
+"""Native/frozen entry point for AntiBrowser-Manager.
 
 This is the PyInstaller target. Unlike run.py (the dev-from-source launcher,
 which shells out to `uvicorn backend.main:app`), a frozen bundle cannot resolve
@@ -28,7 +28,7 @@ import webbrowser
 SERVER_URL = "http://127.0.0.1:8080"
 HOST = "127.0.0.1"
 PORT = 8080
-WINDOW_TITLE = "CloakBrowser Manager"
+WINDOW_TITLE = "AntiBrowser-Manager"
 
 
 def _port_available() -> bool:

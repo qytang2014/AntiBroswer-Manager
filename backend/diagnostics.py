@@ -1,4 +1,4 @@
-"""Startup + crash diagnostics for CloakBrowser Manager.
+"""Startup + crash diagnostics for AntiBrowser-Manager.
 
 Everything here aims at one goal: make an arbitrary FUTURE crash diagnosable
 from the rotating manager.log alone, without a repro. Three layers:
