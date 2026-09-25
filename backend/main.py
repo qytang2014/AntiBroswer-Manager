@@ -40,6 +40,18 @@ from .runtime import resolve_runtime
 _RUNTIME_CONFIG = resolve_runtime()
 os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(_RUNTIME_CONFIG.data_dir / "kernels" / "cloakbrowser"))
 
+# Monkey patch platformdirs for camoufox before importing it
+try:
+    import platformdirs
+    _orig_user_cache_dir = platformdirs.user_cache_dir
+    def _custom_user_cache_dir(appname=None, *args, **kwargs):
+        if appname == "camoufox":
+            return str(_RUNTIME_CONFIG.data_dir / "kernels" / "camoufox")
+        return _orig_user_cache_dir(appname, *args, **kwargs)
+    platformdirs.user_cache_dir = _custom_user_cache_dir
+except ImportError:
+    pass
+
 from . import database as db
 from cloakbrowser.license import CloakBrowserLicenseError
 
@@ -766,16 +778,6 @@ async def get_kernel_download_status_endpoint():
 async def download_kernel_stream_endpoint(version: str, tier: str = "free", browser_type: str = "cloakbrowser"):
     """Download and extract a stealth kernel with real-time SSE progress events."""
     async def event_generator():
-        if browser_type == "camoufox":
-            err_data = {
-                "stage": "error",
-                "message": "Camoufox 下载逻辑将在下一阶段（Phase 3）完成对接，暂不可用。",
-                "percent": 0,
-                "browser_type": browser_type,
-            }
-            yield f"data: {json.dumps(err_data, ensure_ascii=False)}\n\n"
-            return
-
         try:
             async for event in kernel_download_manager.subscribe(
                 version=version,

@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import time
+from .camoufox_downloader import stream_download_camoufox
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -185,30 +186,47 @@ def list_available_kernels() -> dict[str, Any]:
     # Overall installed flag: True if at least one kernel is ready
     any_installed = any(k["installed"] for k in kernels)
 
-    # 5. Add Camoufox placeholders for Phase 2 UI demonstration
-    # In Phase 3, this will be dynamically fetched or scanned from local camoufox cache.
-    camoufox_ver = "130.0"
-    camoufox_key = f"{camoufox_ver}:free:camoufox"
-    camoufox_ready = False
-    
-    # Check if installed
-    from .runtime import resolve_runtime
-    camoufox_dir = resolve_runtime().data_dir / "kernels" / "camoufox" / camoufox_ver
-    if camoufox_dir.exists():
-        camoufox_ready = True
+    # 5. Add Camoufox versions (Phase 3)
+    try:
+        from camoufox.pkgman import list_available_versions
+        camoufox_versions = list_available_versions(include_prerelease=False)[:5]
         
-    kernels.append({
-        "version": camoufox_ver,
-        "tier": "free",
-        "browser_type": "camoufox",
-        "name": f"Camoufox {camoufox_ver}",
-        "description": "基于 Firefox 的指纹浏览器内核 (支持全平台指纹随机化)",
-        "platform": current_platform,
-        "installed": camoufox_ready,
-        "is_active": False,
-        "binary_path": str(camoufox_dir) if camoufox_ready else None,
-        "size_mb": None,
-    })
+        from .runtime import resolve_runtime
+        camoufox_cache_dir = resolve_runtime().data_dir / "kernels" / "camoufox" / "browsers"
+        
+        if not camoufox_versions:
+            camoufox_versions = [{"version": "130.0", "display": "130.0", "asset_size": None}]
+            
+        for cv in camoufox_versions:
+            cv_ver = getattr(cv, "display", getattr(cv, "version", "Unknown"))
+            cv_pure_ver = getattr(cv.version, "full_string", str(cv.version))
+            camoufox_ready = False
+            camoufox_bin_path = None
+            
+            import glob
+            installed_match = glob.glob(f"{camoufox_cache_dir}/*/{cv_pure_ver}*")
+            if installed_match:
+                camoufox_ready = True
+                camoufox_bin_path = installed_match[0]
+            
+            size_mb = None
+            if getattr(cv, "asset_size", None):
+                size_mb = round(cv.asset_size / (1024 * 1024), 1)
+
+            kernels.append({
+                "version": cv_ver,
+                "tier": "free",
+                "browser_type": "camoufox",
+                "name": f"Camoufox {cv_ver}",
+                "description": "基于 Firefox 的指纹浏览器内核 (全平台指纹随机化)",
+                "platform": current_platform,
+                "installed": camoufox_ready,
+                "is_active": False,
+                "binary_path": str(camoufox_bin_path) if camoufox_ready else None,
+                "size_mb": size_mb,
+            })
+    except Exception as e:
+        print(f"Failed to fetch Camoufox versions: {e}")
 
     return {
         "current_platform": current_platform,
@@ -612,6 +630,7 @@ class KernelDownloadManager:
         self,
         version: str,
         tier: str = "free",
+        browser_type: str = "cloakbrowser",
         license_key: str | None = None,
         release_channel: str | None = None,
     ) -> None:
@@ -621,18 +640,20 @@ class KernelDownloadManager:
                 self._current_info
                 and self._current_info.get("version") == version
                 and self._current_info.get("tier") == tier
+                and self._current_info.get("browser_type") == browser_type
             ):
                 return
             raise RuntimeError(
-                f"已有内核正在下载中: Chromium {self._current_info.get('version')} ({self._current_info.get('tier')})"
+                f"已有内核正在下载中: {self._current_info.get('browser_type', 'cloakbrowser')} {self._current_info.get('version')} ({self._current_info.get('tier')})"
             )
 
         self._finished_time = None
         self._current_info = {
             "version": version,
             "tier": tier,
+            "browser_type": browser_type,
             "stage": "connecting",
-            "message": f"正在准备下载 Chromium {version} ({tier})...",
+            "message": f"正在准备下载 {browser_type} {version} ({tier})...",
             "percent": 0,
             "downloaded_bytes": 0,
             "total_bytes": 0,
@@ -640,23 +661,28 @@ class KernelDownloadManager:
             "binary_path": None,
         }
         self._current_task = asyncio.create_task(
-            self._download_worker(version, tier, license_key, release_channel)
+            self._download_worker(version, tier, browser_type, license_key, release_channel)
         )
 
     async def _download_worker(
         self,
         version: str,
         tier: str,
+        browser_type: str,
         license_key: str | None,
         release_channel: str | None,
     ) -> None:
         try:
-            async for event in stream_download_kernel(
-                version=version,
-                tier=tier,
-                license_key=license_key,
-                release_channel=release_channel,
-            ):
+            if browser_type == "camoufox":
+                generator = stream_download_camoufox(version)
+            else:
+                generator = stream_download_kernel(
+                    version=version,
+                    tier=tier,
+                    license_key=license_key,
+                    release_channel=release_channel,
+                )
+            async for event in generator:
                 event_data = {
                     "version": version,
                     "tier": tier,

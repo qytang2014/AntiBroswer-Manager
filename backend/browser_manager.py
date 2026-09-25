@@ -918,64 +918,80 @@ class BrowserManager:
 
             last_cdp_error: Exception | None = None
             try:
-                for attempt in range(1, CDP_START_ATTEMPTS + 1):
-                    cdp_port = self._reserve_cdp_port()
+                if profile.get("browser_type") == "camoufox":
+                    from playwright.async_api import async_playwright
+                    from camoufox.async_api import AsyncNewBrowser
+                    pw = await async_playwright().start()
+                    
+                    camoufox_options = {
+                        "headless": launch_options.get("headless", False),
+                        "persistent_context": True,
+                        "user_data_dir": launch_options["user_data_dir"],
+                        "browser": effective_kernel,
+                        "proxy": launch_options.get("proxy"),
+                        "enable_cache": True,
+                    }
+                    if display is not None:
+                        camoufox_options["env"] = launch_options.get("env")
+                        camoufox_options["virtual_display"] = f":{display}"
+                        
+                    if extra_args:
+                        camoufox_options["args"] = extra_args
 
-                    launch_options["args"] = [
-                        *extra_args,
-                        f"--remote-debugging-port={cdp_port}",
-                    ]
                     try:
-                        context = await launch_persistent_context_async(**launch_options)
-                        # An over-cap/denied seat leaves the browser booting but never
-                        # serving a usable CDP endpoint — so waiting on CDP would just
-                        # time out (or worse). The wrapper wrote the reason to a denial
-                        # file; check it immediately and each CDP poll so a denial bails
-                        # in ~1s instead of waiting out CDP that will never come.
-                        denial_path = getattr(context, "_cloak_denial_path", None)
-                        lic = self._denial_error(denial_path)
-                        if lic is not None:
-                            raise lic
-                        await self._wait_for_cdp(cdp_port, denial_path=denial_path)
-                        break
-                    except asyncio.CancelledError:
-                        if context is not None:
-                            await self._close_context(context, profile_id)
-                        self._release_cdp_port(cdp_port)
-                        context = None
-                        cdp_port = None
-                        raise
+                        context = await AsyncNewBrowser(pw, **camoufox_options)
+                        context._playwright_instance = pw
+                        cdp_port = 0
                     except Exception as exc:
-                        last_cdp_error = exc
-                        # Grab the denial path before dropping the context: a denial
-                        # that lands during _wait_for_cdp surfaces as a TimeoutError,
-                        # not the license exception, so check the file explicitly.
-                        dp = getattr(context, "_cloak_denial_path", None) if context is not None else None
-                        if context is not None:
-                            await self._close_context(context, profile_id)
-                        self._release_cdp_port(cdp_port)
-                        context = None
-                        cdp_port = None
-                        # A license denial (out of seats, bad/expired key, server
-                        # unreachable, local config) is deterministic — retrying just
-                        # wastes ~10s and re-denies. Fail fast with the real reason,
-                        # whether it raised as the license exception or as a timeout.
-                        if isinstance(exc, CloakBrowserLicenseError):
-                            raise
-                        lic = self._denial_error(dp)
-                        if lic is not None:
-                            raise lic from exc
-                        logger.warning(
-                            "Browser/CDP startup attempt %d/%d failed for %s: %s",
-                            attempt,
-                            CDP_START_ATTEMPTS,
-                            profile_id,
-                            exc,
-                        )
+                        await pw.stop()
+                        raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc
                 else:
-                    raise RuntimeError(
-                        f"Unable to start verified CDP for profile {profile_id}"
-                    ) from last_cdp_error
+                    for attempt in range(1, CDP_START_ATTEMPTS + 1):
+                        cdp_port = self._reserve_cdp_port()
+
+                        launch_options["args"] = [
+                            *extra_args,
+                            f"--remote-debugging-port={cdp_port}",
+                        ]
+                        try:
+                            context = await launch_persistent_context_async(**launch_options)
+                            denial_path = getattr(context, "_cloak_denial_path", None)
+                            lic = self._denial_error(denial_path)
+                            if lic is not None:
+                                raise lic
+                            await self._wait_for_cdp(cdp_port, denial_path=denial_path)
+                            break
+                        except asyncio.CancelledError:
+                            if context is not None:
+                                await self._close_context(context, profile_id)
+                            self._release_cdp_port(cdp_port)
+                            context = None
+                            cdp_port = None
+                            raise
+                        except Exception as exc:
+                            last_cdp_error = exc
+                            dp = getattr(context, "_cloak_denial_path", None) if context is not None else None
+                            if context is not None:
+                                await self._close_context(context, profile_id)
+                            self._release_cdp_port(cdp_port)
+                            context = None
+                            cdp_port = None
+                            if isinstance(exc, CloakBrowserLicenseError):
+                                raise
+                            lic = self._denial_error(dp)
+                            if lic is not None:
+                                raise lic from exc
+                            logger.warning(
+                                "Browser/CDP startup attempt %d/%d failed for %s: %s",
+                                attempt,
+                                CDP_START_ATTEMPTS,
+                                profile_id,
+                                exc,
+                            )
+                    else:
+                        raise RuntimeError(
+                            f"Unable to start verified CDP for profile {profile_id}"
+                        ) from last_cdp_error
 
                 if context is None or cdp_port is None:
                     raise RuntimeError(f"Browser startup did not complete for profile {profile_id}")
@@ -1314,6 +1330,9 @@ class BrowserManager:
     async def _close_context(self, context: Any, profile_id: str) -> None:
         try:
             await context.close()
+            pw = getattr(context, "_playwright_instance", None)
+            if pw:
+                await pw.stop()
         except Exception as exc:
             logger.warning("Error closing context for %s: %s", profile_id, exc)
 
