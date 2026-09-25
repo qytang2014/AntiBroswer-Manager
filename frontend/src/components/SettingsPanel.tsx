@@ -125,7 +125,7 @@ export function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) {
         <div className="space-y-6 p-4 overflow-y-auto">
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="label">License Management</label>
+              <label className="label">CloakBrowser Pro 授权管理</label>
               <button type="button" onClick={addLicense} className="btn-secondary text-xs flex items-center gap-1">
                 <Plus className="w-3 h-3" /> Add License
               </button>
@@ -171,12 +171,12 @@ export function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) {
               ))}
               {licenses.length === 0 && (
                 <div className="text-sm text-gray-500 text-center py-4 border border-dashed border-border rounded">
-                  No licenses added. Profiles will run in free keyless mode.
+                  未配置授权，CloakBrowser 环境将以免费无 Key 模式运行。（Camoufox 引擎完全开源免费，无需授权）
                 </div>
               )}
             </div>
             <p className="mt-2 text-xs text-gray-500">
-              Manage multiple licenses. You can select a specific license per profile.
+              管理 CloakBrowser Pro 高级授权，您可以在不同环境单独指定使用的授权。注：此处配置仅对 CloakBrowser 引擎生效，不影响 Camoufox。
             </p>
           </div>
 
