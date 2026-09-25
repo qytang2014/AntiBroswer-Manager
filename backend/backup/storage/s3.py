@@ -6,10 +6,12 @@ import asyncio
 import datetime
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError, EndpointConnectionError
 
@@ -124,16 +126,67 @@ class S3Storage(BackupStorage):
         key = self._get_key(remote_filename)
 
         if progress_callback:
-            progress_callback(10, f"Downloading {remote_filename} from S3...")
+            progress_callback(5, f"正在连接 S3 准备下载 {remote_filename}...")
 
         def _download():
             s3 = self._get_client()
-            s3.download_file(self.bucket, key, str(local_path))
+            total_bytes = 0
+            try:
+                head = s3.head_object(Bucket=self.bucket, Key=key)
+                total_bytes = int(head.get("ContentLength", 0))
+            except Exception:
+                pass
+
+            class S3ProgressTracker:
+                def __init__(self):
+                    self.downloaded = 0
+                    self.last_time = time.monotonic()
+                    self.last_bytes = 0
+
+                def __call__(self, bytes_transferred: int):
+                    self.downloaded += bytes_transferred
+                    now = time.monotonic()
+                    if progress_callback and (
+                        now - self.last_time >= 0.35
+                        or (total_bytes > 0 and self.downloaded >= total_bytes)
+                    ):
+                        interval = max(0.001, now - self.last_time)
+                        speed = (self.downloaded - self.last_bytes) / interval
+                        self.last_time = now
+                        self.last_bytes = self.downloaded
+
+                        mb_down = self.downloaded / (1024 * 1024)
+                        speed_mb = speed / (1024 * 1024)
+
+                        if total_bytes > 0:
+                            pct = min(99, int((self.downloaded / total_bytes) * 100))
+                            mb_total = total_bytes / (1024 * 1024)
+                            progress_callback(
+                                pct,
+                                f"正在从 S3 下载 {remote_filename}: {mb_down:.1f} MB / {mb_total:.1f} MB ({pct}%) · {speed_mb:.1f} MB/s",
+                            )
+                        else:
+                            progress_callback(
+                                50,
+                                f"正在从 S3 下载 {remote_filename}: 已下载 {mb_down:.1f} MB · {speed_mb:.1f} MB/s",
+                            )
+
+            config = TransferConfig(
+                max_concurrency=8,
+                multipart_chunksize=8 * 1024 * 1024,
+            )
+            s3.download_file(
+                self.bucket,
+                key,
+                str(local_path),
+                Config=config,
+                Callback=S3ProgressTracker(),
+            )
 
         await asyncio.to_thread(_download)
 
         if progress_callback:
-            progress_callback(100, f"Downloaded {remote_filename} successfully")
+            progress_callback(100, f"从 S3 下载 {remote_filename} 完成")
 
     async def list_backups(self) -> list[dict[str, Any]]:
         def _list():

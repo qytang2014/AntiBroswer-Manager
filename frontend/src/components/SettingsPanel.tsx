@@ -504,7 +504,7 @@ export function SettingsPanel({
             {activeTab === "cloakbrowser" && "配置仅作用于 CloakBrowser 内核"}
             {activeTab === "camoufox" && "Camoufox 引擎免授权开箱即用"}
             {activeTab === "general" && "系统状态正常运行中"}
-            {activeTab === "backup" && "备份包已受 AES-256-GCM 端到端加密与 SHA-256 校验保护"}
+            {activeTab === "backup" && "备份包受 AES-256-GCM 端到端加密保护（配置更改请在面板内点击「保存所有备份与加密配置」）"}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -513,7 +513,7 @@ export function SettingsPanel({
               disabled={saving}
               className="btn-secondary text-xs"
             >
-              {activeTab === "backup" ? "完成 / Close" : "取消 / Close"}
+              {activeTab === "backup" ? "关闭窗口 (Close)" : "取消 / Close"}
             </button>
             {activeTab !== "backup" && (
               <button

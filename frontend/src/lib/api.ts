@@ -720,10 +720,12 @@ export interface BackupConfig {
   backend: BackupBackend | null;
   webdav_url: string | null;
   webdav_username: string | null;
+  webdav_password_set?: boolean;
   webdav_remote_path: string | null;
   webdav_skip_ssl: boolean;
   s3_endpoint_url: string | null;
   s3_access_key: string | null;
+  s3_secret_key_set?: boolean;
   s3_bucket: string | null;
   s3_prefix: string | null;
   s3_region: string | null;

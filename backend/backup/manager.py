@@ -36,19 +36,27 @@ class BackupManager:
         stored = load_settings().get("backup", {})
         backend = stored.get("backend")
 
+        def _check_cred(key: str) -> bool:
+            try:
+                return credentials.has_credential(key)
+            except Exception:
+                return False
+
         return {
             "backend": backend,
             "webdav_url": stored.get("webdav_url"),
             "webdav_username": stored.get("webdav_username"),
+            "webdav_password_set": _check_cred("webdav_password"),
             "webdav_remote_path": stored.get("webdav_remote_path", "/antibrowser_backups"),
             "webdav_skip_ssl": bool(stored.get("webdav_skip_ssl", False)),
             "s3_endpoint_url": stored.get("s3_endpoint_url"),
             "s3_access_key": stored.get("s3_access_key"),
+            "s3_secret_key_set": _check_cred("s3_secret_key"),
             "s3_bucket": stored.get("s3_bucket"),
             "s3_prefix": stored.get("s3_prefix", "antibrowser_backups"),
             "s3_region": stored.get("s3_region", "us-east-1"),
             "encrypt_enabled": bool(stored.get("encrypt_enabled", False)),
-            "encrypt_password_set": credentials.has_credential("encrypt_password"),
+            "encrypt_password_set": _check_cred("encrypt_password"),
             "auto_backup_interval_hours": int(stored.get("auto_backup_interval_hours", 0)),
             "retain_count": int(stored.get("retain_count", 10)),
             "include_browser_state": bool(stored.get("include_browser_state", False)),
@@ -333,11 +341,12 @@ class BackupManager:
                 storage = get_storage_backend(cfg)
 
                 # Step 1: Download backup and sidecar checksum
-                progress_cb(15, f"正在连接远端存储下载备份包 {filename}...")
+                progress_cb(10, f"正在连接远端存储下载备份包 {filename}...")
                 local_file = work_dir / filename
 
                 def dl_cb(pct: int, msg: str) -> None:
-                    mapped_pct = 15 + int((pct / 100) * 15)
+                    # Allocate 10% -> 60% of the overall progress bar to download
+                    mapped_pct = 10 + int((pct / 100) * 50)
                     progress_cb(mapped_pct, msg)
 
                 await storage.download_file(filename, local_file, progress_callback=dl_cb)
@@ -353,7 +362,7 @@ class BackupManager:
 
                 # Step 2: Verify checksum if sidecar is available
                 if has_sidecar and local_sidecar.is_file():
-                    progress_cb(35, "Verifying SHA-256 package integrity...")
+                    progress_cb(65, "正在校验 SHA-256 数据包完整性...")
                     expected_hash = local_sidecar.read_text(encoding="utf-8").strip().split()[0]
                     if not crypto.verify_sha256(local_file, expected_hash):
                         raise crypto.IntegrityError(
@@ -363,7 +372,7 @@ class BackupManager:
 
                 # Step 3: Decrypt if .enc
                 if filename.endswith(".enc"):
-                    progress_cb(50, "Decrypting backup archive with AES-256-GCM...")
+                    progress_cb(72, "正在使用 AES-256-GCM 解密备份数据包...")
                     password = decrypt_password or credentials.get_credential("encrypt_password")
                     if not password:
                         raise crypto.DecryptionError(
@@ -376,13 +385,13 @@ class BackupManager:
                     local_tar = local_file
 
                 # Step 4: Extract and inspect
-                progress_cb(65, "Extracting backup archive contents...")
+                progress_cb(80, "正在解压备份数据包内容...")
                 staging_dir = work_dir / "extracted"
                 manifest = archiver.unpack(local_tar, staging_dir)
                 logger.info("Restoring from manifest: %s", manifest)
 
                 # Step 5: Create a safety snapshot of current data before overwriting
-                progress_cb(75, "Creating safety snapshot of current system state...")
+                progress_cb(88, "正在创建当前系统状态的安全快照...")
                 data_dir = runtime.data_dir
                 snapshot_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
                 snapshot_dir = data_dir / "snapshots" / f"pre_restore_{snapshot_time}"
@@ -394,7 +403,7 @@ class BackupManager:
                     shutil.copy2(data_dir / "settings.json", snapshot_dir / "settings.json")
 
                 # Step 6: Atomic swap of databases and configuration
-                progress_cb(85, "Restoring database and system configuration...")
+                progress_cb(92, "正在恢复数据库与系统配置...")
                 if (staging_dir / "profiles.db").exists():
                     shutil.copy2(staging_dir / "profiles.db", data_dir / "profiles.db")
 
@@ -405,13 +414,13 @@ class BackupManager:
                     save_settings(restored_settings)
 
                 if (staging_dir / "extensions").is_dir():
-                    progress_cb(90, "Restoring browser extensions...")
+                    progress_cb(95, "正在恢复浏览器扩展插件...")
                     dest_ext = data_dir / "extensions"
                     dest_ext.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(staging_dir / "extensions", dest_ext, dirs_exist_ok=True)
 
                 if manifest.get("includes_browser_state") and (staging_dir / "profiles").is_dir():
-                    progress_cb(95, "Restoring browser profile cookies and sessions...")
+                    progress_cb(98, "正在恢复浏览器环境 Cookies 与会话状态...")
                     dest_prof = data_dir / "profiles"
                     dest_prof.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(staging_dir / "profiles", dest_prof, dirs_exist_ok=True)
@@ -426,7 +435,7 @@ class BackupManager:
                         "type": "restore",
                         "stage": "complete",
                         "percent": 100,
-                        "message": "Restoration completed successfully! Please refresh the page.",
+                        "message": "数据恢复成功！请刷新页面加载最新环境与配置。",
                         "status": "completed",
                         "error": None,
                     },

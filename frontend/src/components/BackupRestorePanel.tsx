@@ -18,6 +18,7 @@ import {
   ChevronUp,
   RotateCcw,
   Sparkles,
+  Save,
 } from "lucide-react";
 import {
   api,
@@ -69,6 +70,7 @@ export function BackupRestorePanel() {
   // Progress state for active backup
   const [activeBackupTask, setActiveBackupTask] = useState<BackupProgressEvent | null>(null);
   const backupAbortRef = useRef<AbortController | null>(null);
+  const [fullBackupConfirmOpen, setFullBackupConfirmOpen] = useState(false);
 
   // Restore Modal & In-place progress state
   const [restoreModalFile, setRestoreModalFile] = useState<BackupFile | null>(null);
@@ -403,39 +405,37 @@ export function BackupRestorePanel() {
               <h4 className="text-xs font-semibold text-gray-200">快捷手动备份 (Instant Backup)</h4>
             </div>
             <p className="text-[11px] text-gray-400 mt-0.5">
-              随时将当前全部浏览器环境、配置及数据库打包并安全推送至远端存储。
+              默认推荐快速备份（轻量、秒级打包）；全量备份包含各环境完整 Cookies 与持久化会话。
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            {/* 快速备份 (醒目主按钮，默认推荐) */}
             <button
               type="button"
               disabled={Boolean(activeBackupTask) || !isConfigured}
               onClick={() => handleTriggerBackup(false)}
-              className="btn-secondary text-xs flex items-center gap-1.5 py-2 px-3.5 hover:border-blue-500/40"
+              className="btn-primary text-xs flex items-center gap-1.5 py-2 px-4 shadow-sm font-medium"
               title="打包 profiles.db、settings.json 和 extensions，快速且轻量"
-            >
-              {activeBackupTask ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-              ) : (
-                <Cloud className="w-3.5 h-3.5 text-blue-400" />
-              )}
-              <span>快速备份 (仅配置)</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={Boolean(activeBackupTask) || !isConfigured}
-              onClick={() => handleTriggerBackup(true)}
-              className="btn-primary text-xs flex items-center gap-1.5 py-2 px-4 shadow-sm"
-              title="包含浏览器 cookies 与 session 登录态的完整全量备份"
             >
               {activeBackupTask ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Database className="w-3.5 h-3.5" />
+                <Cloud className="w-3.5 h-3.5" />
               )}
-              <span>全量备份 (含浏览器会话)</span>
+              <span>快速备份 (推荐)</span>
+            </button>
+
+            {/* 全量备份 (次级按钮，需二次确认) */}
+            <button
+              type="button"
+              disabled={Boolean(activeBackupTask) || !isConfigured}
+              onClick={() => setFullBackupConfirmOpen(true)}
+              className="btn-secondary text-xs flex items-center gap-1.5 py-2 px-3 text-gray-300 hover:text-gray-100 hover:border-gray-500/50"
+              title="包含全部浏览器环境完整会话、本地存储和 Cookies，体积较大"
+            >
+              <Database className="w-3.5 h-3.5 text-gray-400" />
+              <span>全量备份 (含全部会话)</span>
             </button>
           </div>
         </div>
@@ -679,14 +679,14 @@ export function BackupRestorePanel() {
                   <div>
                     <label className="text-xs font-medium text-gray-300 block mb-1">
                       密码 (Password)
-                      {config?.backend === "webdav" && (
-                        <span className="text-[10px] text-emerald-400 ml-1.5 font-normal">● 已安全保存</span>
+                      {config?.webdav_password_set && (
+                        <span className="text-[10px] text-emerald-400 ml-1.5 font-normal">● 密码已安全保存</span>
                       )}
                     </label>
                     <input
                       className="input text-xs font-mono"
                       type="password"
-                      placeholder={config?.backend === "webdav" ? "若无需变更请留空" : "输入 WebDAV 密码"}
+                      placeholder={config?.webdav_password_set ? "已保存密码 (••••••••) 若无需变更请留空" : "输入 WebDAV 密码"}
                       value={webdavPassword}
                       onChange={(e) => setWebdavPassword(e.target.value)}
                     />
@@ -757,14 +757,14 @@ export function BackupRestorePanel() {
                   <div>
                     <label className="text-xs font-medium text-gray-300 block mb-1">
                       Secret Access Key
-                      {config?.backend === "s3" && (
-                        <span className="text-[10px] text-emerald-400 ml-1.5 font-normal">● 已安全保存</span>
+                      {config?.s3_secret_key_set && (
+                        <span className="text-[10px] text-emerald-400 ml-1.5 font-normal">● 密钥已安全保存</span>
                       )}
                     </label>
                     <input
                       className="input text-xs font-mono"
                       type="password"
-                      placeholder={config?.backend === "s3" ? "若无需变更请留空" : "输入 Secret Access Key"}
+                      placeholder={config?.s3_secret_key_set ? "已保存密钥 (••••••••) 若无需变更请留空" : "输入 Secret Access Key"}
                       value={s3SecretKey}
                       onChange={(e) => setS3SecretKey(e.target.value)}
                     />
@@ -817,7 +817,7 @@ export function BackupRestorePanel() {
               </div>
             )}
 
-            {/* Actions for Config */}
+            {/* Storage Quick Test Action */}
             <div className="flex items-center justify-between pt-1">
               <button
                 type="button"
@@ -826,18 +826,12 @@ export function BackupRestorePanel() {
                 className="btn-secondary text-xs flex items-center gap-1.5 py-1.5 px-3"
               >
                 {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <HardDrive className="w-3.5 h-3.5" />}
-                测试连通性 (Test Connection)
+                测试存储连通性 (Test Connection)
               </button>
 
-              <button
-                type="button"
-                disabled={saving}
-                onClick={handleSaveConfig}
-                className="btn-primary text-xs flex items-center gap-1.5 py-1.5 px-4"
-              >
-                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                保存存储配置
-              </button>
+              <span className="text-[11px] text-gray-400">
+                填写存储与加密参数后，请在下方点击保存
+              </span>
             </div>
 
             {/* Security & Automation Settings Cards */}
@@ -870,13 +864,13 @@ export function BackupRestorePanel() {
                       <label className="text-[11px] text-gray-300 block mb-1">
                         备份加密密码
                         {config?.encrypt_password_set && (
-                          <span className="text-emerald-400 ml-1.5 font-normal">● 已存入系统钥匙串</span>
+                          <span className="text-emerald-400 ml-1.5 font-normal">● 密码已安全保存</span>
                         )}
                       </label>
                       <input
                         className="input text-xs font-mono"
                         type="password"
-                        placeholder={config?.encrypt_password_set ? "如无需更改加密密码请留空" : "输入高强度密码"}
+                        placeholder={config?.encrypt_password_set ? "已保存密码 (••••••••) 若无需更改请留空" : "输入高强度密码"}
                         value={encryptPassword}
                         onChange={(e) => setEncryptPassword(e.target.value)}
                       />
@@ -896,6 +890,18 @@ export function BackupRestorePanel() {
                     <div className="flex items-start gap-1.5 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-[11px] text-amber-400">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <span>重要警告：若遗忘加密密码，任何人都无法解密恢复备份文件，请务必妥善记录。</span>
+                    </div>
+
+                    <div className="pt-1.5">
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={handleSaveConfig}
+                        className="w-full btn-secondary text-xs flex items-center justify-center gap-1.5 py-1.5 text-purple-300 border-purple-500/30 hover:bg-purple-500/10 hover:border-purple-500/50 transition-colors"
+                      >
+                        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        <span>确认保存加密设置</span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -945,10 +951,10 @@ export function BackupRestorePanel() {
                       onChange={(e) => setIncludeBrowserState(e.target.checked)}
                       className="rounded border-border text-accent focus:ring-accent"
                     />
-                    <span>默认包含浏览器已登录状态与 Cookies (完整模式)</span>
+                    <span>定时自动备份时包含浏览器持久化会话与 Cookies (全量模式)</span>
                   </label>
                   <p className="text-[10px] text-gray-400 mt-0.5 ml-5">
-                    完整模式归档包含各环境存储数据，体积较大。取消勾选仅备份指纹配置、扩展及代理。
+                    默认不勾选（推荐快速轻量备份，仅备份指纹配置、扩展及数据库）。勾选后自动备份体积较大。
                   </p>
                 </div>
 
@@ -957,6 +963,36 @@ export function BackupRestorePanel() {
                     最近自动备份时间: {new Date(config.last_backup_at).toLocaleString()}
                   </p>
                 )}
+              </div>
+            </div>
+
+            {/* Master Bottom Actions Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3.5 border-t border-border mt-2 bg-surface-1/40 -mx-4 -mb-4 p-4 rounded-b-xl">
+              <div className="text-[11px] text-gray-400 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
+                <span>保存将同步更新远端存储源、AES-256-GCM 加密密钥与自动备份策略。</span>
+              </div>
+
+              <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  disabled={testing}
+                  onClick={handleTestConnection}
+                  className="btn-secondary text-xs flex items-center gap-1.5 py-2 px-3.5"
+                >
+                  {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <HardDrive className="w-3.5 h-3.5" />}
+                  测试存储连接
+                </button>
+
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={handleSaveConfig}
+                  className="btn-primary text-xs flex items-center gap-1.5 py-2 px-5 font-medium shadow-md shadow-accent/20"
+                >
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  保存所有备份与加密配置
+                </button>
               </div>
             </div>
           </div>
@@ -1112,18 +1148,29 @@ export function BackupRestorePanel() {
 
                 {restoreModalFile.encrypted && (
                   <div className="space-y-1.5 pt-1">
-                    <label className="text-xs font-medium text-gray-200 block">
-                      输入解密密码 <span className="text-red-400">*</span>
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-gray-200 block">
+                        输入解密密码 <span className="text-red-400">*</span>
+                      </label>
+                      {config?.encrypt_password_set && (
+                        <span className="text-[11px] text-emerald-400 font-normal">● 已检测到本机默认密码</span>
+                      )}
+                    </div>
                     <input
                       type="password"
                       className="input text-xs font-mono"
-                      placeholder="请输入用于解密该备份包的密码"
+                      placeholder={
+                        config?.encrypt_password_set
+                          ? "留空将自动使用本机已存密码解密，或输入其他密码"
+                          : "请输入用于解密该备份包的密码"
+                      }
                       value={restorePassword}
                       onChange={(e) => setRestorePassword(e.target.value)}
                     />
                     <p className="text-[10px] text-gray-400">
-                      若本机钥匙串中存有此密码将自动尝试解密，也可手动指定新密码。
+                      {config?.encrypt_password_set
+                        ? "提示：本机已配置加密密码。若此备份来自本机直接留空即可；若来自其他设备，请输入创建时的密码。"
+                        : "请输入创建该备份时设置的端到端解密密码。"}
                     </p>
                   </div>
                 )}
@@ -1149,6 +1196,78 @@ export function BackupRestorePanel() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 6. FULL BACKUP CONFIRMATION MODAL */}
+      {fullBackupConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-surface-0 border border-border rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2 text-amber-400">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <h3 className="text-sm font-semibold text-gray-100">确认执行全量备份？</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFullBackupConfirmOpen(false)}
+                className="text-gray-400 hover:text-gray-200 text-xs p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-gray-300">
+              <p className="leading-relaxed">
+                您即将执行包含浏览器<strong>全部持久化会话</strong>的完整备份。为防止一次性打包上传过多数据，请确认以下信息：
+              </p>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2 text-[11px] text-amber-300">
+                <div className="font-semibold flex items-center gap-1.5 text-amber-400">
+                  <Database className="w-3.5 h-3.5" />
+                  <span>全量备份包含内容：</span>
+                </div>
+                <ul className="list-disc pl-4 space-y-1 text-gray-300">
+                  <li>所有浏览器环境的本地数据、Cookies、缓存、Local Storage 及登录态</li>
+                  <li>系统环境数据库 (profiles.db)、核心设置与扩展程序</li>
+                </ul>
+                <p className="text-amber-400/90 pt-1 border-t border-amber-500/20 text-[10px]">
+                  ⚠️ 提示：备份包体积可能达到数十 MB 至数 GB，打包加密与网络上传耗时较长。
+                </p>
+              </div>
+
+              <div className="p-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-[11px] text-blue-300 flex items-start gap-2">
+                <Cloud className="w-4 h-4 shrink-0 text-blue-400 mt-0.5" />
+                <div>
+                  <span className="font-medium text-blue-200">默认推荐「快速备份」：</span>
+                  <p className="text-gray-300 mt-0.5">
+                    若仅需保留环境指纹参数、代理设置、扩展程序及系统数据，快速备份体积仅几十 KB 且秒级完成。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border">
+              <button
+                type="button"
+                onClick={() => setFullBackupConfirmOpen(false)}
+                className="btn-secondary text-xs py-1.5 px-3.5"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFullBackupConfirmOpen(false);
+                  handleTriggerBackup(true);
+                }}
+                className="btn-primary text-xs flex items-center gap-1.5 py-1.5 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium"
+              >
+                <Database className="w-3.5 h-3.5" />
+                确认并开始全量备份
+              </button>
+            </div>
           </div>
         </div>
       )}

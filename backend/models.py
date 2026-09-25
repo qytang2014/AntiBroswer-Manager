@@ -414,10 +414,12 @@ class BackupConfigResponse(BaseModel):
     backend: BackupBackend | None = None
     webdav_url: str | None = None
     webdav_username: str | None = None
+    webdav_password_set: bool = False
     webdav_remote_path: str | None = None
     webdav_skip_ssl: bool = False
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None
+    s3_secret_key_set: bool = False
     s3_bucket: str | None = None
     s3_prefix: str | None = None
     s3_region: str | None = None
