@@ -111,6 +111,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [extensionManagerOpen, setExtensionManagerOpen] = useState(false);
   const [kernelManagerOpen, setKernelManagerOpen] = useState(false);
   const [kernelsVersion, setKernelsVersion] = useState(0);
+  const [settingsVersion, setSettingsVersion] = useState(0);
   const [kernelBannerDismissed, setKernelBannerDismissed] = useState(false);
   const [activeDownload, setActiveDownload] = useState<KernelDownloadProgress | null>(null);
   const [stopped, setStopped] = useState(false);
@@ -304,7 +305,10 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
       {settingsOpen && (
         <SettingsPanel
           onClose={handleCloseSettings}
-          onSaved={setSystemStatus}
+          onSaved={(status) => {
+            setSystemStatus(status);
+            setSettingsVersion(v => v + 1);
+          }}
         />
       )}
       {proxyManagerOpen && (
@@ -546,6 +550,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
               onCancel={() => setView("empty")}
               extensionsUpdated={extensionsVersion}
               kernelsUpdated={kernelsVersion}
+              settingsUpdated={settingsVersion}
               onOpenKernelManager={() => setKernelManagerOpen(true)}
             />
           )}
@@ -565,6 +570,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
               }}
               extensionsUpdated={extensionsVersion}
               kernelsUpdated={kernelsVersion}
+              settingsUpdated={settingsVersion}
               onOpenKernelManager={() => setKernelManagerOpen(true)}
             />
           )}

@@ -48,6 +48,7 @@ interface ProfileFormProps {
   onCancel: () => void;
   extensionsUpdated?: number;
   kernelsUpdated?: number;
+  settingsUpdated?: number;
   onOpenKernelManager?: () => void;
 }
 
@@ -95,6 +96,7 @@ export function ProfileForm({
   onCancel,
   extensionsUpdated,
   kernelsUpdated,
+  settingsUpdated,
   onOpenKernelManager,
 }: ProfileFormProps) {
   const isEdit = profile !== null;
@@ -269,7 +271,7 @@ export function ProfileForm({
         }
       }
     }).catch((err) => console.error("Failed to load settings:", err));
-  }, [isEdit]);
+  }, [isEdit, settingsUpdated]);
 
   const prevProfileIdRef = useRef<string | null | undefined>(undefined);
 
