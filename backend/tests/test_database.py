@@ -357,3 +357,51 @@ def test_duplicate_profile_honours_new_id(tmp_db: Path):
     assert clone["id"] == pid
     assert clone["fingerprint_seed"] == 7
     assert clone["user_data_dir"] == db.user_data_dir_for(pid)
+
+
+def test_profile_engine_subdirs_and_migration(tmp_db: Path):
+    # 1. user_data_dir_for respects engine type
+    pid1 = db.new_profile_id()
+    pid2 = db.new_profile_id()
+    p_chrome = db.create_profile("Chrome Prof", profile_id=pid1, browser_type="cloakbrowser")
+    p_fox = db.create_profile("Fox Prof", profile_id=pid2, browser_type="camoufox")
+
+    assert p_chrome["user_data_dir"] == str(tmp_db / "profiles" / "cloakbrowser" / pid1)
+    assert p_fox["user_data_dir"] == str(tmp_db / "profiles" / "camoufox" / pid2)
+
+    # 2. Duplicate profile keeps engine subdirectory
+    clone_fox = db.duplicate_profile(p_fox["id"])
+    assert "profiles/camoufox" in clone_fox["user_data_dir"]
+
+    # 3. Legacy profile layout migration
+    legacy_pid = db.new_profile_id()
+    legacy_dir = tmp_db / "profiles" / legacy_pid
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "prefs.js").write_text("dummy")
+
+    with db.get_db() as conn:
+        conn.execute(
+            """INSERT INTO profiles (id, name, fingerprint_seed, browser_type, user_data_dir, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (legacy_pid, "Legacy Fox", 111, "camoufox", str(legacy_dir), "2026-01-01", "2026-01-01"),
+        )
+        conn.commit()
+
+    db.migrate_profiles_to_engine_subdirs()
+
+    migrated_dir = tmp_db / "profiles" / "camoufox" / legacy_pid
+    assert not legacy_dir.exists()
+    assert (migrated_dir / "prefs.js").is_file()
+    assert db.get_profile(legacy_pid)["user_data_dir"] == str(migrated_dir)
+
+    # 4. update_profile with browser_type switch moves directory
+    target_dir = Path(p_chrome["user_data_dir"])
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "state.json").write_text("state")
+
+    updated = db.update_profile(p_chrome["id"], browser_type="camoufox")
+    expected_new_dir = tmp_db / "profiles" / "camoufox" / pid1
+    assert updated["browser_type"] == "camoufox"
+    assert updated["user_data_dir"] == str(expected_new_dir)
+    assert not target_dir.exists()
+    assert (expected_new_dir / "state.json").is_file()

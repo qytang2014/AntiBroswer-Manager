@@ -536,5 +536,98 @@ async def test_kernel_download_manager_lifecycle(monkeypatch: pytest.MonkeyPatch
     assert status["task"]["stage"] == "completed"
 
 
+@pytest.mark.asyncio
+async def test_extension_engine_subdirs_and_migration(tmp_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify that extensions are isolated into chromium/ and firefox/ and legacy paths migrate cleanly."""
+    import zipfile
+    import io
+    import json
+    from backend import extension_manager
+    from backend.extension_manager import (
+        _ext_engine_dir,
+        install_extension_from_bytes,
+        migrate_extensions_to_engine_subdirs,
+    )
+    from backend import database as db
+
+    fake_ext_dir = tmp_path / "extensions"
+    fake_ext_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(extension_manager, "EXTENSIONS_DIR", fake_ext_dir)
+
+    # 1. Directory helpers
+    assert _ext_engine_dir("cloakbrowser") == fake_ext_dir / "chromium"
+    assert _ext_engine_dir("camoufox") == fake_ext_dir / "firefox"
+    assert (fake_ext_dir / "chromium").is_dir()
+    assert (fake_ext_dir / "firefox").is_dir()
+
+    # 2. Build a minimal dummy extension zip
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"manifest_version": 3, "name": "Dummy Ext", "version": "1.0.0"}))
+    ext_bytes = buf.getvalue()
+
+    # Install one for CloakBrowser and one for Camoufox
+    ext_chrome = await install_extension_from_bytes(
+        file_bytes=ext_bytes,
+        filename="chrome_ext.zip",
+        webstore_id="extchrome123",
+        browser_type="cloakbrowser",
+    )
+    assert Path(ext_chrome["path"]) == fake_ext_dir / "chromium" / "extchrome123"
+    assert Path(ext_chrome["path"]).is_dir()
+
+    ext_ff = await install_extension_from_bytes(
+        file_bytes=ext_bytes,
+        filename="firefox_ext.zip",
+        webstore_id="extfirefox456",
+        browser_type="camoufox",
+    )
+    assert Path(ext_ff["path"]) == fake_ext_dir / "firefox" / "extfirefox456"
+    assert Path(ext_ff["path"]).is_dir()
+
+    # 3. Simulate legacy layout: an extension placed directly in flat extensions/ dir
+    legacy_dir = fake_ext_dir / "legacy_ff_ext"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "manifest.json").write_text(json.dumps({"manifest_version": 2, "name": "Legacy FF", "version": "1.0"}))
+    db.create_extension(
+        ext_id="legacy_ff_ext",
+        name="Legacy FF",
+        version="1.0",
+        description="legacy",
+        icon_url=None,
+        path=str(legacy_dir),
+        source="upload",
+        browser_type="camoufox",
+    )
+    # Create profile referencing legacy path
+    profile = db.create_profile(
+        name="Test Profile with Extension",
+        browser_type="camoufox",
+        extension_paths=[str(legacy_dir)],
+    )
+    assert str(legacy_dir) in profile["extension_paths"]
+
+    # Run migration
+    migrate_extensions_to_engine_subdirs()
+
+    # Assert disk move
+    migrated_dir = fake_ext_dir / "firefox" / "legacy_ff_ext"
+    assert not legacy_dir.exists()
+    assert migrated_dir.is_dir()
+
+    # Assert db extensions.path updated
+    updated_ext = db.get_extension("legacy_ff_ext")
+    assert updated_ext["path"] == str(migrated_dir)
+
+    # Assert profile.extension_paths updated
+    updated_prof = db.get_profile(profile["id"])
+    assert str(migrated_dir) in updated_prof["extension_paths"]
+    assert str(legacy_dir) not in updated_prof["extension_paths"]
+
+    # 4. Idempotency
+    migrate_extensions_to_engine_subdirs()
+    assert migrated_dir.is_dir()
+
+
 
 

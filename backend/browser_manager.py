@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
+import shutil
 import socket
 import time
 import urllib.request
@@ -796,9 +797,10 @@ class BrowserManager:
             # 2. Launch arguments version compatibility validation
             for arg in normal_launch_args:
                 if arg.startswith("--proxy-server=") and "@" in arg:
-                    if effective_kernel and any(effective_kernel.startswith(f"{v}.") for v in ("144", "145", "146", "147")):
+                    check_kernel = requested_kernel or effective_kernel
+                    if check_kernel and any(check_kernel.startswith(f"{v}.") for v in ("144", "145", "146", "147")):
                         raise ValueError(
-                            f"Chromium {effective_kernel} 内核不支持在命令行参数中直接传递代理密码 ({arg})。"
+                            f"Chromium {check_kernel} 内核不支持在命令行参数中直接传递代理密码 ({arg})。"
                             "请在 Profile 的『网络代理』设置项中配置代理，系统将自动进行安全的代理鉴权。"
                         )
 
@@ -825,7 +827,14 @@ class BrowserManager:
             # the default search engine. Runs before the user-facing launch;
             # reports "initializing" via get_status while it works (one short
             # headless launch). Never fatal.
-            if profile.get("set_google_default", True):
+            if profile.get("browser_type") == "camoufox":
+                await self._ensure_camoufox_search_engine(
+                    profile_id,
+                    user_data_dir,
+                    profile,
+                    browser_version=effective_kernel,
+                )
+            elif profile.get("set_google_default", True):
                 await self._ensure_search_engine(
                     profile_id,
                     user_data_dir,
@@ -922,23 +931,117 @@ class BrowserManager:
                     from playwright.async_api import async_playwright
                     from camoufox.async_api import AsyncNewBrowser
                     pw = await async_playwright().start()
-                    
-                    camoufox_options = {
+
+                    # Camoufox is Firefox-based. Convert proxy to its expected dict format.
+                    # After singbox processing, proxy is already {"server": "socks5://..."}.
+                    # A plain URL string (http/socks5) must also be wrapped.
+                    cam_proxy = None
+                    raw_cam_proxy = launch_options.get("proxy")
+                    if isinstance(raw_cam_proxy, dict) and "server" in raw_cam_proxy:
+                        cam_proxy = raw_cam_proxy  # already {"server": "..."} from singbox
+                    elif isinstance(raw_cam_proxy, str):
+                        cam_proxy = {"server": raw_cam_proxy}
+
+                    # Determine target OS to match the host platform and maintain fingerprint coherence
+                    target_os = "macos" if self.runtime.host_os == "macos" else ("linux" if self.runtime.host_os == "linux" else "windows")
+
+                    # Timezone and locale: inject via camoufox's config/locale params,
+                    # NOT via Chromium CLI flags.
+                    cam_config: dict[str, Any] = {
+                        # Disable font spacing perturbation to eliminate font/glyph corruption (乱码)
+                        "fonts:spacing_seed": 0,
+                    }
+                    if resolved_tz:
+                        cam_config["timezone"] = resolved_tz
+                    if resolved_locale:
+                        cam_config["locale:all"] = resolved_locale
+                        loc_parts = resolved_locale.split("-")
+                        cam_config["locale:language"] = loc_parts[0]
+                        if len(loc_parts) > 1:
+                            cam_config["locale:region"] = loc_parts[1]
+
+                    # Deterministic seeds from profile fingerprint_seed
+                    seed = int(profile.get("fingerprint_seed") or 0)
+                    if seed:
+                        cam_config["audio:seed"] = seed
+                        cam_config["canvas:seed"] = seed
+
+                    # WebRTC IP spoofing matching the proxy exit IP
+                    webrtc_ip = None
+                    for arg in net_args:
+                        if arg.startswith("--fingerprint-webrtc-ip="):
+                            webrtc_ip = arg.split("=", 1)[1]
+                            break
+                    if webrtc_ip:
+                        cam_config["webrtc:ipv4"] = webrtc_ip
+
+                    # Screen dimensions for Firefox fingerprint spoofing
+                    sw = profile.get("screen_width", 1920)
+                    sh = profile.get("screen_height", 1080)
+                    if sw and sh:
+                        cam_config["screen.width"] = sw
+                        cam_config["screen.height"] = sh
+
+                    camoufox_options: dict[str, Any] = {
                         "headless": launch_options.get("headless", False),
                         "persistent_context": True,
                         "user_data_dir": launch_options["user_data_dir"],
-                        "browser": effective_kernel,
-                        "proxy": launch_options.get("proxy"),
                         "enable_cache": True,
+                        "os": target_os,
+                        # Suppress the noisy "proxy without geoip" LeakWarning because
+                        # we've already resolved timezone/locale via geoip ourselves.
+                        "i_know_what_im_doing": True,
                     }
-                    if launch_options.get("extension_paths"):
+                    if effective_kernel:
+                        # If effective_kernel is a file path, pass executable_path.
+                        # If it is a version identifier (e.g. '152.0.4'), pass browser.
+                        eff_str = str(effective_kernel)
+                        if "/" in eff_str or "\\" in eff_str:
+                            camoufox_options["executable_path"] = eff_str
+                        else:
+                            camoufox_options["browser"] = effective_kernel
+                    if cam_proxy is not None:
+                        camoufox_options["proxy"] = cam_proxy
+                    if cam_config:
+                        camoufox_options["config"] = cam_config
+                    if resolved_locale:
+                        camoufox_options["locale"] = resolved_locale
+                    if resolved_tz:
+                        # timezone_id is Playwright's standard param that controls the actual
+                        # JS timezone in the browser (Intl.DateTimeFormat, new Date(), etc.).
+                        # config['timezone'] above sets the fingerprint; this makes it real.
+                        camoufox_options["timezone_id"] = resolved_tz
+                    if profile.get("extension_paths"):
                         camoufox_options["addons"] = launch_options["extension_paths"]
                     if display is not None:
                         camoufox_options["env"] = launch_options.get("env")
                         camoufox_options["virtual_display"] = f":{display}"
-                        
-                    if extra_args:
-                        camoufox_options["args"] = extra_args
+
+                    # Explicitly include essential fonts so setFontList doesn't lock out standard monospace fonts
+                    from .camoufox_policies import get_camoufox_recommended_fonts, get_camoufox_user_prefs
+                    camoufox_options["fonts"] = get_camoufox_recommended_fonts(target_os)
+
+                    # User preferences for search engine, keyword search, cookies, fonts, and session restore
+                    cam_user_prefs = get_camoufox_user_prefs(
+                        profile,
+                        target_os=target_os,
+                        timezone=resolved_tz,
+                        locale=resolved_locale,
+                    )
+                    if webrtc_ip:
+                        cam_user_prefs["network.dns.disableIPv6"] = True
+
+                    if profile.get("restore_session", True):
+                        cam_user_prefs["browser.startup.page"] = 3
+                    else:
+                        cam_user_prefs["browser.startup.page"] = 0
+                        cam_user_prefs["browser.startup.homepage"] = "about:blank"
+                    camoufox_options["firefox_user_prefs"] = cam_user_prefs
+
+                    # NOTE: extra_args are Chromium CLI flags (--fingerprint=, --fingerprint-platform=,
+                    # --remote-debugging-address=, --restore-last-session, --force-webrtc-ip-handling-policy=,
+                    # etc.). These are NOT understood by Firefox/Camoufox and cause it to hang.
+                    # Do NOT pass extra_args to AsyncNewBrowser.
 
                     try:
                         context = await AsyncNewBrowser(pw, **camoufox_options)
@@ -1273,6 +1376,48 @@ class BrowserManager:
         sessions_dir = user_data_dir / "Default" / "Sessions"
         if sessions_dir.exists():
             shutil.rmtree(sessions_dir, ignore_errors=True)
+
+    async def _ensure_camoufox_search_engine(
+        self,
+        profile_id: str,
+        user_data_dir: Path,
+        profile: dict[str, Any],
+        browser_version: str | None = None,
+    ) -> None:
+        """Sanitize policies.json and profile search engine state for Camoufox."""
+        def _sync_setup():
+            from .camoufox_policies import (
+                resolve_camoufox_distribution_dir,
+                sanitize_camoufox_policies,
+                sanitize_camoufox_profile_search_cache,
+            )
+            try:
+                from camoufox.pkgman import launch_path
+                cam_exe = None
+                if browser_version:
+                    try:
+                        from camoufox.multiversion import find_installed_version
+                        found_ver = find_installed_version(browser_version)
+                        if found_ver:
+                            cam_exe = Path(launch_path(found_ver))
+                    except Exception:
+                        pass
+                if not cam_exe:
+                    cam_exe = Path(launch_path())
+
+                dist_dir = resolve_camoufox_distribution_dir(cam_exe)
+                engine_name = profile.get("search_engine_name") or SEARCH_ENGINE_NAME
+                engine_url = profile.get("search_engine_url")
+                sanitize_camoufox_policies(dist_dir, engine_name, engine_url)
+                sanitize_camoufox_profile_search_cache(user_data_dir, engine_name)
+            except Exception as exc:
+                logger.warning(
+                    "Camoufox search engine / policy setup warning for %s: %s",
+                    profile_id,
+                    exc,
+                )
+
+        await asyncio.to_thread(_sync_setup)
 
     async def _headless_launch(
         self,

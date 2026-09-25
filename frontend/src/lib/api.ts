@@ -371,10 +371,10 @@ export const api = {
       body: JSON.stringify({ proxy, proxy_type }),
     }),
 
-  installFromWebStore: (id_or_url: string) =>
+  installFromWebStore: (id_or_url: string, browser_type: string = "cloakbrowser") =>
     request<Extension>("/api/extensions/install-webstore", {
       method: "POST",
-      body: JSON.stringify({ id_or_url }),
+      body: JSON.stringify({ id_or_url, browser_type }),
     }),
 
   installFromWebStoreStream: (

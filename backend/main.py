@@ -558,6 +558,11 @@ def _filter_rfb_client_messages(data: bytes) -> bytes:
 async def lifespan(app: FastAPI):
     browser_mgr.vnc.validate_available()
     db.init_db()
+    from .extension_manager import migrate_extensions_to_engine_subdirs
+    migrate_extensions_to_engine_subdirs()
+    db.migrate_profiles_to_engine_subdirs()
+    from .camoufox_policies import sanitize_all_installed_camoufox_kernels
+    await asyncio.to_thread(sanitize_all_installed_camoufox_kernels)
     await browser_mgr.cleanup_stale()
     # Resolve tier + pre-download the (Pro) binary before serving launches, so the
     # download never blocks a launch or auto-launch's 60s timeout.
@@ -693,9 +698,9 @@ async def upload_extension_endpoint(file: UploadFile = File(...), browser_type: 
 
 @app.post("/api/extensions/install-webstore")
 async def install_webstore_endpoint(req: WebStoreInstallRequest):
-    """Download and install an extension from Chrome Web Store by URL or ID."""
+    """Download and install an extension from Chrome Web Store or Firefox Addons by URL or ID."""
     try:
-        return await install_from_webstore(req.id_or_url)
+        return await install_from_webstore(req.id_or_url, req.browser_type)
     except Exception as exc:
         msg = str(exc).strip() or "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
         logger.warning("Failed to install extension from Web Store: %s", msg)
@@ -1159,7 +1164,7 @@ async def duplicate_profile(profile_id: str, req: ProfileDuplicateRequest | None
     # heard of, so an unfinished clone is unreachable.
     clone_id = db.new_profile_id()
     src_dir = Path(profile["user_data_dir"])
-    dst_dir = Path(db.user_data_dir_for(clone_id))
+    dst_dir = Path(db.user_data_dir_for(clone_id, profile.get("browser_type", "cloakbrowser")))
     try:
         async with browser_mgr.hold_stopped(profile_id):
             if src_dir.is_dir():

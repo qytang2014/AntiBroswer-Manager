@@ -1010,7 +1010,7 @@ def test_duplicate_profile_leaves_nothing_behind_when_copy_fails(
     assert "disk full" in resp.json()["detail"]
     # No clone row was ever written, and the clone directory does not linger
     assert [p["id"] for p in app_client.get("/api/profiles").json()] == [src["id"]]
-    assert [d.name for d in (tmp_db / "profiles").iterdir()] == [src["id"]]
+    assert [d.name for d in Path(src["user_data_dir"]).parent.iterdir()] == [src["id"]]
     # The source is untouched and can still be launched (the hold was released)
     assert not main.browser_mgr._held
 
@@ -1084,7 +1084,7 @@ async def test_duplicate_state_refuses_a_launching_source(tmp_db: Path):
     finally:
         main.browser_mgr._launching.discard(src["id"])
     assert [p["id"] for p in db.list_profiles()] == [src["id"]]
-    assert [d.name for d in (tmp_db / "profiles").iterdir()] == [src["id"]]
+    assert [d.name for d in Path(src["user_data_dir"]).parent.iterdir()] == [src["id"]]
 
 
 async def test_duplicate_state_refuses_a_source_still_closing(tmp_db: Path, real_lifecycle, monkeypatch: pytest.MonkeyPatch):

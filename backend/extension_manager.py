@@ -33,9 +33,95 @@ from .runtime import resolve_runtime
 logger = logging.getLogger("cloakbrowser.manager.extensions")
 
 RUNTIME = resolve_runtime()
+# Root directory for all extensions; sub-divided per engine below.
 EXTENSIONS_DIR = RUNTIME.data_dir / "extensions"
 
-# Chrome extension ID is 32 lowercase chars in [a-p]
+# Per-engine subdirectory names.
+_ENGINE_SUBDIR: dict[str, str] = {
+    "camoufox": "firefox",       # Firefox-based
+    "cloakbrowser": "chromium",  # Chromium-based (default)
+}
+
+
+def _ext_engine_dir(browser_type: str = "cloakbrowser") -> Path:
+    """Return the engine-specific extensions directory.
+
+    Layout:
+        extensions/chromium/{ext_id}/   – CloakBrowser (Chromium) extensions
+        extensions/firefox/{ext_id}/    – Camoufox (Firefox) extensions
+
+    Automatically creates the directory if it does not exist.
+    """
+    subdir = _ENGINE_SUBDIR.get(browser_type, "chromium")
+    path = EXTENSIONS_DIR / subdir
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def migrate_extensions_to_engine_subdirs() -> None:
+    """One-time migration: move extensions from the flat layout to per-engine subdirs.
+
+    Old layout:  extensions/{ext_id}/
+    New layout:  extensions/chromium/{ext_id}/   (CloakBrowser)
+                 extensions/firefox/{ext_id}/    (Camoufox)
+
+    The database ``path`` column is updated in-place for every moved entry.
+    Extensions whose on-disk path is already inside a sub-directory are skipped.
+    """
+    from .database import (
+        list_extensions,
+        replace_profile_extension_path,
+        update_extension_path,
+    )
+
+    installed = list_extensions()
+    moved = 0
+    for ext in installed:
+        old_path = Path(ext.get("path") or "")
+        if not old_path.is_dir():
+            continue
+
+        # Already migrated if parent is 'chromium' or 'firefox'
+        if old_path.parent.name in _ENGINE_SUBDIR.values():
+            continue
+
+        # Determine target subdirectory from browser_type stored in DB
+        browser_type = ext.get("browser_type") or "cloakbrowser"
+        new_parent = _ext_engine_dir(browser_type)
+        new_path = new_parent / old_path.name
+
+        if new_path == old_path:
+            continue
+
+        try:
+            if not new_path.exists():
+                shutil.move(str(old_path), str(new_path))
+            else:
+                # Target already occupied — keep existing, remove duplicate
+                shutil.rmtree(old_path, ignore_errors=True)
+
+            update_extension_path(ext["id"], str(new_path))
+            replace_profile_extension_path(str(old_path), str(new_path))
+            moved += 1
+            logger.info(
+                "Migrated extension %s: %s → %s",
+                ext["id"],
+                old_path,
+                new_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to migrate extension %s (%s → %s): %s",
+                ext["id"],
+                old_path,
+                new_path,
+                exc,
+            )
+
+    if moved:
+        logger.info("Extension migration complete: %d extension(s) moved.", moved)
+
+
 _EXT_ID_RE = re.compile(r"([a-p]{32})")
 _ZIP_MAGIC = b"PK\x03\x04"
 
@@ -454,9 +540,14 @@ async def install_extension_from_bytes(
     webstore_id: str | None = None,
     browser_type: str = "cloakbrowser",
 ) -> dict[str, Any]:
-    """Unpack a .crx or .zip file into the managed extensions directory."""
+    """Unpack a .crx or .zip file into the managed extensions directory.
+
+    Extensions are stored in an engine-specific subdirectory:
+        extensions/chromium/{ext_id}/  – CloakBrowser (Chromium)
+        extensions/firefox/{ext_id}/   – Camoufox (Firefox)
+    """
     ext_id = webstore_id or str(uuid.uuid4())[:12]
-    target_dir = EXTENSIONS_DIR / ext_id
+    target_dir = _ext_engine_dir(browser_type) / ext_id
 
     # If already exists, clear first
     if target_dir.exists():
@@ -834,10 +925,10 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                 pass
 
 
-async def install_from_webstore(id_or_url: str) -> dict[str, Any]:
-    """Download and install an extension directly from Google Chrome Web Store."""
+async def install_from_webstore(id_or_url: str, browser_type: str = "cloakbrowser") -> dict[str, Any]:
+    """Download and install an extension directly from Google Chrome Web Store or Firefox Addons."""
     last_event: dict[str, Any] | None = None
-    async for event in stream_install_from_webstore(id_or_url):
+    async for event in stream_install_from_webstore(id_or_url, browser_type):
         last_event = event
 
     if not last_event or last_event.get("stage") != "completed":

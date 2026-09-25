@@ -56,6 +56,11 @@ async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]
     def download_thread():
         try:
             fetcher.install(replace=True)
+            try:
+                from .camoufox_policies import sanitize_all_installed_camoufox_kernels
+                sanitize_all_installed_camoufox_kernels()
+            except Exception:
+                pass
             loop.call_soon_threadsafe(queue.put_nowait, "DONE")
         except Exception as e:
             loop.call_soon_threadsafe(queue.put_nowait, e)

@@ -173,31 +173,44 @@ def _set_app_icon() -> None:
 
 
 def _focus_existing_window() -> bool:
-    """Raise an already-running Manager's window — Windows single-instance.
+    """Raise an already-running Manager's window — single-instance.
 
-    macOS handles single-instance via the app bundle's
-    LSMultipleInstancesProhibited plist, so this is the Windows path: find our
-    window by title and bring it to the foreground (restoring it if minimized).
+    On Windows, find our window by title and bring it to the foreground.
+    On macOS, activate the native AntiBrowser-Manager application.
     Returns True if a window was focused. No-op / False on other platforms.
     """
     import sys
 
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
+    if sys.platform == "win32":
+        try:
+            import ctypes
 
-        user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, WINDOW_TITLE)
-        if not hwnd:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, WINDOW_TITLE)
+            if not hwnd:
+                return False
+            sw_restore = 9
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, sw_restore)
+            user32.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
             return False
-        sw_restore = 9
-        if user32.IsIconic(hwnd):
-            user32.ShowWindow(hwnd, sw_restore)
-        user32.SetForegroundWindow(hwnd)
-        return True
-    except Exception:
+    elif sys.platform == "darwin":
+        try:
+            import subprocess
+
+            res = subprocess.run(
+                ["osascript", "-e", 'tell application "AntiBrowser-Manager" to activate'],
+                capture_output=True,
+                timeout=2,
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
         return False
+    return False
 
 
 def _run_webview(server) -> int:
@@ -228,9 +241,9 @@ def _run_webview(server) -> int:
     server_thread.start()
 
     if not _wait_until_ready():
-        # Server never came up — fall back to a browser tab rather than an
-        # empty window, so the failure is at least visible + logged.
-        webbrowser.open(SERVER_URL)
+        # Server never came up — log the failure. If in browser mode, surface in browser.
+        if _ui_mode() != "webview":
+            webbrowser.open(SERVER_URL)
         server.should_exit = True
         server_thread.join(timeout=10)
         return 1
@@ -310,10 +323,11 @@ def main() -> int:
     os.environ.setdefault("CLOAKBROWSER_MANAGER_RUNTIME", "native")
 
     if not _port_available():
-        # A Manager is already running on this machine. On Windows, focus its
-        # existing window (single-instance); otherwise surface it in a browser.
+        # A Manager is already running on this machine. Focus its existing window.
+        # In webview/client mode, never pop open a browser tab.
         if not _focus_existing_window():
-            webbrowser.open(SERVER_URL)
+            if _ui_mode() != "webview":
+                webbrowser.open(SERVER_URL)
         return 0
 
     import uvicorn

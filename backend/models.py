@@ -253,6 +253,7 @@ class LoginRequest(BaseModel):
 
 class WebStoreInstallRequest(BaseModel):
     id_or_url: str
+    browser_type: str = "cloakbrowser"
 
 
 class SubscriptionCreate(BaseModel):

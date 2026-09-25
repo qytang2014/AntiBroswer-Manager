@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import random
+import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -12,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from .runtime import resolve_runtime
+
+logger = logging.getLogger("cloakbrowser.manager.database")
 
 RUNTIME = resolve_runtime()
 DATA_DIR = RUNTIME.data_dir
@@ -242,9 +246,15 @@ def new_profile_id() -> str:
     return str(uuid.uuid4())
 
 
-def user_data_dir_for(profile_id: str) -> str:
-    """Where a profile keeps its Chrome user data. The one place this layout lives."""
-    return str(DATA_DIR / "profiles" / profile_id)
+def user_data_dir_for(profile_id: str, browser_type: str = "cloakbrowser") -> str:
+    """Where a profile keeps its browser user data.
+
+    Layout:
+        profiles/cloakbrowser/{profile_id}  – CloakBrowser (Chromium)
+        profiles/camoufox/{profile_id}      – Camoufox (Firefox)
+    """
+    engine_subdir = "camoufox" if browser_type == "camoufox" else "cloakbrowser"
+    return str(DATA_DIR / "profiles" / engine_subdir / profile_id)
 
 
 def create_profile(
@@ -255,7 +265,8 @@ def create_profile(
     becomes visible, so a half-built profile is never listed."""
     profile_id = profile_id or new_profile_id()
     seed = fingerprint_seed if fingerprint_seed is not None else random.randint(10000, 99999)
-    user_data_dir = user_data_dir_for(profile_id)
+    browser_type = fields.get("browser_type", "cloakbrowser")
+    user_data_dir = fields.get("user_data_dir") or user_data_dir_for(profile_id, browser_type)
     now = _now()
     tags = fields.pop("tags", None) or []
     values = {
@@ -340,16 +351,35 @@ def reorder_profiles(ordered_ids: list[str]) -> None:
 
 
 def update_profile(profile_id: str, **fields: Any) -> dict[str, Any] | None:
-    if not get_profile(profile_id):
+    current = get_profile(profile_id)
+    if not current:
         return None
     tags = fields.pop("tags", None)
     for key in ("launch_args", "extension_paths"):
         if key in fields:
             fields[key] = json.dumps(fields[key] or [])
+
+    # If browser_type is changed, move on-disk directory to the new engine subdir
+    new_browser_type = fields.get("browser_type")
+    if new_browser_type and new_browser_type != current.get("browser_type"):
+        old_udd = Path(current["user_data_dir"])
+        new_udd = Path(user_data_dir_for(profile_id, new_browser_type))
+        if old_udd != new_udd and old_udd.exists():
+            new_udd.parent.mkdir(parents=True, exist_ok=True)
+            if not new_udd.exists():
+                try:
+                    shutil.move(str(old_udd), str(new_udd))
+                    fields["user_data_dir"] = str(new_udd)
+                except Exception as exc:
+                    logger.warning("Failed to move user_data_dir on browser_type update: %s", exc)
+
     update_cols = []
     update_vals = []
     for col in _PROFILE_COLUMNS:
-        if col not in {"id", "user_data_dir", "created_at", "updated_at"} and col in fields:
+        if col not in {"id", "created_at", "updated_at"} and col in fields:
+            # Prevent arbitrary user_data_dir changes unless explicitly moved above
+            if col == "user_data_dir" and "user_data_dir" not in fields:
+                continue
             update_cols.append(f"{col} = ?")
             update_vals.append(fields[col])
     with get_db() as conn:
@@ -367,6 +397,62 @@ def update_profile(profile_id: str, **fields: Any) -> dict[str, Any] | None:
                 )
         conn.commit()
     return get_profile(profile_id)
+
+
+def migrate_profiles_to_engine_subdirs() -> None:
+    """One-time migration: move profiles from flat 'profiles/' to engine-specific subdirs.
+
+    Old layout:  profiles/{profile_id}/
+    New layout:  profiles/cloakbrowser/{profile_id}/   (CloakBrowser)
+                 profiles/camoufox/{profile_id}/        (Camoufox)
+
+    The database ``user_data_dir`` column is updated in-place for every moved profile.
+    Profiles whose on-disk path is already inside a sub-directory are skipped.
+    """
+    profiles = list_profiles()
+    moved = 0
+    profiles_root = DATA_DIR / "profiles"
+    for profile in profiles:
+        raw_udd = profile.get("user_data_dir")
+        if not raw_udd:
+            continue
+        old_path = Path(raw_udd)
+        if not old_path.is_dir():
+            continue
+
+        # If already migrated (parent is 'cloakbrowser' or 'camoufox'), skip
+        if old_path.parent.name in ("cloakbrowser", "camoufox"):
+            continue
+
+        browser_type = profile.get("browser_type") or "cloakbrowser"
+        engine_subdir = "camoufox" if browser_type == "camoufox" else "cloakbrowser"
+        new_parent = profiles_root / engine_subdir
+        new_parent.mkdir(parents=True, exist_ok=True)
+        new_path = new_parent / old_path.name
+
+        if new_path == old_path:
+            continue
+
+        try:
+            if not new_path.exists():
+                shutil.move(str(old_path), str(new_path))
+            else:
+                # Target already occupied, do not overwrite
+                pass
+
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE profiles SET user_data_dir = ? WHERE id = ?",
+                    (str(new_path), profile["id"]),
+                )
+                conn.commit()
+            moved += 1
+            logger.info("Migrated profile %s: %s → %s", profile["id"], old_path, new_path)
+        except Exception as exc:
+            logger.warning("Failed to migrate profile %s (%s → %s): %s", profile["id"], old_path, new_path, exc)
+
+    if moved:
+        logger.info("Profile directory migration complete: %d profile(s) moved.", moved)
 
 
 def delete_profile(profile_id: str) -> bool:
@@ -465,6 +551,40 @@ def delete_extension(ext_id: str) -> bool:
         cursor = conn.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def update_extension_path(ext_id: str, new_path: str) -> bool:
+    """Update on-disk storage path of an extension."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE extensions SET path = ? WHERE id = ?",
+            (new_path, ext_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def replace_profile_extension_path(old_path: str, new_path: str) -> int:
+    """Replace an extension path in all profiles that reference old_path."""
+    updated_count = 0
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, extension_paths FROM profiles").fetchall()
+        for row in rows:
+            profile_id = row["id"]
+            raw_paths = row["extension_paths"]
+            try:
+                paths = json.loads(raw_paths) if raw_paths else []
+            except Exception:
+                paths = []
+            if old_path in paths:
+                new_paths = [new_path if p == old_path else p for p in paths]
+                conn.execute(
+                    "UPDATE profiles SET extension_paths = ? WHERE id = ?",
+                    (json.dumps(new_paths), profile_id),
+                )
+                updated_count += 1
+        conn.commit()
+    return updated_count
 
 
 # ---------------------------------------------------------------------------
