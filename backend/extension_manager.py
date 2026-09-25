@@ -365,6 +365,7 @@ async def install_extension_from_bytes(
     filename: str,
     source: str = "upload",
     webstore_id: str | None = None,
+    browser_type: str = "cloakbrowser",
 ) -> dict[str, Any]:
     """Unpack a .crx or .zip file into the managed extensions directory."""
     ext_id = webstore_id or str(uuid.uuid4())[:12]
@@ -404,10 +405,11 @@ async def install_extension_from_bytes(
         path=str(target_dir),
         source=source,
         webstore_id=webstore_id,
+        browser_type=browser_type,
     )
 
 
-async def stream_install_from_webstore(id_or_url: str) -> AsyncIterator[dict[str, Any]]:
+async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloakbrowser") -> AsyncIterator[dict[str, Any]]:
     """Download and install a Chrome extension with live progress events."""
     webstore_id = extract_webstore_id(id_or_url)
     if not webstore_id:
@@ -709,6 +711,7 @@ async def stream_install_from_webstore(id_or_url: str) -> AsyncIterator[dict[str
                 filename=f"{webstore_id}.crx",
                 source="webstore_id",
                 webstore_id=webstore_id,
+                browser_type=browser_type,
             )
             yield {
                 "stage": "completed",

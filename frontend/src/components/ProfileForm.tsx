@@ -208,9 +208,9 @@ export function ProfileForm({
   const [tagColor, setTagColor] = useState<string | null>("#6366f1");
   const [launchArgInput, setLaunchArgInput] = useState("");
 
-  const loadInstalledExtensions = async () => {
+  const loadInstalledExtensions = async (browserType: string) => {
     try {
-      const list = await api.listExtensions();
+      const list = await api.listExtensions(browserType);
       setInstalledExtensions(list);
 
       setForm((f) => {
@@ -220,7 +220,11 @@ export function ProfileForm({
           return { ...f, extension_paths: list.map((e) => e.path) };
         } else {
           // Existing profile: if there are newly installed extensions in the library, auto-select them
-          const updated = new Set(currentPaths);
+          // Also remove any paths that belong to the OTHER browser type (not in the new list)
+          const validPaths = new Set(list.map(e => e.path));
+          const filteredPaths = currentPaths.filter(p => validPaths.has(p));
+          
+          const updated = new Set(filteredPaths);
           const prevKnown = prevLibraryPathsRef.current;
           list.forEach((ext) => {
             if (!prevKnown.has(ext.path) && prevKnown.size > 0) {
@@ -238,8 +242,8 @@ export function ProfileForm({
   };
 
   useEffect(() => {
-    loadInstalledExtensions();
-  }, [extensionsUpdated]);
+    loadInstalledExtensions(form.browser_type || "cloakbrowser");
+  }, [extensionsUpdated, form.browser_type]);
 
   const [installedKernels, setInstalledKernels] = useState<KernelItem[]>([]);
   const [kernelsLoading, setKernelsLoading] = useState(false);
@@ -760,24 +764,26 @@ export function ProfileForm({
               />
             </div>
 
-            <div className="col-span-2">
-              <label className="label">绑定 License 授权 (License Binding)</label>
-              <select
-                className="input"
-                value={form.license_id ?? ""}
-                onChange={(e) => set("license_id", e.target.value ? e.target.value : null)}
-              >
-                <option value="">Keyless (无授权) / 免费内核模式</option>
-                {licenses.map(l => (
-                  <option key={l.id} value={l.id}>
-                    {l.name} {l.is_default ? "(默认)" : ""}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-gray-500 mt-1.5">
-                可选择列表管理中的 License。如果没有选择，则回退到无 License (Keyless) 的免费内核模式。
-              </p>
-            </div>
+            {form.browser_type === "cloakbrowser" && (
+              <div className="col-span-2">
+                <label className="label">绑定 License 授权 (License Binding)</label>
+                <select
+                  className="input"
+                  value={form.license_id ?? ""}
+                  onChange={(e) => set("license_id", e.target.value ? e.target.value : null)}
+                >
+                  <option value="">Keyless (无授权) / 免费内核模式</option>
+                  {licenses.map(l => (
+                    <option key={l.id} value={l.id}>
+                      {l.name} {l.is_default ? "(默认)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  可选择列表管理中的 License。如果没有选择，则回退到无 License (Keyless) 的免费内核模式。
+                </p>
+              </div>
+            )}
 
             <div className="col-span-2">
               <label className="label">Fingerprint Seed</label>
@@ -1666,7 +1672,7 @@ export function ProfileForm({
         <section>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Chrome Extensions / 扩展插件
+              {form.browser_type === "cloakbrowser" ? "Chrome Extensions / 扩展插件" : "Firefox Addons / 扩展插件"}
             </h3>
             <span className="text-[11px] text-gray-500">
               {installedExtensions.length > 0

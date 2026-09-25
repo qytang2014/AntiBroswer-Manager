@@ -650,9 +650,9 @@ async def test_proxy_endpoint(req: ProxyTestRequest):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/extensions")
-async def list_extensions_endpoint():
-    """List all installed Chrome extensions."""
-    return db.list_extensions()
+async def list_extensions_endpoint(browser_type: str = "cloakbrowser"):
+    """List all installed extensions."""
+    return db.list_extensions(browser_type)
 
 
 @app.get("/api/extensions/popular")
@@ -673,13 +673,13 @@ async def search_webstore_endpoint(q: str = ""):
 
 
 @app.post("/api/extensions/upload")
-async def upload_extension_endpoint(file: UploadFile = File(...)):
+async def upload_extension_endpoint(file: UploadFile = File(...), browser_type: str = "cloakbrowser"):
     """Upload and unpack a .crx or .zip Chrome extension."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
     content = await file.read()
     try:
-        return await install_extension_from_bytes(content, file.filename, source="upload")
+        return await install_extension_from_bytes(content, file.filename, source="upload", browser_type=browser_type)
     except Exception as exc:
         logger.warning("Failed to install uploaded extension: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
@@ -697,11 +697,11 @@ async def install_webstore_endpoint(req: WebStoreInstallRequest):
 
 
 @app.get("/api/extensions/install-webstore-stream")
-async def install_webstore_stream_endpoint(id_or_url: str):
+async def install_webstore_stream_endpoint(id_or_url: str, browser_type: str = "cloakbrowser"):
     """Download and install an extension with real-time SSE progress events."""
     async def event_generator():
         try:
-            async for event in stream_install_from_webstore(id_or_url):
+            async for event in stream_install_from_webstore(id_or_url, browser_type):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err_data = {

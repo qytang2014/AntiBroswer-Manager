@@ -361,7 +361,7 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
 
-  listExtensions: () => request<Extension[]>("/api/extensions"),
+  listExtensions: (browser_type?: string) => request<Extension[]>(`/api/extensions?browser_type=${encodeURIComponent(browser_type || "cloakbrowser")}`),
 
   getPopularExtensions: () => request<PopularExtension[]>("/api/extensions/popular"),
 
@@ -379,10 +379,11 @@ export const api = {
 
   installFromWebStoreStream: (
     id_or_url: string,
-    onProgress: (progress: DownloadProgress) => void
+    onProgress: (progress: DownloadProgress) => void,
+    browser_type: string = "cloakbrowser"
   ): Promise<Extension> => {
     return new Promise((resolve, reject) => {
-      const url = `/api/extensions/install-webstore-stream?id_or_url=${encodeURIComponent(id_or_url)}`;
+      const url = `/api/extensions/install-webstore-stream?id_or_url=${encodeURIComponent(id_or_url)}&browser_type=${encodeURIComponent(browser_type)}`;
       const eventSource = new EventSource(url);
 
       eventSource.onmessage = (event) => {
@@ -412,10 +413,10 @@ export const api = {
   searchWebStore: (query: string) =>
     request<WebStoreSearchResult[]>(`/api/extensions/webstore/search?q=${encodeURIComponent(query)}`),
 
-  uploadExtension: async (file: File): Promise<Extension> => {
+  uploadExtension: async (file: File, browser_type: string = "cloakbrowser"): Promise<Extension> => {
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch("/api/extensions/upload", {
+    const res = await fetch(`/api/extensions/upload?browser_type=${encodeURIComponent(browser_type)}`, {
       method: "POST",
       body: formData,
     });

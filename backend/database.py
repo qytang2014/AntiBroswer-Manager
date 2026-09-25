@@ -164,9 +164,15 @@ def _create_extensions_table(conn: sqlite3.Connection) -> None:
             path TEXT NOT NULL,
             source TEXT NOT NULL,
             webstore_id TEXT,
+            browser_type TEXT DEFAULT 'cloakbrowser',
             created_at TEXT NOT NULL
         )
     """)
+    # Ensure browser_type exists for existing databases
+    try:
+        conn.execute("ALTER TABLE extensions ADD COLUMN browser_type TEXT DEFAULT 'cloakbrowser'")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _create_proxy_tables(conn: sqlite3.Connection) -> None:
@@ -415,9 +421,12 @@ def duplicate_profile(profile_id: str, *, new_id: str | None = None) -> dict[str
     )
 
 
-def list_extensions() -> list[dict[str, Any]]:
+def list_extensions(browser_type: str | None = None) -> list[dict[str, Any]]:
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM extensions ORDER BY created_at DESC").fetchall()
+        if browser_type:
+            rows = conn.execute("SELECT * FROM extensions WHERE browser_type = ? ORDER BY created_at DESC", (browser_type,)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM extensions ORDER BY created_at DESC").fetchall()
         return [dict(row) for row in rows]
 
 
@@ -436,15 +445,16 @@ def create_extension(
     path: str,
     source: str,
     webstore_id: str | None = None,
+    browser_type: str = "cloakbrowser",
 ) -> dict[str, Any]:
     with get_db() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO extensions
-            (id, name, version, description, icon_url, path, source, webstore_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, name, version, description, icon_url, path, source, webstore_id, browser_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ext_id, name, version, description, icon_url, path, source, webstore_id, _now()),
+            (ext_id, name, version, description, icon_url, path, source, webstore_id, browser_type, _now()),
         )
         conn.commit()
     return get_extension(ext_id)  # type: ignore

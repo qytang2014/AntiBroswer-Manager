@@ -59,6 +59,7 @@ export function ExtensionManagerModal({
   onClose,
   onExtensionsChanged,
 }: ExtensionManagerModalProps) {
+  const [browserType, setBrowserType] = useState<"cloakbrowser" | "camoufox">("cloakbrowser");
   const [activeTab, setActiveTab] = useState<"webstore" | "popular" | "upload">("webstore");
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [popular, setPopular] = useState<PopularExtension[]>([]);
@@ -77,7 +78,7 @@ export function ExtensionManagerModal({
   const fetchExtensions = async () => {
     try {
       setLoading(true);
-      const list = await api.listExtensions();
+      const list = await api.listExtensions(browserType);
       setExtensions(list);
     } catch (err) {
       console.error("Failed to load extensions:", err);
@@ -101,7 +102,7 @@ export function ExtensionManagerModal({
       fetchPopular();
       setFeedback(null);
     }
-  }, [isOpen]);
+  }, [isOpen, browserType]);
 
   if (!isOpen) return null;
 
@@ -130,7 +131,7 @@ export function ExtensionManagerModal({
     try {
       const installed = await api.installFromWebStoreStream(target, (progress) => {
         setDownloadProgress(progress);
-      });
+      }, browserType);
       setFeedback({ type: "success", text: `成功安装扩展 "${installed.name}"！` });
       if (!idOrUrl) setWebstoreInput("");
       await fetchExtensions();
@@ -186,7 +187,7 @@ export function ExtensionManagerModal({
     setActionLoading(true);
     setFeedback(null);
     try {
-      const installed = await api.uploadExtension(file);
+      const installed = await api.uploadExtension(file, browserType);
       setFeedback({ type: "success", text: `Successfully installed "${installed.name}"!` });
       e.target.value = "";
       await fetchExtensions();
@@ -281,7 +282,7 @@ export function ExtensionManagerModal({
             </div>
             <div>
               <h2 className="text-base font-semibold text-white">Extension Store & Manager</h2>
-              <p className="text-xs text-gray-400">Install Chrome extensions for all browser profiles</p>
+              <p className="text-xs text-gray-400">Install extensions for your browser profiles</p>
             </div>
           </div>
           <button
@@ -289,6 +290,36 @@ export function ExtensionManagerModal({
             className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition"
           >
             <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Browser Type Tabs */}
+        <div className="flex border-b border-gray-800/60">
+          <button
+            className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+              browserType === "cloakbrowser"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => {
+              setBrowserType("cloakbrowser");
+              setActiveTab("webstore");
+            }}
+          >
+            CloakBrowser (Chrome)
+          </button>
+          <button
+            className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+              browserType === "camoufox"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => {
+              setBrowserType("camoufox");
+              setActiveTab("upload"); // Camoufox doesn't support Chrome webstore
+            }}
+          >
+            Camoufox (Firefox)
           </button>
         </div>
 
@@ -313,26 +344,30 @@ export function ExtensionManagerModal({
         {/* Installation Tabs */}
         <div className="px-6 pt-4 pb-2 border-b border-gray-800/60">
           <div className="flex gap-2 text-xs font-medium">
-            <button
-              className={`px-3 py-1.5 rounded-md transition ${
-                activeTab === "webstore"
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
-              }`}
-              onClick={() => setActiveTab("webstore")}
-            >
-              Web Store ID / URL
-            </button>
-            <button
-              className={`px-3 py-1.5 rounded-md transition ${
-                activeTab === "popular"
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
-              }`}
-              onClick={() => setActiveTab("popular")}
-            >
-              Popular Extensions
-            </button>
+            {browserType === "cloakbrowser" && (
+              <>
+                <button
+                  className={`px-3 py-1.5 rounded-md transition ${
+                    activeTab === "webstore"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+                  }`}
+                  onClick={() => setActiveTab("webstore")}
+                >
+                  Web Store ID / URL
+                </button>
+                <button
+                  className={`px-3 py-1.5 rounded-md transition ${
+                    activeTab === "popular"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+                  }`}
+                  onClick={() => setActiveTab("popular")}
+                >
+                  Popular Extensions
+                </button>
+              </>
+            )}
             <button
               className={`px-3 py-1.5 rounded-md transition ${
                 activeTab === "upload"
@@ -341,7 +376,7 @@ export function ExtensionManagerModal({
               }`}
               onClick={() => setActiveTab("upload")}
             >
-              Upload .crx / .zip
+              Upload {browserType === "cloakbrowser" ? ".crx / .zip" : ".xpi / .zip"}
             </button>
           </div>
 
@@ -537,7 +572,7 @@ export function ExtensionManagerModal({
                   type="file"
                   id="ext-file-upload"
                   className="hidden"
-                  accept=".crx,.zip"
+                  accept={browserType === "cloakbrowser" ? ".crx,.zip" : ".xpi,.zip"}
                   onChange={handleFileUpload}
                   disabled={actionLoading}
                 />
@@ -546,7 +581,7 @@ export function ExtensionManagerModal({
                   className="cursor-pointer flex flex-col items-center justify-center gap-1.5 text-xs text-gray-300"
                 >
                   <Upload className="h-5 w-5 text-indigo-400" />
-                  <span>Click to browse and upload <code className="text-indigo-300">.crx</code> or <code className="text-indigo-300">.zip</code></span>
+                  <span>Click to browse and upload <code className="text-indigo-300">{browserType === "cloakbrowser" ? ".crx / .zip" : ".xpi / .zip"}</code></span>
                   <span className="text-[10px] text-gray-500">Unpacks automatically into persistent extension library</span>
                 </label>
               </div>

@@ -931,6 +931,8 @@ class BrowserManager:
                         "proxy": launch_options.get("proxy"),
                         "enable_cache": True,
                     }
+                    if launch_options.get("extension_paths"):
+                        camoufox_options["addons"] = launch_options["extension_paths"]
                     if display is not None:
                         camoufox_options["env"] = launch_options.get("env")
                         camoufox_options["virtual_display"] = f":{display}"

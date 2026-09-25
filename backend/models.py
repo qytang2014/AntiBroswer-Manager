@@ -319,6 +319,7 @@ class KernelItem(BaseModel):
     version: str
     name: str
     tier: str  # "pro" | "free"
+    browser_type: str | None = "cloakbrowser"
     platform: str
     description: str
     installed: bool
