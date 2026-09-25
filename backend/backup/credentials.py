@@ -69,6 +69,11 @@ def _save_fallback_store(store: dict[str, str]) -> None:
     aesgcm = AESGCM(_machine_key())
     ciphertext = aesgcm.encrypt(nonce, raw, b"antibrowser_secrets")
     path.write_bytes(nonce + ciphertext)
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
 
 
 def get_credential(key: str) -> str | None:
