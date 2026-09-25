@@ -661,8 +661,12 @@ export const api = {
       };
 
       eventSource.onerror = () => {
+        // If readyState is CONNECTING (0), browser EventSource is auto-reconnecting; do not abort prematurely
+        if (eventSource.readyState === EventSource.CONNECTING) {
+          return;
+        }
         eventSource.close();
-        reject(new Error("Network connection to backup task lost"));
+        reject(new Error("网络连接异常: 与备份任务的实时通道断开"));
       };
     });
   },

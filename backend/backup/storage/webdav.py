@@ -137,17 +137,38 @@ class WebDAVStorage(BackupStorage):
         local_path.parent.mkdir(parents=True, exist_ok=True)
         target_url = self._file_url(remote_filename)
 
-        async with self._client(timeout=180.0) as client:
+        # For small sidecars (.sha256), use a shorter 15s timeout; archives get 180s
+        timeout = 15.0 if remote_filename.endswith(".sha256") else 180.0
+
+        async with self._client(timeout=timeout) as client:
             if progress_callback:
-                progress_callback(10, f"Downloading {remote_filename} from WebDAV...")
+                progress_callback(10, f"Connecting to WebDAV for {remote_filename}...")
 
-            res = await client.get(target_url)
-            if res.status_code == 404:
-                raise FileNotFoundError(f"Remote file not found: {remote_filename}")
-            if res.status_code not in (200, 206):
-                raise RuntimeError(f"WebDAV download failed (HTTP {res.status_code}): {res.text[:200]}")
+            async with client.stream("GET", target_url) as res:
+                if res.status_code == 404:
+                    raise FileNotFoundError(f"Remote file not found: {remote_filename}")
+                if res.status_code not in (200, 206):
+                    body = await res.aread()
+                    raise RuntimeError(
+                        f"WebDAV download failed (HTTP {res.status_code}): {body.decode(errors='replace')[:200]}"
+                    )
 
-            local_path.write_bytes(res.content)
+                total_header = res.headers.get("content-length")
+                total_bytes = int(total_header) if total_header and total_header.isdigit() else 0
+                downloaded = 0
+
+                with open(local_path, "wb") as f:
+                    async for chunk in res.aiter_bytes(chunk_size=1024 * 128):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback and total_bytes > 0:
+                            pct = min(99, int((downloaded / total_bytes) * 100))
+                            mb_down = downloaded / (1024 * 1024)
+                            mb_total = total_bytes / (1024 * 1024)
+                            progress_callback(
+                                pct,
+                                f"Downloading {remote_filename} ({mb_down:.1f} MB / {mb_total:.1f} MB)...",
+                            )
 
             if progress_callback:
                 progress_callback(100, f"Downloaded {remote_filename} successfully")

@@ -72,7 +72,15 @@ def _save_fallback_store(store: dict[str, str]) -> None:
 
 
 def get_credential(key: str) -> str | None:
-    """Retrieve a secret credential by key from keychain or fallback store."""
+    """Retrieve a secret credential by key.
+    
+    Checks the machine-keyed local AES-256-GCM encrypted store first to guarantee
+    instantaneous, non-blocking resolution without triggering OS GUI prompts.
+    """
+    store = _load_fallback_store()
+    if key in store and store[key] is not None:
+        return store[key]
+
     try:
         import keyring
 
@@ -80,42 +88,40 @@ def get_credential(key: str) -> str | None:
         if val is not None:
             return val
     except Exception as exc:
-        logger.debug("Keyring get_password failed, falling back to local store: %s", exc)
+        logger.debug("Keyring get_password failed: %s", exc)
 
-    store = _load_fallback_store()
-    return store.get(key)
+    return None
 
 
 def set_credential(key: str, value: str) -> None:
-    """Store a secret credential in the keychain (or fallback store)."""
-    keyring_success = False
+    """Store a secret credential in the secure machine-keyed AES-256-GCM store."""
+    # Always persist to encrypted machine store first
+    store = _load_fallback_store()
+    store[key] = value
+    _save_fallback_store(store)
+
+    # Best-effort sync to system keychain
     try:
         import keyring
 
         keyring.set_password(SERVICE_NAME, key, value)
-        keyring_success = True
     except Exception as exc:
-        logger.debug("Keyring set_password failed, saving to local store: %s", exc)
-
-    if not keyring_success:
-        store = _load_fallback_store()
-        store[key] = value
-        _save_fallback_store(store)
+        logger.debug("Keyring set_password skipped: %s", exc)
 
 
 def delete_credential(key: str) -> None:
     """Delete a secret credential by key."""
+    store = _load_fallback_store()
+    if key in store:
+        del store[key]
+        _save_fallback_store(store)
+
     try:
         import keyring
 
         keyring.delete_password(SERVICE_NAME, key)
     except Exception:
         pass
-
-    store = _load_fallback_store()
-    if key in store:
-        del store[key]
-        _save_fallback_store(store)
 
 
 def has_credential(key: str) -> bool:

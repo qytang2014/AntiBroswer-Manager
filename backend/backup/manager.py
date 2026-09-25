@@ -127,10 +127,14 @@ class BackupManager:
 
         try:
             while True:
-                data = await queue.get()
-                yield f"data: {json.dumps(data)}\n\n"
-                if data.get("status") in ("completed", "error"):
-                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=3.0)
+                    yield f"data: {json.dumps(data)}\n\n"
+                    if data.get("status") in ("completed", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    # Send periodic SSE comment ping so browser and proxies keep socket open
+                    yield ": ping\n\n"
         finally:
             if task_id in self._task_listeners:
                 try:
@@ -329,9 +333,14 @@ class BackupManager:
                 storage = get_storage_backend(cfg)
 
                 # Step 1: Download backup and sidecar checksum
-                progress_cb(15, f"Downloading {filename} from remote storage...")
+                progress_cb(15, f"正在连接远端存储下载备份包 {filename}...")
                 local_file = work_dir / filename
-                await storage.download_file(filename, local_file)
+
+                def dl_cb(pct: int, msg: str) -> None:
+                    mapped_pct = 15 + int((pct / 100) * 15)
+                    progress_cb(mapped_pct, msg)
+
+                await storage.download_file(filename, local_file, progress_callback=dl_cb)
 
                 sidecar_name = f"{filename}.sha256"
                 local_sidecar = work_dir / sidecar_name
