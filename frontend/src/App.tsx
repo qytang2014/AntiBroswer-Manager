@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X, Loader2 } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X, Loader2, Globe, Plus } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
 import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial, type KernelDownloadProgress } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
-import { ProfileForm } from "./components/ProfileForm";
+import { ProfileForm, setCachedInstalledKernels } from "./components/ProfileForm";
 import { ProfileViewer } from "./components/ProfileViewer";
 import { NativeWindowStatus } from "./components/NativeWindowStatus";
 import { LaunchButton } from "./components/LaunchButton";
@@ -140,6 +140,9 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   useEffect(() => {
     refreshSystemStatus();
     api.checkUpdate().then(setUpdateInfo).catch(() => setUpdateInfo(null));
+    api.listKernels().then((res) => {
+      setCachedInstalledKernels(res.kernels.filter((k) => k.installed));
+    }).catch(() => {});
   }, [refreshSystemStatus]);
 
   useEffect(() => {
@@ -309,6 +312,11 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
             setSystemStatus(status);
             setSettingsVersion(v => v + 1);
           }}
+          onOpenKernelManager={() => {
+            setSettingsOpen(false);
+            setKernelManagerOpen(true);
+          }}
+          systemStatus={systemStatus}
         />
       )}
       {proxyManagerOpen && (
@@ -334,6 +342,9 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           onKernelChanged={() => {
             refreshSystemStatus();
             setKernelsVersion((v) => v + 1);
+            api.listKernels().then((res) => {
+              setCachedInstalledKernels(res.kernels.filter((k) => k.installed));
+            }).catch(() => {});
           }}
         />
       )}
@@ -495,51 +506,51 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto overscroll-contain">
-          {view === "empty" &&
-            ((systemStatus?.license_tier ?? "keyless") === "keyless" ? (
-              <div className="flex items-center justify-center h-full px-6">
-                <div className="max-w-sm text-center">
-                  <p className="text-sm font-medium text-gray-200">No license key set</p>
-                  <p className="mt-1.5 text-sm text-gray-500">
-                    You're running the free keyless build. Add a key to run the
-                    latest Pro build.
-                  </p>
-                  <div className="mt-5 flex flex-col items-center gap-2">
+          {view === "empty" && (
+            <div className="flex items-center justify-center h-full px-6">
+              <div className="max-w-md text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-surface-2 border border-border mb-4 text-accent">
+                  <Globe className="h-6 w-6" />
+                </div>
+                <h3 className="text-base font-semibold text-gray-200">
+                  AntiBrowser-Manager 已就绪
+                </h3>
+                <p className="mt-1.5 text-sm text-gray-400">
+                  支持 CloakBrowser (Chromium) 与 Camoufox (Firefox) 双反指纹内核
+                </p>
+                <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <button
+                    onClick={() => {
+                      setSelectedId(null);
+                      setView("create");
+                    }}
+                    className="btn-primary w-full sm:w-auto px-5 flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>新建浏览器环境</span>
+                  </button>
+                  <button
+                    onClick={() => setKernelManagerOpen(true)}
+                    className="btn-secondary w-full sm:w-auto px-5 flex items-center justify-center gap-1.5"
+                  >
+                    <Cpu className="w-4 h-4" />
+                    <span>内核管理</span>
+                  </button>
+                </div>
+                {(systemStatus?.license_tier ?? "keyless") === "keyless" && (
+                  <p className="mt-6 text-xs text-gray-500">
+                    使用 CloakBrowser 商业版？
                     <button
                       onClick={() => setSettingsOpen(true)}
-                      className="btn-primary w-56"
+                      className="ml-1 text-accent hover:underline"
                     >
-                      Enter a key in Settings
+                      在设置中配置 Pro 授权
                     </button>
-                    <a
-                      href="https://cloakbrowser.dev/free"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-secondary w-56"
-                    >
-                      Get a free key
-                    </a>
-                    <a
-                      href="https://cloakbrowser.dev/#pricing"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-gray-500 hover:text-gray-300"
-                    >
-                      See Pro plans &rarr;
-                    </a>
-                  </div>
-                  <p className="mt-6 text-xs text-gray-600">
-                    Or select a profile or create a new one to continue keyless.
                   </p>
-                </div>
+                )}
               </div>
-            ) : (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center">
-                  <p className="text-gray-500 text-sm">Select a profile or create a new one</p>
-                </div>
-              </div>
-            ))}
+            </div>
+          )}
 
           {view === "create" && (
             <ProfileForm

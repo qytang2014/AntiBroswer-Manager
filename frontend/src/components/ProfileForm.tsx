@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Sliders, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
@@ -37,6 +37,12 @@ function detectProxyType(raw: string | null | undefined): "standard" | "singbox_
   return "standard";
 }
 
+let _cachedInstalledKernels: KernelItem[] | null = null;
+
+export function setCachedInstalledKernels(kernels: KernelItem[] | null) {
+  _cachedInstalledKernels = kernels;
+}
+
 interface ProfileFormProps {
   profile: Profile | null; // null = create mode
   hostOs: HostOS | null;
@@ -72,7 +78,7 @@ const TAG_COLORS = [
   "#ec4899", // pink
 ];
 
-const ARG_PRESETS = [
+const CHROMIUM_ARG_PRESETS = [
   { label: "忽略扩展禁用", arg: "ignore: --disable-extensions", tip: "允许加载 Chrome 扩展插件（已勾选插件时会自动添加并生效）" },
   { label: "去除自动化特征", arg: "--disable-blink-features=AutomationControlled", tip: "避免被检测到 navigator.webdriver 等自动化特征" },
   { label: "跳过首次运行", arg: "--no-first-run", tip: "跳过首次启动向导与测试，防止首次运行特征暴露" },
@@ -82,6 +88,25 @@ const ARG_PRESETS = [
   { label: "禁用网页通知", arg: "--disable-notifications", tip: "阻止网页弹窗申请通知权限" },
   { label: "窗口最大化启动", arg: "--start-maximized", tip: "窗口最大化以模拟真实桌面用户行为" },
   { label: "静音所有标签", arg: "--mute-audio", tip: "静音浏览器所有声音输出" },
+  { label: "禁用密码提示与钥匙串", arg: "--password-store=basic", tip: "防止弹出系统级密码与钥匙串授权提示" },
+];
+
+const FIREFOX_ARG_PRESETS = [
+  { label: "静音所有标签", arg: "-mute-audio", tip: "静音 Firefox 浏览器所有声音输出" },
+  { label: "隐私无痕模式", arg: "-private-window", tip: "以隐私浏览模式启动，不保留临时历史记录" },
+  { label: "独立进程隔离", arg: "-no-remote", tip: "强制启动独立的 Firefox 进程，不复用已有实例" },
+  { label: "全屏展台模式", arg: "--kiosk", tip: "以全屏 Kiosk 展台模式启动" },
+  { label: "启动时打开开发者工具", arg: "-devtools", tip: "启动时自动唤出开发者工具面板" },
+];
+
+const WEBGL_PRESETS: { label: string; vendor: string | null; renderer: string | null }[] = [
+  { label: "自动跟随系统 / 种子推导 (Auto)", vendor: null, renderer: null },
+  { label: "Apple Silicon (Apple M2)", vendor: "Apple", renderer: "Apple M2" },
+  { label: "Apple Silicon (Apple M3)", vendor: "Apple", renderer: "Apple M3" },
+  { label: "Intel Iris Xe Graphics", vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Xe Graphics" },
+  { label: "NVIDIA GeForce RTX 4070", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 4070/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 3060", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2" },
+  { label: "AMD Radeon RX 6700 XT", vendor: "AMD", renderer: "AMD Radeon RX 6700 XT" },
 ];
 
 export function compareKernelVersions(a: string, b: string): number {
@@ -152,10 +177,27 @@ export function ProfileForm({
     search_engine_url: "https://www.google.com/search?q=%s",
     capture_preview: true,
     restore_session: true,
-    extension_paths: [],
-    launch_args: [],
+    extension_paths: profile?.extension_paths ?? [],
+    launch_args: profile?.launch_args ?? [],
     tags: [],
+    cpu_cores: profile?.cpu_cores ?? null,
+    memory_gb: profile?.memory_gb ?? null,
+    webgl_vendor: profile?.webgl_vendor ?? null,
+    webgl_renderer: profile?.webgl_renderer ?? null,
+    canvas_noise: profile?.canvas_noise ?? true,
+    audio_noise: profile?.audio_noise ?? true,
+    do_not_track: profile?.do_not_track ?? false,
+    firefox_user_prefs: profile?.firefox_user_prefs ?? null,
+    extra_launch_args: profile?.extra_launch_args ?? null,
   });
+
+  const engineExtensionsRef = useRef<Record<string, string[]>>({
+    [profile?.browser_type ?? "cloakbrowser"]: profile?.extension_paths ?? [],
+  });
+
+  const [prefKeyInput, setPrefKeyInput] = useState("");
+  const [prefValInput, setPrefValInput] = useState("");
+  const [prefTypeInput, setPrefTypeInput] = useState<"boolean" | "number" | "string">("string");
 
   const [proxyType, setProxyType] = useState<"standard" | "singbox_uri" | "singbox_sub" | "singbox_json">(() =>
     detectProxyType(profile?.proxy)
@@ -249,13 +291,16 @@ export function ProfileForm({
         const currentPaths = f.extension_paths ?? [];
         if (!profile) {
           // New profile: default all installed extensions to checked
-          return { ...f, extension_paths: list.map((e) => e.path) };
+          const allExts = list.map((e) => e.path);
+          engineExtensionsRef.current[browserType] = allExts;
+          return { ...f, extension_paths: allExts };
         } else {
-          // Existing profile: if there are newly installed extensions in the library, auto-select them
-          // Also remove any paths that belong to the OTHER browser type (not in the new list)
-          const validPaths = new Set(list.map(e => e.path));
-          const filteredPaths = currentPaths.filter(p => validPaths.has(p));
-          
+          // Existing profile: if we had cached paths for this browserType in engineExtensionsRef, use them
+          const cached = engineExtensionsRef.current[browserType];
+          const basePaths = cached !== undefined ? cached : currentPaths;
+          const validPaths = new Set(list.map((e) => e.path));
+          const filteredPaths = basePaths.filter((p) => validPaths.has(p));
+
           const updated = new Set(filteredPaths);
           const prevKnown = prevLibraryPathsRef.current;
           list.forEach((ext) => {
@@ -263,7 +308,9 @@ export function ProfileForm({
               updated.add(ext.path);
             }
           });
-          return { ...f, extension_paths: Array.from(updated) };
+          const nextExts = Array.from(updated);
+          engineExtensionsRef.current[browserType] = nextExts;
+          return { ...f, extension_paths: nextExts };
         }
       });
 
@@ -277,8 +324,15 @@ export function ProfileForm({
     loadInstalledExtensions(form.browser_type || "cloakbrowser");
   }, [extensionsUpdated, form.browser_type]);
 
-  const [installedKernels, setInstalledKernels] = useState<KernelItem[]>([]);
-  const [kernelsLoading, setKernelsLoading] = useState(false);
+  const [installedKernels, setInstalledKernels] = useState<KernelItem[]>(
+    () => _cachedInstalledKernels ?? []
+  );
+  const [kernelsLoaded, setKernelsLoaded] = useState(
+    () => _cachedInstalledKernels !== null
+  );
+  const [kernelsLoading, setKernelsLoading] = useState(
+    () => _cachedInstalledKernels === null
+  );
 
   const currentTypeInstalledKernels = useMemo(() => {
     return installedKernels
@@ -290,7 +344,10 @@ export function ProfileForm({
     setKernelsLoading(true);
     try {
       const res = await api.listKernels();
-      setInstalledKernels(res.kernels.filter((k) => k.installed));
+      const installed = res.kernels.filter((k) => k.installed);
+      _cachedInstalledKernels = installed;
+      setInstalledKernels(installed);
+      setKernelsLoaded(true);
     } catch (err) {
       console.error("Failed to load kernels in form:", err);
     } finally {
@@ -306,7 +363,7 @@ export function ProfileForm({
   // - If no version is selected yet, default to the latest installed version.
   // - If the selected version is deleted from disk / not found, automatically update to the highest available version (or null if none).
   useEffect(() => {
-    if (installedKernels.length === 0) return;
+    if (!kernelsLoaded || installedKernels.length === 0) return;
 
     const highestVersion = currentTypeInstalledKernels[0]?.version ?? null;
 
@@ -321,18 +378,63 @@ export function ProfileForm({
     if (!form.browser_version || !isCurrentValid) {
       setForm((prev) => ({ ...prev, browser_version: highestVersion }));
     }
-  }, [form.browser_type, form.browser_version, currentTypeInstalledKernels, installedKernels.length]);
+  }, [kernelsLoaded, form.browser_type, form.browser_version, currentTypeInstalledKernels, installedKernels.length]);
 
   const handleBrowserTypeChange = (newType: string) => {
     const matching = installedKernels
       .filter((k) => (k.browser_type || "cloakbrowser") === newType)
       .sort((a, b) => compareKernelVersions(b.version, a.version));
     const newVersion = matching[0]?.version ?? null;
+
+    const oldType = form.browser_type || "cloakbrowser";
+    // Preserve extension paths for the old engine
+    engineExtensionsRef.current[oldType] = form.extension_paths ?? [];
+    const restoredExts = engineExtensionsRef.current[newType] ?? [];
+
+    // Preserve launch args for the old engine
+    const currentExtra = { ...(form.extra_launch_args ?? {}) };
+    currentExtra[oldType] = form.launch_args ?? [];
+    const nextArgs = currentExtra[newType] ?? [];
+
     setForm((prev) => ({
       ...prev,
       browser_type: newType,
       browser_version: newVersion,
+      extension_paths: restoredExts,
+      launch_args: nextArgs,
+      extra_launch_args: currentExtra,
     }));
+  };
+
+  const addFirefoxPref = () => {
+    const k = prefKeyInput.trim();
+    if (!k) return;
+    let v: any = prefValInput.trim();
+    if (prefTypeInput === "boolean") {
+      v = v === "true" || v === "1";
+    } else if (prefTypeInput === "number") {
+      v = Number(v) || 0;
+    }
+    setForm((prev) => ({
+      ...prev,
+      firefox_user_prefs: {
+        ...(prev.firefox_user_prefs ?? {}),
+        [k]: v,
+      },
+    }));
+    setPrefKeyInput("");
+    setPrefValInput("");
+  };
+
+  const removeFirefoxPref = (keyToRemove: string) => {
+    setForm((prev) => {
+      const copy = { ...(prev.firefox_user_prefs ?? {}) };
+      delete copy[keyToRemove];
+      return {
+        ...prev,
+        firefox_user_prefs: Object.keys(copy).length > 0 ? copy : null,
+      };
+    });
   };
 
   const [licenses, setLicenses] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
@@ -383,7 +485,19 @@ export function ProfileForm({
           notes: profile.notes,
           tags: profile.tags,
           license_id: profile.license_id ?? null,
+          cpu_cores: profile.cpu_cores ?? null,
+          memory_gb: profile.memory_gb ?? null,
+          webgl_vendor: profile.webgl_vendor ?? null,
+          webgl_renderer: profile.webgl_renderer ?? null,
+          canvas_noise: profile.canvas_noise ?? true,
+          audio_noise: profile.audio_noise ?? true,
+          do_not_track: profile.do_not_track ?? false,
+          firefox_user_prefs: profile.firefox_user_prefs ?? null,
+          extra_launch_args: profile.extra_launch_args ?? null,
         });
+        engineExtensionsRef.current = {
+          [profile.browser_type || "cloakbrowser"]: profile.extension_paths ?? [],
+        };
         setProxyType(detectProxyType(profile.proxy));
         setPreviewError(false);
         setPreviewBuster(Date.now());
@@ -391,6 +505,7 @@ export function ProfileForm({
     } else {
       if (prevProfileIdRef.current !== null) {
         prevProfileIdRef.current = null;
+        engineExtensionsRef.current = {};
         setForm({
           name: "",
           browser_version: null,
@@ -412,6 +527,17 @@ export function ProfileForm({
           restore_session: true,
           extension_paths: installedExtensions.map((e) => e.path),
           launch_args: [],
+          tags: [],
+          license_id: null,
+          cpu_cores: null,
+          memory_gb: null,
+          webgl_vendor: null,
+          webgl_renderer: null,
+          canvas_noise: true,
+          audio_noise: true,
+          do_not_track: false,
+          firefox_user_prefs: null,
+          extra_launch_args: null,
         });
         setPreviewError(false);
         setPreviewBuster(Date.now());
@@ -547,7 +673,12 @@ export function ProfileForm({
     if (!form.name.trim()) return;
     setSaving(true);
     try {
-      await onSave(form);
+      const curType = form.browser_type || "cloakbrowser";
+      const finalExtra = { ...(form.extra_launch_args ?? {}), [curType]: form.launch_args ?? [] };
+      await onSave({
+        ...form,
+        extra_launch_args: finalExtra,
+      });
       setSaved(true);
       clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSaved(false), 1500);
@@ -645,6 +776,7 @@ export function ProfileForm({
   };
 
   const isSelectedKernelMissing = Boolean(
+    kernelsLoaded &&
     form.browser_version &&
     currentTypeInstalledKernels.length > 0 &&
     !currentTypeInstalledKernels.some((k) => k.version === form.browser_version)
@@ -664,7 +796,14 @@ export function ProfileForm({
     if (!raw) return;
     const current = form.launch_args ?? [];
     if (!current.includes(raw)) {
-      set("launch_args", [...current, raw]);
+      const nextArgs = [...current, raw];
+      const curType = form.browser_type || "cloakbrowser";
+      const nextExtra = { ...(form.extra_launch_args ?? {}), [curType]: nextArgs };
+      setForm((prev) => ({
+        ...prev,
+        launch_args: nextArgs,
+        extra_launch_args: nextExtra,
+      }));
 
       // If user adds --load-extension=<paths>, auto-select matching installed extensions
       if (raw.startsWith("--load-extension=")) {
@@ -684,7 +823,14 @@ export function ProfileForm({
   const removeLaunchArg = (idx: number) => {
     const current = form.launch_args ?? [];
     const removed = current[idx];
-    set("launch_args", current.filter((_, i) => i !== idx));
+    const nextArgs = current.filter((_, i) => i !== idx);
+    const curType = form.browser_type || "cloakbrowser";
+    const nextExtra = { ...(form.extra_launch_args ?? {}), [curType]: nextArgs };
+    setForm((prev) => ({
+      ...prev,
+      launch_args: nextArgs,
+      extra_launch_args: nextExtra,
+    }));
 
     // If user removes --load-extension, uncheck matching extensions in form
     if (removed && removed.startsWith("--load-extension=")) {
@@ -938,11 +1084,21 @@ export function ProfileForm({
               </div>
               <select
                 id="browser_version"
-                className={`input ${currentTypeInstalledKernels.length === 0 ? "border-amber-500/50 bg-amber-950/10 text-amber-300" : ""}`}
+                className={`input ${kernelsLoaded && currentTypeInstalledKernels.length === 0 ? "border-amber-500/50 bg-amber-950/10 text-amber-300" : ""}`}
                 value={form.browser_version ?? ""}
                 onChange={(e) => set("browser_version", e.target.value ? e.target.value : null)}
               >
-                {currentTypeInstalledKernels.length === 0 && (
+                {!kernelsLoaded && form.browser_version && !currentTypeInstalledKernels.some((k) => k.version === form.browser_version) && (
+                  <option value={form.browser_version}>
+                    v{form.browser_version} (正在加载内核...)
+                  </option>
+                )}
+                {!kernelsLoaded && !form.browser_version && (
+                  <option value="" disabled>
+                    正在检测已安装内核...
+                  </option>
+                )}
+                {kernelsLoaded && currentTypeInstalledKernels.length === 0 && (
                   <option value="" disabled>
                     未检测到已安装内核 (请先下载)
                   </option>
@@ -959,7 +1115,7 @@ export function ProfileForm({
                 ))}
               </select>
 
-              {currentTypeInstalledKernels.length === 0 && (
+              {kernelsLoaded && currentTypeInstalledKernels.length === 0 && (
                 <div className="mt-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-600/50 flex items-center justify-between gap-2 text-xs text-amber-300">
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
@@ -1930,16 +2086,321 @@ export function ProfileForm({
           )}
         </section>
 
-        {/* Advanced */}
+        {/* Hardware & Privacy Fingerprints */}
         <details className="rounded-md border border-border bg-surface-1 p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Advanced launch arguments
+          <summary className="cursor-pointer text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Sliders className="h-3.5 w-3.5 text-indigo-400" />
+              高级硬件与隐私指纹 (Hardware & Privacy Fingerprints)
+            </span>
+            <span className="text-[10px] text-gray-500 font-normal">
+              CPU / 内存 / WebGL / Canvas / Audio / DNT
+            </span>
           </summary>
           <p className="text-xs text-gray-500 my-3">
-            Unrestricted Chromium flags. Advanced arguments can override Manager-controlled behavior.
+            定制底层硬件并发指标与隐私噪点微扰。默认均为「自动跟随指纹种子」，与操作系统和身份保持高度一致。
           </p>
 
-          {isOldKernel && (
+          <div className="space-y-4">
+            {/* CPU & Memory */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  CPU 核心数 (Hardware Concurrency)
+                </label>
+                <select
+                  className="input w-full text-xs"
+                  value={form.cpu_cores ?? ""}
+                  onChange={(e) => set("cpu_cores", e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">自动 (跟随指纹种子推导)</option>
+                  <option value="2">2 核心 (2 Cores)</option>
+                  <option value="4">4 核心 (4 Cores)</option>
+                  <option value="6">6 核心 (6 Cores)</option>
+                  <option value="8">8 核心 (8 Cores - 推荐)</option>
+                  <option value="12">12 核心 (12 Cores)</option>
+                  <option value="16">16 核心 (16 Cores)</option>
+                  <option value="24">24 核心 (24 Cores)</option>
+                  <option value="32">32 核心 (32 Cores)</option>
+                </select>
+                <span className="block text-[11px] text-gray-500 mt-1">
+                  控制 <code>navigator.hardwareConcurrency</code>。
+                </span>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  物理内存容量 (Device Memory)
+                </label>
+                <select
+                  className="input w-full text-xs"
+                  value={form.memory_gb ?? ""}
+                  onChange={(e) => set("memory_gb", e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">自动 (跟随指纹种子推导)</option>
+                  <option value="2">2 GB</option>
+                  <option value="4">4 GB</option>
+                  <option value="8">8 GB (推荐)</option>
+                  <option value="16">16 GB</option>
+                  <option value="32">32 GB</option>
+                  <option value="64">64 GB</option>
+                </select>
+                <span className="block text-[11px] text-gray-500 mt-1">
+                  控制 <code>navigator.deviceMemory</code> (Chromium)。
+                </span>
+              </div>
+            </div>
+
+            {/* WebGL GPU Preset Selector & Custom Inputs */}
+            <div className="pt-2 border-t border-border/50 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  WebGL GPU 厂商与渲染器预设 (Vendor & Renderer)
+                </label>
+                <select
+                  className="input w-full text-xs"
+                  value={
+                    WEBGL_PRESETS.find(
+                      (p) => p.vendor === (form.webgl_vendor ?? null) && p.renderer === (form.webgl_renderer ?? null)
+                    )?.label ?? "custom"
+                  }
+                  onChange={(e) => {
+                    const selected = WEBGL_PRESETS.find((p) => p.label === e.target.value);
+                    if (selected) {
+                      setForm((prev) => ({
+                        ...prev,
+                        webgl_vendor: selected.vendor,
+                        webgl_renderer: selected.renderer,
+                      }));
+                    }
+                  }}
+                >
+                  {WEBGL_PRESETS.map((p) => (
+                    <option key={p.label} value={p.label}>
+                      {p.label}
+                    </option>
+                  ))}
+                  <option value="custom">自定义输入 (Custom)</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">
+                    WebGL Vendor (提供商)
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full text-xs font-mono"
+                    placeholder="默认留空由种子推导，或输入 Apple / NVIDIA Corporation / Intel Inc."
+                    value={form.webgl_vendor ?? ""}
+                    onChange={(e) => set("webgl_vendor", e.target.value || null)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">
+                    WebGL Renderer (渲染器)
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full text-xs font-mono"
+                    placeholder="默认留空由种子推导，或输入 Apple M2 / ANGLE (NVIDIA...)"
+                    value={form.webgl_renderer ?? ""}
+                    onChange={(e) => set("webgl_renderer", e.target.value || null)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Fingerprint Noise & Privacy */}
+            <div className="pt-2 border-t border-border/50 space-y-2">
+              <div className="text-[11px] font-medium text-gray-400">指纹微扰与防追踪：</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.canvas_noise ?? true}
+                    onChange={(e) => set("canvas_noise", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">Canvas 噪点保护</span>
+                    <span className="block text-[10px] text-gray-500">
+                      注入轻微噪点，扰乱跨站画布哈希追踪
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.audio_noise ?? true}
+                    onChange={(e) => set("audio_noise", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">AudioContext 音频噪点</span>
+                    <span className="block text-[10px] text-gray-500">
+                      混淆声学生成特征，阻止音频指纹
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.do_not_track ?? false}
+                    onChange={(e) => set("do_not_track", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">请勿追踪 (Do Not Track)</span>
+                    <span className="block text-[10px] text-gray-500">
+                      发送 DNT: 1 并置 navigator.doNotTrack
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        {/* Firefox User Preferences (about:config) - Only shown for Camoufox */}
+        {form.browser_type === "camoufox" && (
+          <details className="rounded-md border border-border bg-surface-1 p-3">
+            <summary className="cursor-pointer text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+              <span>Firefox 首选项配置 (User Preferences / about:config)</span>
+              <span className="text-[10px] text-gray-500 font-normal">
+                {Object.keys(form.firefox_user_prefs ?? {}).length} 个自定义项
+              </span>
+            </summary>
+            <p className="text-xs text-gray-500 my-3">
+              直接定制 Camoufox Firefox 内核的 <code>about:config</code> 底层首选项参数（如代理控制、网络协议、渲染参数等）。
+            </p>
+
+            {/* Existing Preferences Table */}
+            {Object.keys(form.firefox_user_prefs ?? {}).length > 0 ? (
+              <div className="border border-border/70 rounded-lg overflow-hidden mb-3">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-surface-2 text-gray-400 text-[11px] uppercase border-b border-border/70">
+                    <tr>
+                      <th className="py-2 px-3">首选项名称 (Preference Name)</th>
+                      <th className="py-2 px-3">类型</th>
+                      <th className="py-2 px-3">值 (Value)</th>
+                      <th className="py-2 px-3 text-right">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {Object.entries(form.firefox_user_prefs ?? {}).map(([key, val]) => {
+                      const valType = typeof val;
+                      return (
+                        <tr key={key} className="hover:bg-surface-2/40">
+                          <td className="py-2 px-3 font-mono text-gray-200">{key}</td>
+                          <td className="py-2 px-3">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-3 text-gray-300 font-mono">
+                              {valType}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 font-mono text-indigo-300">
+                            {String(val)}
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => removeFirefoxPref(key)}
+                              className="text-gray-400 hover:text-rose-400 transition"
+                              title="删除此配置"
+                            >
+                              <Trash2 className="h-3.5 w-3.5 inline" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-xs text-gray-500 italic p-3 bg-surface-2/40 rounded-lg mb-3 border border-border/40">
+                暂无自定义 about:config 首选项。可使用下方表单添加。
+              </div>
+            )}
+
+            {/* Add Preference Inputs */}
+            <div className="p-2.5 rounded-lg bg-surface-2 border border-border/60 space-y-2">
+              <div className="text-[11px] font-medium text-gray-400">添加首选项：</div>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+                <div className="md:col-span-6">
+                  <input
+                    type="text"
+                    className="input w-full text-xs font-mono py-1.5"
+                    placeholder="例如: media.peerconnection.enabled"
+                    value={prefKeyInput}
+                    onChange={(e) => setPrefKeyInput(e.target.value)}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <select
+                    className="input w-full text-xs py-1.5"
+                    value={prefTypeInput}
+                    onChange={(e) => setPrefTypeInput(e.target.value as "boolean" | "number" | "string")}
+                  >
+                    <option value="string">String</option>
+                    <option value="boolean">Boolean</option>
+                    <option value="number">Number</option>
+                  </select>
+                </div>
+                <div className="md:col-span-3">
+                  {prefTypeInput === "boolean" ? (
+                    <select
+                      className="input w-full text-xs py-1.5 font-mono"
+                      value={prefValInput || "true"}
+                      onChange={(e) => setPrefValInput(e.target.value)}
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={prefTypeInput === "number" ? "number" : "text"}
+                      className="input w-full text-xs font-mono py-1.5"
+                      placeholder="值 (Value)"
+                      value={prefValInput}
+                      onChange={(e) => setPrefValInput(e.target.value)}
+                    />
+                  )}
+                </div>
+                <div className="md:col-span-1">
+                  <button
+                    type="button"
+                    onClick={addFirefoxPref}
+                    className="btn-secondary w-full text-xs py-1.5 flex justify-center items-center"
+                    title="添加"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </details>
+        )}
+
+        {/* Advanced Launch Arguments */}
+        <details className="rounded-md border border-border bg-surface-1 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+            <span>
+              高级启动参数 (Launch Arguments - {form.browser_type === "camoufox" ? "Firefox" : "Chromium"})
+            </span>
+            <span className="text-[10px] text-gray-500 font-normal">
+              {(form.launch_args ?? []).length} 个已配置参数
+            </span>
+          </summary>
+          <p className="text-xs text-gray-500 my-3">
+            {form.browser_type === "camoufox"
+              ? "针对 Camoufox (Firefox) 内核的 CLI 启动参数（如 -mute-audio, -private-window 等）。"
+              : "针对 Chromium 内核的自定义 CLI 启动标志。注意：已安全剔除 --disable-gpu 等降低反爬可信度的参数。"}
+          </p>
+
+          {form.browser_type !== "camoufox" && isOldKernel && (
             <div className="mb-3 p-2.5 rounded-lg bg-blue-950/40 border border-blue-600/50 flex items-start gap-2 text-xs text-blue-300">
               <AlertTriangle className="h-4 w-4 shrink-0 text-blue-400 mt-0.5" />
               <div>
@@ -1953,7 +2414,7 @@ export function ProfileForm({
             </div>
           )}
 
-          {hasInlineProxyAuthArg && (
+          {form.browser_type !== "camoufox" && hasInlineProxyAuthArg && (
             <div className="mb-3 p-2.5 rounded-lg bg-rose-950/50 border border-rose-600/60 flex items-start gap-2 text-xs text-rose-300">
               <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
               <div>
@@ -1973,7 +2434,7 @@ export function ProfileForm({
               常用安全与防关联推荐参数（点击添加 / 移除）：
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {ARG_PRESETS.map((preset) => {
+              {(form.browser_type === "camoufox" ? FIREFOX_ARG_PRESETS : CHROMIUM_ARG_PRESETS).map((preset) => {
                 const isActive = (form.launch_args ?? []).includes(preset.arg);
                 return (
                   <button
@@ -2002,67 +2463,69 @@ export function ProfileForm({
             </div>
           </div>
 
-          {/* Ignored Default Arguments Section */}
-          <div className="mb-4 p-3 rounded-lg bg-surface-2/70 border border-border/70 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-                已忽略的默认参数 (Ignored Default Arguments)
-              </span>
-              <span className="text-[10px] text-gray-500">
-                Playwright 默认参数抑制，防止暴露自动化特征或阻塞插件加载
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <span
-                className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border ${
-                  (form.extension_paths ?? []).length > 0 || (form.launch_args ?? []).includes("ignore: --disable-extensions")
-                    ? "bg-amber-950/60 border-amber-600/60 text-amber-200"
-                    : "bg-surface-3/50 border-border/50 text-gray-500 line-through"
-                }`}
-                title={(form.extension_paths ?? []).length > 0 ? "由于勾选了插件，已自动忽略 --disable-extensions" : "未勾选插件"}
-              >
-                <span className="font-semibold text-amber-400">ignore:</span> --disable-extensions
-                <span className="text-[10px] px-1 rounded bg-amber-900/50 text-amber-300 font-sans">
-                  {(form.extension_paths ?? []).length > 0 ? "插件加载已激活" : "未激活"}
+          {/* Ignored Default Arguments Section - Only relevant for Chromium */}
+          {form.browser_type !== "camoufox" && (
+            <div className="mb-4 p-3 rounded-lg bg-surface-2/70 border border-border/70 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                  已忽略的默认参数 (Ignored Default Arguments)
                 </span>
-              </span>
-
-              <span
-                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
-                title="CloakBrowser 核心默认忽略，避免暴露 navigator.webdriver"
-              >
-                <span className="font-semibold text-emerald-400">ignore:</span> --enable-automation
-                <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
-                  系统内置防关联
+                <span className="text-[10px] text-gray-500">
+                  Playwright 默认参数抑制，防止暴露自动化特征或阻塞插件加载
                 </span>
-              </span>
-
-              <span
-                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
-                title="CloakBrowser 核心默认忽略，避免暴露 SwiftShader WebGL 渲染特征"
-              >
-                <span className="font-semibold text-emerald-400">ignore:</span> --enable-unsafe-swiftshader
-                <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
-                  系统内置防关联
-                </span>
-              </span>
-
-              {(form.launch_args ?? [])
-                .filter((a) => a.startsWith("ignore:") && a !== "ignore: --disable-extensions")
-                .map((arg, i) => (
-                  <span
-                    key={`custom-ignore-${i}`}
-                    className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-indigo-950/60 border-indigo-600/60 text-indigo-200"
-                  >
-                    <span className="font-semibold text-indigo-400">ignore:</span> {arg.slice(7).trim()}
-                    <span className="text-[10px] px-1 rounded bg-indigo-900/50 text-indigo-300 font-sans">
-                      自定义忽略
-                    </span>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <span
+                  className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border ${
+                    (form.extension_paths ?? []).length > 0 || (form.launch_args ?? []).includes("ignore: --disable-extensions")
+                      ? "bg-amber-950/60 border-amber-600/60 text-amber-200"
+                      : "bg-surface-3/50 border-border/50 text-gray-500 line-through"
+                  }`}
+                  title={(form.extension_paths ?? []).length > 0 ? "由于勾选了插件，已自动忽略 --disable-extensions" : "未勾选插件"}
+                >
+                  <span className="font-semibold text-amber-400">ignore:</span> --disable-extensions
+                  <span className="text-[10px] px-1 rounded bg-amber-900/50 text-amber-300 font-sans">
+                    {(form.extension_paths ?? []).length > 0 ? "插件加载已激活" : "未激活"}
                   </span>
-                ))}
+                </span>
+
+                <span
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
+                  title="CloakBrowser 核心默认忽略，避免暴露 navigator.webdriver"
+                >
+                  <span className="font-semibold text-emerald-400">ignore:</span> --enable-automation
+                  <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
+                    系统内置防关联
+                  </span>
+                </span>
+
+                <span
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-emerald-950/50 border-emerald-700/50 text-emerald-200"
+                  title="CloakBrowser 核心默认忽略，避免暴露 SwiftShader WebGL 渲染特征"
+                >
+                  <span className="font-semibold text-emerald-400">ignore:</span> --enable-unsafe-swiftshader
+                  <span className="text-[10px] px-1 rounded bg-emerald-900/50 text-emerald-300 font-sans">
+                    系统内置防关联
+                  </span>
+                </span>
+
+                {(form.launch_args ?? [])
+                  .filter((a) => a.startsWith("ignore:") && a !== "ignore: --disable-extensions")
+                  .map((arg, i) => (
+                    <span
+                      key={`custom-ignore-${i}`}
+                      className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-mono border bg-indigo-950/60 border-indigo-600/60 text-indigo-200"
+                    >
+                      <span className="font-semibold text-indigo-400">ignore:</span> {arg.slice(7).trim()}
+                      <span className="text-[10px] px-1 rounded bg-indigo-900/50 text-indigo-300 font-sans">
+                        自定义忽略
+                      </span>
+                    </span>
+                  ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {(form.launch_args ?? []).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3">
@@ -2093,7 +2556,7 @@ export function ProfileForm({
               value={launchArgInput}
               onChange={(e) => setLaunchArgInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLaunchArg(); } }}
-              placeholder="--disable-features=Foo 或 ignore: --arg"
+              placeholder={form.browser_type === "camoufox" ? "-mute-audio 或 -private-window" : "--disable-features=Foo 或 ignore: --arg"}
             />
             <button type="button" onClick={() => addLaunchArg()} className="btn-secondary text-xs">Add</button>
           </div>

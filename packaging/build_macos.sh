@@ -25,6 +25,11 @@ echo "[build] AntiBrowser-Manager $VERSION (macOS)"
 
 # 0. Clean prior build artifacts, caches, and intermediate outputs.
 echo "[build] cleaning prior build artifacts and caches"
+if pgrep -x "AntiBrowser-Manager" >/dev/null 2>&1; then
+  echo "[build] stopping running AntiBrowser-Manager instance before packaging"
+  pkill -x "AntiBrowser-Manager" || true
+  sleep 1
+fi
 rm -rf "$DIST" "$BUILD" "$ROOT/dist_arm"
 find "$ROOT/backend" "$ROOT/packaging" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$ROOT/backend" "$ROOT/packaging" -type f -name "*.pyc" -delete 2>/dev/null || true

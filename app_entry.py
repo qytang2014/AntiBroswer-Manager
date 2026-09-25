@@ -31,13 +31,30 @@ PORT = 8080
 WINDOW_TITLE = "AntiBrowser-Manager"
 
 
-def _port_available() -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        try:
-            sock.bind((HOST, PORT))
-            return True
-        except OSError:
-            return False
+def _port_available(retries: int = 3, retry_delay: float = 0.4) -> bool:
+    for i in range(retries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((HOST, PORT))
+                return True
+            except OSError:
+                if i < retries - 1:
+                    time.sleep(retry_delay)
+    return False
+
+
+def _is_manager_running() -> bool:
+    """Check if an active AntiBrowser-Manager instance is responding on PORT."""
+    try:
+        req = urllib.request.Request(
+            f"{SERVER_URL}/api/health",
+            headers={"User-Agent": "AntiBrowser-Manager-Probe"},
+        )
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            return resp.status == 200
+    except OSError:
+        return False
 
 
 def _wait_until_ready(timeout: float = 180.0) -> bool:
@@ -200,8 +217,15 @@ def _focus_existing_window() -> bool:
         try:
             import subprocess
 
+            script = (
+                'try\n'
+                'tell application id "dev.cloakbrowser.manager" to activate\n'
+                'on error\n'
+                'tell application "AntiBrowser-Manager" to activate\n'
+                'end try'
+            )
             res = subprocess.run(
-                ["osascript", "-e", 'tell application "AntiBrowser-Manager" to activate'],
+                ["osascript", "-e", script],
                 capture_output=True,
                 timeout=2,
             )
@@ -323,12 +347,46 @@ def main() -> int:
     os.environ.setdefault("CLOAKBROWSER_MANAGER_RUNTIME", "native")
 
     if not _port_available():
-        # A Manager is already running on this machine. Focus its existing window.
-        # In webview/client mode, never pop open a browser tab.
-        if not _focus_existing_window():
-            if _ui_mode() != "webview":
-                webbrowser.open(SERVER_URL)
-        return 0
+        # Port 8080 is not bindable. Check if another Manager instance is running.
+        if _is_manager_running():
+            focused = _focus_existing_window()
+            if not focused:
+                import sys
+                if sys.platform == "darwin":
+                    try:
+                        import subprocess
+                        subprocess.run(
+                            [
+                                "osascript",
+                                "-e",
+                                'display notification "AntiBrowser-Manager 已在运行中，请查看 Dock 或已打开的窗口。" with title "AntiBrowser-Manager"',
+                            ],
+                            capture_output=True,
+                            timeout=2,
+                        )
+                    except Exception:
+                        pass
+                if _ui_mode() != "webview":
+                    webbrowser.open(SERVER_URL)
+            return 0
+        else:
+            # Port is held by another application
+            import sys
+            if sys.platform == "darwin":
+                try:
+                    import subprocess
+                    subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            f'display alert "端口已被占用" message "端口 {PORT} 已被其他程序占用，AntiBrowser-Manager 无法启动。请先释放端口 {PORT}。" as critical',
+                        ],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
+            return 1
 
     import uvicorn
     from backend.main import app

@@ -28,7 +28,10 @@ _PROFILE_COLUMNS = (
     "extension_paths", "allow_3p_cookies", "set_google_default",
     "search_engine_name", "search_engine_keyword", "search_engine_url",
     "capture_preview", "restore_session", "browser_version", "browser_type", "notes", "user_data_dir",
-    "created_at", "updated_at", "sort_order", "license_id"
+    "created_at", "updated_at", "sort_order", "license_id",
+    "cpu_cores", "memory_gb", "webgl_vendor", "webgl_renderer",
+    "canvas_noise", "audio_noise", "do_not_track",
+    "firefox_user_prefs", "extra_launch_args"
 )
 
 _PROFILE_SCHEMA = """
@@ -64,7 +67,16 @@ CREATE TABLE profiles (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    license_id TEXT
+    license_id TEXT,
+    cpu_cores INTEGER DEFAULT NULL,
+    memory_gb INTEGER DEFAULT NULL,
+    webgl_vendor TEXT DEFAULT NULL,
+    webgl_renderer TEXT DEFAULT NULL,
+    canvas_noise BOOLEAN DEFAULT 1,
+    audio_noise BOOLEAN DEFAULT 1,
+    do_not_track BOOLEAN DEFAULT 0,
+    firefox_user_prefs TEXT DEFAULT NULL,
+    extra_launch_args TEXT DEFAULT NULL
 )
 """
 
@@ -242,6 +254,20 @@ def _json_list(value: Any) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _json_dict(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            return None
+    return None
+
+
 def new_profile_id() -> str:
     return str(uuid.uuid4())
 
@@ -289,6 +315,15 @@ def create_profile(
         "browser_type": fields.get("browser_type", "cloakbrowser"),
         "notes": fields.get("notes"),
         "license_id": fields.get("license_id"),
+        "cpu_cores": fields.get("cpu_cores"),
+        "memory_gb": fields.get("memory_gb"),
+        "webgl_vendor": fields.get("webgl_vendor"),
+        "webgl_renderer": fields.get("webgl_renderer"),
+        "canvas_noise": 1 if fields.get("canvas_noise", True) else 0,
+        "audio_noise": 1 if fields.get("audio_noise", True) else 0,
+        "do_not_track": 1 if fields.get("do_not_track", False) else 0,
+        "firefox_user_prefs": json.dumps(fields.get("firefox_user_prefs")) if fields.get("firefox_user_prefs") is not None else None,
+        "extra_launch_args": json.dumps(fields.get("extra_launch_args")) if fields.get("extra_launch_args") is not None else None,
         "user_data_dir": user_data_dir, "created_at": now, "updated_at": now,
     }
     with get_db() as conn:
@@ -318,6 +353,11 @@ def _hydrate_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, An
     profile = dict(row)
     profile["launch_args"] = _json_list(profile.get("launch_args"))
     profile["extension_paths"] = _json_list(profile.get("extension_paths"))
+    profile["firefox_user_prefs"] = _json_dict(profile.get("firefox_user_prefs"))
+    profile["extra_launch_args"] = _json_dict(profile.get("extra_launch_args"))
+    profile["canvas_noise"] = bool(profile.get("canvas_noise", 1)) if profile.get("canvas_noise") is not None else True
+    profile["audio_noise"] = bool(profile.get("audio_noise", 1)) if profile.get("audio_noise") is not None else True
+    profile["do_not_track"] = bool(profile.get("do_not_track", 0)) if profile.get("do_not_track") is not None else False
     tags = conn.execute(
         "SELECT tag, color FROM profile_tags WHERE profile_id = ?",
         (profile["id"],),
@@ -358,6 +398,12 @@ def update_profile(profile_id: str, **fields: Any) -> dict[str, Any] | None:
     for key in ("launch_args", "extension_paths"):
         if key in fields:
             fields[key] = json.dumps(fields[key] or [])
+    for key in ("firefox_user_prefs", "extra_launch_args"):
+        if key in fields:
+            fields[key] = json.dumps(fields[key]) if fields[key] is not None else None
+    for key in ("canvas_noise", "audio_noise", "do_not_track"):
+        if key in fields and fields[key] is not None:
+            fields[key] = 1 if fields[key] else 0
 
     # If browser_type is changed, move on-disk directory to the new engine subdir
     new_browser_type = fields.get("browser_type")

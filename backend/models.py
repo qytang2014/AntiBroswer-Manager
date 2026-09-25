@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -40,6 +40,15 @@ class ProfileCreate(BaseModel):
     notes: str | None = None
     tags: list[TagCreate] | None = None
     license_id: str | None = None
+    cpu_cores: int | None = Field(default=None, ge=1, le=128)
+    memory_gb: int | None = Field(default=None, ge=1, le=512)
+    webgl_vendor: str | None = None
+    webgl_renderer: str | None = None
+    canvas_noise: bool = True
+    audio_noise: bool = True
+    do_not_track: bool = False
+    firefox_user_prefs: dict[str, Any] | None = None
+    extra_launch_args: dict[str, list[str]] | None = None
 
 
 class ProfileUpdate(BaseModel):
@@ -73,6 +82,15 @@ class ProfileUpdate(BaseModel):
     notes: str | None = Field(default=None)
     tags: list[TagCreate] | None = None
     license_id: str | None = Field(default=None)
+    cpu_cores: int | None = Field(default=None)
+    memory_gb: int | None = Field(default=None)
+    gpu_vendor: str | None = Field(default=None)
+    gpu_renderer: str | None = Field(default=None)
+    canvas_noise: bool | None = None
+    audio_noise: bool | None = None
+    do_not_track: bool | None = None
+    firefox_user_prefs: dict[str, Any] | None = Field(default=None)
+    extra_launch_args: dict[str, list[str]] | None = Field(default=None)
 
     @field_validator("gpu_family", mode="before")
     @classmethod
@@ -153,6 +171,15 @@ class ProfileResponse(BaseModel):
     # seats / bad key). {message, reason, upgrade_url?}. Cleared on next launch.
     last_error: dict[str, str] | None = None
     license_id: str | None = None
+    cpu_cores: int | None = None
+    memory_gb: int | None = None
+    webgl_vendor: str | None = None
+    webgl_renderer: str | None = None
+    canvas_noise: bool = True
+    audio_noise: bool = True
+    do_not_track: bool = False
+    firefox_user_prefs: dict[str, Any] | None = None
+    extra_launch_args: dict[str, list[str]] | None = None
 
 
 class LaunchResponse(BaseModel):

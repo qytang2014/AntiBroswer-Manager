@@ -715,3 +715,131 @@ async def test_headless_search_engine_setup_uses_free_kernel_license(monkeypatch
     await manager.stop("prof-free-init")
 
 
+def test_build_fingerprint_args_dnt_and_webgl():
+    manager_mac = BrowserManager(RuntimeConfig(runtime_mode="native", viewer_mode="native-window", host_os="macos", data_dir=Path("/data")))
+    # macOS runtime: webgl_vendor shouldn't force NVIDIA/Intel vendor flag
+    args_mac = manager_mac._build_fingerprint_args({"do_not_track": True, "webgl_vendor": "NVIDIA Corporation"})
+    assert "--enable-do-not-track" in args_mac
+    assert "--fingerprint-gpu-vendor=NVIDIA" not in args_mac
+
+    # Non-macOS runtime: webgl_vendor fallback works
+    manager_linux = BrowserManager(RuntimeConfig(runtime_mode="native", viewer_mode="native-window", host_os="linux", data_dir=Path("/data")))
+    args_linux = manager_linux._build_fingerprint_args({"do_not_track": True, "webgl_vendor": "NVIDIA GeForce RTX 4070"})
+    assert "--enable-do-not-track" in args_linux
+    assert "--fingerprint-gpu-vendor=NVIDIA" in args_linux
+
+
+@pytest.mark.asyncio
+async def test_launch_uses_engine_isolated_extra_launch_args(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME)
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+    monkeypatch.setattr(manager, "_reserve_cdp_port", lambda: 55002)
+    monkeypatch.setattr(manager, "_wait_for_cdp", AsyncMock())
+    monkeypatch.setattr(manager, "_ensure_search_engine", AsyncMock())
+    monkeypatch.setattr("backend.browser_manager.get_binary_path", lambda ver, pro=False: tmp_path / f"bin-{ver}")
+    (tmp_path / "bin-145").touch()
+    monkeypatch.setattr("backend.browser_manager._is_executable", lambda p: True)
+
+    captured_launch_args = []
+
+    async def mock_launch(**kwargs):
+        captured_launch_args.extend(kwargs.get("args", []))
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        mock_ctx.add_init_script = AsyncMock()
+        return mock_ctx
+
+    monkeypatch.setattr("backend.browser_manager.launch_persistent_context_async", mock_launch)
+
+    profile = {
+        "id": "prof-isolated",
+        "user_data_dir": str(tmp_path / "p-isolated"),
+        "browser_type": "cloakbrowser",
+        "browser_version": "145",
+        "extra_launch_args": {
+            "cloakbrowser": ["--custom-cloak-flag"],
+            "camoufox": ["-mute-audio"],
+        },
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running = await manager.launch(profile)
+    assert "--custom-cloak-flag" in captured_launch_args
+    assert "-mute-audio" not in captured_launch_args
+    await manager.stop("prof-isolated")
+
+
+@pytest.mark.asyncio
+async def test_camoufox_launch_config_and_user_prefs(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME)
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+    monkeypatch.setattr(manager, "_ensure_camoufox_search_engine", AsyncMock())
+
+    captured_options = {}
+
+    async def mock_camoufox_browser(pw, **kwargs):
+        captured_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("camoufox.async_api.AsyncNewBrowser", mock_camoufox_browser)
+
+    mock_pw = MagicMock()
+    mock_pw.stop = AsyncMock()
+
+    class MockAsyncPlaywright:
+        async def start(self):
+            return mock_pw
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
+
+    profile = {
+        "id": "prof-cam-config",
+        "user_data_dir": str(tmp_path / "p-cam-config"),
+        "browser_type": "camoufox",
+        "browser_version": "152.0.4",
+        "cpu_cores": 8,
+        "webgl_vendor": "Apple",
+        "webgl_renderer": "Apple M2",
+        "canvas_noise": False,
+        "audio_noise": False,
+        "do_not_track": True,
+        "firefox_user_prefs": {
+            "custom.test.pref": True,
+            "custom.number.pref": 42,
+        },
+        "extra_launch_args": {
+            "camoufox": ["-mute-audio"],
+        },
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running = await manager.launch(profile)
+    assert running.profile_id == "prof-cam-config"
+
+    # Verify Camoufox config
+    cfg = captured_options["config"]
+    assert cfg["navigator.hardwareConcurrency"] == 8
+    assert cfg["webGl:vendor"] == "Apple"
+    assert cfg["webGl:renderer"] == "Apple M2"
+    assert cfg["canvas:seed"] == 0
+    assert cfg["audio:seed"] == 0
+    assert cfg["navigator.doNotTrack"] == "1"
+
+    # Verify webgl_config tuple
+    assert captured_options["webgl_config"] == ("Apple", "Apple M2")
+
+    # Verify firefox_user_prefs merged
+    prefs = captured_options["firefox_user_prefs"]
+    assert prefs["custom.test.pref"] is True
+    assert prefs["custom.number.pref"] == 42
+    assert prefs["privacy.donottrackheader.enabled"] is True
+
+    # Verify CLI args passed
+    assert "-mute-audio" in captured_options["args"]
+
+    await manager.stop("prof-cam-config")
+
+
+

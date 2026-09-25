@@ -743,7 +743,12 @@ class BrowserManager:
 
             _init_profile_defaults(user_data_dir)
 
-            user_launch_args = profile.get("launch_args") or []
+            browser_type = profile.get("browser_type") or "cloakbrowser"
+            extra_launch_args = profile.get("extra_launch_args") or {}
+            if isinstance(extra_launch_args, dict) and browser_type in extra_launch_args:
+                user_launch_args = extra_launch_args.get(browser_type) or []
+            else:
+                user_launch_args = profile.get("launch_args") or []
             conflicting_debug_args = [
                 arg for arg in user_launch_args
                 if arg.startswith(("--remote-debugging-port", "--remote-debugging-address"))
@@ -960,11 +965,28 @@ class BrowserManager:
                         if len(loc_parts) > 1:
                             cam_config["locale:region"] = loc_parts[1]
 
-                    # Deterministic seeds from profile fingerprint_seed
+                    # Hardware & WebGL & Privacy configurations
+                    if profile.get("cpu_cores"):
+                        cam_config["navigator.hardwareConcurrency"] = int(profile["cpu_cores"])
+                    if profile.get("webgl_vendor"):
+                        cam_config["webGl:vendor"] = str(profile["webgl_vendor"])
+                    if profile.get("webgl_renderer"):
+                        cam_config["webGl:renderer"] = str(profile["webgl_renderer"])
+
+                    # Deterministic seeds and noise control
                     seed = int(profile.get("fingerprint_seed") or 0)
-                    if seed:
-                        cam_config["audio:seed"] = seed
+                    if profile.get("canvas_noise", True) is False:
+                        cam_config["canvas:seed"] = 0
+                    elif seed:
                         cam_config["canvas:seed"] = seed
+
+                    if profile.get("audio_noise", True) is False:
+                        cam_config["audio:seed"] = 0
+                    elif seed:
+                        cam_config["audio:seed"] = seed
+
+                    if profile.get("do_not_track", False):
+                        cam_config["navigator.doNotTrack"] = "1"
 
                     # WebRTC IP spoofing matching the proxy exit IP
                     webrtc_ip = None
@@ -992,6 +1014,8 @@ class BrowserManager:
                         # we've already resolved timezone/locale via geoip ourselves.
                         "i_know_what_im_doing": True,
                     }
+                    if profile.get("webgl_vendor") and profile.get("webgl_renderer"):
+                        camoufox_options["webgl_config"] = (str(profile["webgl_vendor"]), str(profile["webgl_renderer"]))
                     if effective_kernel:
                         # If effective_kernel is a file path, pass executable_path.
                         # If it is a version identifier (e.g. '152.0.4'), pass browser.
@@ -1031,17 +1055,30 @@ class BrowserManager:
                     if webrtc_ip:
                         cam_user_prefs["network.dns.disableIPv6"] = True
 
+                    if profile.get("do_not_track", False):
+                        cam_user_prefs["privacy.donottrackheader.enabled"] = True
+                        cam_user_prefs["privacy.donottrackheader.value"] = 1
+
                     if profile.get("restore_session", True):
                         cam_user_prefs["browser.startup.page"] = 3
                     else:
                         cam_user_prefs["browser.startup.page"] = 0
                         cam_user_prefs["browser.startup.homepage"] = "about:blank"
+
+                    # Merge user-defined custom Firefox preferences (about:config)
+                    custom_firefox_prefs = profile.get("firefox_user_prefs")
+                    if isinstance(custom_firefox_prefs, dict):
+                        cam_user_prefs.update(custom_firefox_prefs)
+
                     camoufox_options["firefox_user_prefs"] = cam_user_prefs
 
-                    # NOTE: extra_args are Chromium CLI flags (--fingerprint=, --fingerprint-platform=,
-                    # --remote-debugging-address=, --restore-last-session, --force-webrtc-ip-handling-policy=,
-                    # etc.). These are NOT understood by Firefox/Camoufox and cause it to hang.
-                    # Do NOT pass extra_args to AsyncNewBrowser.
+                    # Pass non-Chromium user-defined args to Camoufox (e.g. -mute-audio)
+                    camoufox_args = [
+                        arg for arg in user_launch_args
+                        if not arg.startswith(("--remote-debugging", "--fingerprint", "ignore:"))
+                    ]
+                    if camoufox_args:
+                        camoufox_options["args"] = camoufox_args
 
                     try:
                         context = await AsyncNewBrowser(pw, **camoufox_options)
@@ -1139,6 +1176,53 @@ class BrowserManager:
                         await page.evaluate(clipboard_init_js)
                     except Exception as exc:
                         logger.debug("Clipboard init failed on existing page: %s", exc)
+
+            # Inject hardware & privacy overrides for Chromium profiles
+            if profile.get("browser_type") != "camoufox":
+                init_overrides: list[str] = []
+                if profile.get("cpu_cores"):
+                    init_overrides.append(
+                        f"Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {{ get: () => {int(profile['cpu_cores'])}, configurable: true }});"
+                    )
+                if profile.get("memory_gb"):
+                    init_overrides.append(
+                        f"Object.defineProperty(Navigator.prototype, 'deviceMemory', {{ get: () => {int(profile['memory_gb'])}, configurable: true }});"
+                    )
+                if profile.get("do_not_track"):
+                    init_overrides.append(
+                        "Object.defineProperty(Navigator.prototype, 'doNotTrack', { get: () => '1', configurable: true });"
+                    )
+                if profile.get("webgl_vendor") or profile.get("webgl_renderer"):
+                    v = json.dumps(profile.get("webgl_vendor") or "")
+                    r = json.dumps(profile.get("webgl_renderer") or "")
+                    init_overrides.append(f"""
+                        (() => {{
+                            const v = {v};
+                            const r = {r};
+                            const patch = (proto) => {{
+                                if (!proto || !proto.getParameter) return;
+                                const orig = proto.getParameter;
+                                proto.getParameter = function(param) {{
+                                    if (v && param === 37445) return v;
+                                    if (r && param === 37446) return r;
+                                    return orig.apply(this, arguments);
+                                }};
+                            }};
+                            if (typeof WebGLRenderingContext !== 'undefined') patch(WebGLRenderingContext.prototype);
+                            if (typeof WebGL2RenderingContext !== 'undefined') patch(WebGL2RenderingContext.prototype);
+                        }})();
+                    """)
+                if init_overrides:
+                    try:
+                        override_js = ";\n".join(init_overrides)
+                        await context.add_init_script(override_js)
+                        for page in context.pages:
+                            try:
+                                await page.evaluate(override_js)
+                            except Exception:
+                                pass
+                    except Exception as exc:
+                        logger.warning("Failed to inject hardware/privacy init script for profile %s: %s", profile_id, exc)
 
             running = RunningProfile(
                 profile_id=profile_id,
@@ -1782,6 +1866,15 @@ class BrowserManager:
                 args.append("--fingerprint-gpu-vendor=NVIDIA")
             elif gpu_family == "intel":
                 args.append("--fingerprint-gpu-vendor=Intel")
+            elif profile.get("webgl_vendor"):
+                wv = str(profile["webgl_vendor"]).lower()
+                if "nvidia" in wv:
+                    args.append("--fingerprint-gpu-vendor=NVIDIA")
+                elif "intel" in wv:
+                    args.append("--fingerprint-gpu-vendor=Intel")
+
+        if profile.get("do_not_track", False):
+            args.append("--enable-do-not-track")
 
         if profile.get("allow_3p_cookies", False):
             args.append("--fingerprint-allow-3p-cookies")

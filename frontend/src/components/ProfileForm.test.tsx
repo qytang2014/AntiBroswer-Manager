@@ -470,17 +470,118 @@ describe("ProfileForm kernel version selection and validation", () => {
     });
   });
 
-  describe("compareKernelVersions", () => {
-    it("correctly sorts Chromium and Camoufox versions descending", async () => {
-      const { compareKernelVersions } = await import("./ProfileForm");
+  describe("Dual-engine presets and hardware fingerprints", () => {
+    it("renders dual-engine presets and hardware fingerprint controls without --disable-gpu", async () => {
+      vi.spyOn(api, "getSettings").mockResolvedValue({
+        license_key_set: false,
+        license_key_masked: null,
+        release_channel: "stable",
+        licenses: [],
+      });
+      vi.spyOn(api, "listKernels").mockResolvedValue({
+        current_platform: "mac",
+        current_tier: "free",
+        installed: true,
+        kernels: [
+          {
+            version: "151.0.7922.108.3",
+            browser_type: "cloakbrowser",
+            name: "Chromium 151",
+            tier: "pro",
+            platform: "mac-arm64",
+            description: "Chromium Pro",
+            installed: true,
+          },
+          {
+            version: "v152.0.4-beta.31",
+            browser_type: "camoufox",
+            name: "Camoufox v152",
+            tier: "free",
+            platform: "mac-arm64",
+            description: "Camoufox Firefox",
+            installed: true,
+          },
+        ],
+      });
+      vi.spyOn(api, "listExtensions").mockResolvedValue([]);
 
-      const chromium = ["145.0.7632.109.2", "151.0.7922.108.3", "132.0.6834.83.1"];
-      chromium.sort((a, b) => compareKernelVersions(b, a));
-      expect(chromium).toEqual(["151.0.7922.108.3", "145.0.7632.109.2", "132.0.6834.83.1"]);
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      render(
+        <ProfileForm
+          profile={profile("stopped")}
+          hostOs="linux"
+          viewerMode="vnc"
+          onSave={onSave}
+          onCancel={vi.fn()}
+        />,
+      );
 
-      const camoufox = ["v152.0.4-beta.29", "v152.0.4-beta.31", "130.0", "v152.0.4-beta.30"];
-      camoufox.sort((a, b) => compareKernelVersions(b, a));
-      expect(camoufox).toEqual(["v152.0.4-beta.31", "v152.0.4-beta.30", "v152.0.4-beta.29", "130.0"]);
+      // Verify hardware fingerprints summary exists
+      expect(screen.getByText(/高级硬件与隐私指纹/)).toBeTruthy();
+
+      // Check presets: verify --disable-gpu button/preset is NOT present
+      expect(screen.queryByTitle(/--disable-gpu/)).toBeNull();
+
+      // Verify CloakBrowser preset is visible
+      expect(screen.getByTitle(/--disable-blink-features=AutomationControlled/)).toBeTruthy();
+
+      // Switch to Camoufox
+      const typeSelect = screen.getByLabelText(/内核类型/) as HTMLSelectElement;
+      fireEvent.change(typeSelect, { target: { value: "camoufox" } });
+
+      // Verify Camoufox presets appear
+      await waitFor(() => {
+        expect(screen.getByTitle(/-mute-audio/)).toBeTruthy();
+        expect(screen.getByTitle(/-private-window/)).toBeTruthy();
+      });
+
+      // Verify Firefox User Preferences section appears
+      expect(screen.getByText(/Firefox 首选项配置/)).toBeTruthy();
+    });
+
+    it("does not flash uninstalled warning while kernels are loading on initial render", async () => {
+      // Simulate slow API response
+      let resolveKernels: (value: any) => void;
+      const kernelsPromise = new Promise((resolve) => {
+        resolveKernels = resolve;
+      });
+      vi.spyOn(api, "listKernels").mockReturnValue(kernelsPromise as any);
+      vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+
+      const p = profile("stopped");
+      p.browser_version = "151.0.7922.108.3";
+
+      render(
+        <ProfileForm
+          profile={p}
+          hostOs="linux"
+          viewerMode="vnc"
+          onSave={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      // Warning should NOT be displayed while kernels are still loading
+      expect(screen.queryByText(/未检测到已安装的.*内核，请先下载内核/)).toBeNull();
+      // Select option should retain the profile's browser_version instead of dropping to "未检测到已安装内核"
+      expect(screen.getByText(/151.0.7922.108.3/)).toBeTruthy();
+
+      // Now resolve the API call
+      resolveKernels!({
+        kernels: [
+          {
+            version: "151.0.7922.108.3",
+            name: "Chromium 151",
+            browser_type: "cloakbrowser",
+            tier: "pro",
+            installed: true,
+          },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Chromium 151 \(v151.0.7922.108.3\)/)).toBeTruthy();
+      });
     });
   });
 });
