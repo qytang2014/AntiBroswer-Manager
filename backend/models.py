@@ -36,6 +36,7 @@ class ProfileCreate(BaseModel):
     capture_preview: bool = True
     restore_session: bool = True
     browser_version: str | None = None
+    browser_type: str = "cloakbrowser"
     notes: str | None = None
     tags: list[TagCreate] | None = None
     license_id: str | None = None
@@ -68,6 +69,7 @@ class ProfileUpdate(BaseModel):
     capture_preview: bool | None = None
     restore_session: bool | None = None
     browser_version: str | None = Field(default=None)
+    browser_type: str | None = Field(default=None)
     notes: str | None = Field(default=None)
     tags: list[TagCreate] | None = None
     license_id: str | None = Field(default=None)
@@ -135,6 +137,7 @@ class ProfileResponse(BaseModel):
     capture_preview: bool = True
     restore_session: bool = True
     browser_version: str | None = None
+    browser_type: str = "cloakbrowser"
     notes: str | None = None
     user_data_dir: str
     created_at: str

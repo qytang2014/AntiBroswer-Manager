@@ -35,6 +35,11 @@ from .env_file import load_env_file
 # (database.resolve_runtime, AUTH_TOKEN, the license config below).
 load_env_file()
 
+# Redirect cloakbrowser library to our unified kernels directory
+from .runtime import resolve_runtime
+_RUNTIME_CONFIG = resolve_runtime()
+os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(_RUNTIME_CONFIG.data_dir / "kernels" / "cloakbrowser"))
+
 from . import database as db
 from cloakbrowser.license import CloakBrowserLicenseError
 
@@ -758,9 +763,19 @@ async def get_kernel_download_status_endpoint():
 
 
 @app.get("/api/kernels/download-stream")
-async def download_kernel_stream_endpoint(version: str, tier: str = "free"):
-    """Download and extract a Chromium stealth kernel with real-time SSE progress events."""
+async def download_kernel_stream_endpoint(version: str, tier: str = "free", browser_type: str = "cloakbrowser"):
+    """Download and extract a stealth kernel with real-time SSE progress events."""
     async def event_generator():
+        if browser_type == "camoufox":
+            err_data = {
+                "stage": "error",
+                "message": "Camoufox 下载逻辑将在下一阶段（Phase 3）完成对接，暂不可用。",
+                "percent": 0,
+                "browser_type": browser_type,
+            }
+            yield f"data: {json.dumps(err_data, ensure_ascii=False)}\n\n"
+            return
+
         try:
             async for event in kernel_download_manager.subscribe(
                 version=version,
@@ -768,12 +783,14 @@ async def download_kernel_stream_endpoint(version: str, tier: str = "free"):
                 license_key=browser_mgr.license_key,
                 release_channel=browser_mgr.release_channel,
             ):
+                event["browser_type"] = browser_type
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
             err_data = {
                 "stage": "error",
                 "message": str(exc),
                 "percent": 0,
+                "browser_type": browser_type,
             }
             yield f"data: {json.dumps(err_data, ensure_ascii=False)}\n\n"
 
@@ -789,8 +806,9 @@ async def download_kernel_stream_endpoint(version: str, tier: str = "free"):
 
 
 @app.delete("/api/kernels/{version}")
-async def delete_kernel_endpoint(version: str, tier: str = "free"):
-    """Delete an installed Chromium kernel."""
+async def delete_kernel_endpoint(version: str, tier: str = "free", browser_type: str = "cloakbrowser"):
+    """Delete an installed kernel."""
+    # TODO: Handle Camoufox deletion
     success = delete_kernel(version, tier=tier)
     browser_mgr.resolve_binary_status()
     if not success:

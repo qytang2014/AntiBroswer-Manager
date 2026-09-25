@@ -208,7 +208,7 @@ def _build_popen_kwargs() -> dict:
 
 def _get_config_tmp_dir() -> Path:
     """Return (and create) the directory for temporary sing-box config files."""
-    d = Path(tempfile.gettempdir()) / "cloakbrowser_singbox"
+    d = Path(tempfile.gettempdir()) / "antibrowser_singbox"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

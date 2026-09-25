@@ -23,7 +23,7 @@ _PROFILE_COLUMNS = (
     "geoip", "clipboard_sync", "auto_launch", "color_scheme", "launch_args",
     "extension_paths", "allow_3p_cookies", "set_google_default",
     "search_engine_name", "search_engine_keyword", "search_engine_url",
-    "capture_preview", "restore_session", "browser_version", "notes", "user_data_dir",
+    "capture_preview", "restore_session", "browser_version", "browser_type", "notes", "user_data_dir",
     "created_at", "updated_at", "sort_order", "license_id"
 )
 
@@ -54,6 +54,7 @@ CREATE TABLE profiles (
     capture_preview BOOLEAN DEFAULT 1,
     restore_session BOOLEAN DEFAULT 1,
     browser_version TEXT,
+    browser_type TEXT DEFAULT 'cloakbrowser',
     notes TEXT,
     user_data_dir TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -268,6 +269,7 @@ def create_profile(
         "capture_preview": fields.get("capture_preview", True),
         "restore_session": fields.get("restore_session", True),
         "browser_version": fields.get("browser_version"),
+        "browser_type": fields.get("browser_type", "cloakbrowser"),
         "notes": fields.get("notes"),
         "license_id": fields.get("license_id"),
         "user_data_dir": user_data_dir, "created_at": now, "updated_at": now,

@@ -32,6 +32,7 @@ export interface Profile {
   capture_preview: boolean;
   restore_session: boolean;
   browser_version?: string | null;
+  browser_type?: string | null;
   notes: string | null;
   user_data_dir: string;
   created_at: string;
@@ -80,6 +81,7 @@ export interface ProfileCreateData {
   capture_preview?: boolean;
   restore_session?: boolean;
   browser_version?: string | null;
+  browser_type?: string | null;
   notes?: string | null;
   tags?: { tag: string; color: string | null }[];
   license_id?: string | null;
@@ -181,6 +183,7 @@ export interface KernelItem {
   is_active?: boolean;
   binary_path?: string | null;
   size_mb?: number | null;
+  browser_type?: string;
 }
 
 export interface KernelListResponse {
@@ -194,6 +197,7 @@ export interface KernelListResponse {
 export interface KernelDownloadProgress {
   version?: string;
   tier?: string;
+  browser_type?: string;
   stage: "connecting" | "downloading" | "verifying" | "extracting" | "completed" | "error";
   message: string;
   percent: number;
@@ -511,6 +515,7 @@ export const api = {
   downloadKernelStream: (
     version: string,
     tier: "pro" | "free" = "free",
+    browser_type: string = "cloakbrowser",
     onProgress?: (progress: KernelDownloadProgress) => void,
     signal?: AbortSignal
   ): Promise<{ ok: boolean; binary_path?: string }> => {
@@ -520,7 +525,7 @@ export const api = {
         return;
       }
 
-      const url = `/api/kernels/download-stream?version=${encodeURIComponent(version)}&tier=${encodeURIComponent(tier)}`;
+      const url = `/api/kernels/download-stream?version=${encodeURIComponent(version)}&tier=${encodeURIComponent(tier)}&browser_type=${encodeURIComponent(browser_type)}`;
       const eventSource = new EventSource(url);
 
       if (signal) {
@@ -559,8 +564,8 @@ export const api = {
     });
   },
 
-  deleteKernel: (version: string) =>
-    request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}`, { method: "DELETE" }),
+  deleteKernel: (version: string, browser_type: string = "cloakbrowser") =>
+    request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}?browser_type=${encodeURIComponent(browser_type)}`, { method: "DELETE" }),
 };
 
 export interface Subscription {

@@ -104,6 +104,7 @@ export function ProfileForm({
   const [form, setForm] = useState<ProfileCreateData>({
     name: "",
     browser_version: profile?.browser_version ?? null,
+    browser_type: profile?.browser_type ?? "cloakbrowser",
     screen_width: 1920,
     screen_height: 1080,
     gpu_family: "auto",
@@ -282,6 +283,7 @@ export function ProfileForm({
         setForm({
           name: profile.name,
           browser_version: profile.browser_version ?? null,
+          browser_type: profile.browser_type ?? "cloakbrowser",
           fingerprint_seed: profile.fingerprint_seed,
           proxy: profile.proxy,
           timezone: profile.timezone,
@@ -317,6 +319,7 @@ export function ProfileForm({
         setForm({
           name: "",
           browser_version: null,
+          browser_type: "cloakbrowser",
           screen_width: 1920,
           screen_height: 1080,
           gpu_family: "auto",
@@ -835,6 +838,20 @@ export function ProfileForm({
                     管理/下载更多内核
                   </button>
                 )}
+              <div className="flex items-center justify-between mt-4">
+                <label className="text-sm font-medium text-slate-300">内核类型 (Browser Type)</label>
+              </div>
+              <select
+                className="input"
+                value={form.browser_type ?? "cloakbrowser"}
+                onChange={(e) => set("browser_type", e.target.value)}
+              >
+                <option value="cloakbrowser">CloakBrowser (基于 Chromium)</option>
+                <option value="camoufox">Camoufox (基于 Firefox)</option>
+              </select>
+
+              <div className="flex items-center justify-between mt-4">
+                <label className="text-sm font-medium text-slate-300">内核版本 (Browser Version)</label>
               </div>
               <select
                 className="input"

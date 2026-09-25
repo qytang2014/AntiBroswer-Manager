@@ -3,7 +3,7 @@
 Resolves the sing-box executable via:
   1. CLOAKBROWSER_SINGBOX_PATH environment variable (user-supplied override)
   2. System PATH (shutil.which)
-  3. Local cache at ~/.cloakbrowser/singbox/ (previously downloaded)
+  3. Local cache at AntiBrowser-Manager/singbox/ (previously downloaded)
   4. Auto-download from GitHub Releases (latest stable release)
 
 The download path mirrors the pattern established by cloakbrowser/download.py.
@@ -40,15 +40,11 @@ _SINGBOX_GITHUB_API = "https://api.github.com/repos/SagerNet/sing-box/releases/l
 _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
 
 
-def _get_singbox_cache_dir() -> Path:
-    """Return the local cache directory for the sing-box binary.
+from ..runtime import resolve_runtime
 
-    Respects CLOAKBROWSER_CACHE_DIR the same way the Chromium binary does.
-    Falls back to ~/.cloakbrowser/singbox/.
-    """
-    custom = os.environ.get("CLOAKBROWSER_CACHE_DIR")
-    base = Path(custom) if custom else Path.home() / ".cloakbrowser"
-    return base / "singbox"
+def _get_singbox_cache_dir() -> Path:
+    """Return the local cache directory for the sing-box binary."""
+    return resolve_runtime().data_dir / "singbox"
 
 
 def ensure_singbox() -> Path:
@@ -57,7 +53,7 @@ def ensure_singbox() -> Path:
     Resolution order:
       1. CLOAKBROWSER_SINGBOX_PATH env var (user override, skips download)
       2. 'sing-box' on the system PATH
-      3. Previously downloaded binary in ~/.cloakbrowser/singbox/
+      3. Previously downloaded binary in AntiBrowser-Manager/singbox/
       4. Auto-download latest stable release from GitHub
 
     Returns:

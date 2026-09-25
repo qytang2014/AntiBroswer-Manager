@@ -36,6 +36,7 @@ export function KernelManagerModal({
   const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<KernelDownloadProgress | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"cloakbrowser" | "camoufox">("cloakbrowser");
   const [feedback, setFeedback] = useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -71,7 +72,7 @@ export function KernelManagerModal({
     }
   }, []);
 
-  const attachStream = useCallback((version: string, tier: "pro" | "free" = "free") => {
+  const attachStream = useCallback((version: string, tier: "pro" | "free" = "free", browserType: string = "cloakbrowser") => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -83,6 +84,7 @@ export function KernelManagerModal({
     api.downloadKernelStream(
       version,
       tier,
+      browserType,
       (prog) => {
         setDownloadProgress(prog);
         if (prog.version) {
@@ -119,7 +121,7 @@ export function KernelManagerModal({
       if (res.active && res.task) {
         setDownloadingVersion(res.task.version || "downloading");
         setDownloadProgress(res.task);
-        attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free");
+        attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free", res.task.browser_type || "cloakbrowser");
       } else if (res.task && res.task.stage === "completed") {
         if (handledCompletionVersionRef.current !== res.task.version) {
           handledCompletionVersionRef.current = res.task.version || "";
@@ -185,10 +187,11 @@ export function KernelManagerModal({
       stage: "connecting",
       message: `正在连接下载服务器 (${kernel.version})...`,
       percent: 0,
+      browser_type: kernel.browser_type,
     });
     setFeedback(null);
 
-    attachStream(kernel.version, kernel.tier);
+    attachStream(kernel.version, kernel.tier, kernel.browser_type || "cloakbrowser");
   };
 
   const handleDelete = async (kernel: KernelItem) => {
@@ -200,7 +203,7 @@ export function KernelManagerModal({
 
     try {
       setActionLoading(true);
-      const res = await api.deleteKernel(kernel.version);
+      const res = await api.deleteKernel(kernel.version, kernel.browser_type || "cloakbrowser");
       setFeedback({
         type: "success",
         text: res.message || `内核 ${kernel.version} 已删除`,
@@ -371,6 +374,30 @@ export function KernelManagerModal({
           </div>
         )}
 
+        {/* Tabs */}
+        <div className="flex border-b border-gray-800 px-6 pt-4">
+          <button
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "cloakbrowser"
+                ? "border-blue-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => setActiveTab("cloakbrowser")}
+          >
+            CloakBrowser
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "camoufox"
+                ? "border-blue-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => setActiveTab("camoufox")}
+          >
+            Camoufox
+          </button>
+        </div>
+
         {/* Kernel List */}
         <div className="p-6 overflow-y-auto flex-1 space-y-3">
           {loading && !kernelData ? (
@@ -378,12 +405,12 @@ export function KernelManagerModal({
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
               <span className="text-xs">正在扫描可用内核...</span>
             </div>
-          ) : !kernelData?.kernels || kernelData.kernels.length === 0 ? (
+          ) : !kernelData?.kernels || kernelData.kernels.filter(k => (k.browser_type || "cloakbrowser") === activeTab).length === 0 ? (
             <div className="text-center py-12 text-gray-500 text-xs">
-              暂无匹配当前平台的可用内核
+              暂无匹配当前平台的 {activeTab === "cloakbrowser" ? "CloakBrowser" : "Camoufox"} 可用内核
             </div>
           ) : (
-            kernelData.kernels.map((kernel) => {
+            kernelData.kernels.filter(k => (k.browser_type || "cloakbrowser") === activeTab).map((kernel) => {
               const isThisDownloading = downloadingVersion === kernel.version;
               const isAnyDownloading = !!downloadingVersion;
 

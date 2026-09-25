@@ -123,6 +123,7 @@ def list_available_kernels() -> dict[str, Any]:
     kernels.append({
         "version": platform_ver,
         "tier": "free",
+        "browser_type": "cloakbrowser",
         "name": f"Chromium {platform_ver} (官方稳定版)",
         "description": "官方预设稳定版内核 (平台原生构建，推荐默认使用)",
         "platform": current_platform,
@@ -152,6 +153,7 @@ def list_available_kernels() -> dict[str, Any]:
         kernels.append({
             "version": pro_ver,
             "tier": "pro",
+            "browser_type": "cloakbrowser",
             "name": f"Chromium {pro_ver} (Pro 最新版)",
             "description": "CloakBrowser Pro 高级指纹伪装内核 (含最新反指纹特征与补丁)",
             "platform": current_platform,
@@ -170,6 +172,7 @@ def list_available_kernels() -> dict[str, Any]:
             kernels.append({
                 "version": item["version"],
                 "tier": item["tier"],
+                "browser_type": "cloakbrowser",
                 "name": f"Chromium {item['version']} ({'Pro' if is_pro else 'Free'} 本地安装)",
                 "description": f"已安装在本地目录的 Chromium {item['tier']} 内核",
                 "platform": current_platform,
@@ -181,6 +184,31 @@ def list_available_kernels() -> dict[str, Any]:
 
     # Overall installed flag: True if at least one kernel is ready
     any_installed = any(k["installed"] for k in kernels)
+
+    # 5. Add Camoufox placeholders for Phase 2 UI demonstration
+    # In Phase 3, this will be dynamically fetched or scanned from local camoufox cache.
+    camoufox_ver = "130.0"
+    camoufox_key = f"{camoufox_ver}:free:camoufox"
+    camoufox_ready = False
+    
+    # Check if installed
+    from .runtime import resolve_runtime
+    camoufox_dir = resolve_runtime().data_dir / "kernels" / "camoufox" / camoufox_ver
+    if camoufox_dir.exists():
+        camoufox_ready = True
+        
+    kernels.append({
+        "version": camoufox_ver,
+        "tier": "free",
+        "browser_type": "camoufox",
+        "name": f"Camoufox {camoufox_ver}",
+        "description": "基于 Firefox 的指纹浏览器内核 (支持全平台指纹随机化)",
+        "platform": current_platform,
+        "installed": camoufox_ready,
+        "is_active": False,
+        "binary_path": str(camoufox_dir) if camoufox_ready else None,
+        "size_mb": None,
+    })
 
     return {
         "current_platform": current_platform,
