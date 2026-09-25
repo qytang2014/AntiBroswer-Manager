@@ -77,6 +77,43 @@ POPULAR_EXTENSIONS = [
         "rating": 4.6,
     },
 ]
+POPULAR_FIREFOX_EXTENSIONS = [
+    {
+        "id": "uBlock0@raymondhill.net",
+        "name": "uBlock Origin",
+        "description": "An efficient ad and tracker blocker.",
+        "version": "Latest",
+        "rating": 4.8,
+    },
+    {
+        "id": "{446900e4-71c2-419f-a6a7-df9c091e268b}",
+        "name": "Bitwarden Password Manager",
+        "description": "A secure and free password manager for all of your devices.",
+        "version": "Latest",
+        "rating": 4.8,
+    },
+    {
+        "id": "floccus@fralef.me",
+        "name": "floccus bookmarks sync",
+        "description": "Sync your bookmarks privately across browsers via Nextcloud, WebDAV or Git.",
+        "version": "Latest",
+        "rating": 4.7,
+    },
+    {
+        "id": "{c3c10168-4186-445c-9c5b-63f12b8e2c87}",
+        "name": "Cookie-Editor",
+        "description": "Simple and powerful Cookie Editor.",
+        "version": "Latest",
+        "rating": 4.7,
+    },
+    {
+        "id": "{7227d8ce-6d27-4632-bd88-beee2c070f80}",
+        "name": "ModHeader - Modify HTTP headers",
+        "description": "Modify request and response headers.",
+        "version": "Latest",
+        "rating": 4.6,
+    },
+]
 
 
 import contextlib
@@ -128,6 +165,56 @@ async def get_imported_proxy_url() -> AsyncIterator[str | None]:
             yield None
     else:
         yield raw_uri or None
+
+async def search_firefox_addons(query: str) -> list[dict[str, Any]]:
+    """Search Mozilla Firefox Addons by keyword."""
+    import urllib.parse
+    query = query.strip()
+    if not query:
+        return []
+        
+    url = f"https://addons.mozilla.org/api/v5/addons/search/?q={urllib.parse.quote(query)}&type=extension"
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0, trust_env=True) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to fetch Firefox addons: {exc}") from exc
+        
+    results = []
+    for item in data.get("results", [])[:10]:
+        name_obj = item.get("name", {})
+        name = name_obj.get("en-US", name_obj.get(list(name_obj.keys())[0])) if name_obj else "Unknown"
+        summary_obj = item.get("summary", {})
+        summary = summary_obj.get("en-US", summary_obj.get(list(summary_obj.keys())[0])) if summary_obj else ""
+        
+        current_version = item.get("current_version", {})
+        version = current_version.get("version", "Latest")
+        
+        icon_url = item.get("icon_url")
+        if icon_url and "?" in icon_url:
+            icon_url = icon_url.split("?")[0]
+            
+        ratings = item.get("ratings", {})
+        rating = round(ratings.get("average", 0), 1)
+        
+        # We need the XPI download URL for direct installation
+        files = current_version.get("files", [])
+        download_url = files[0].get("url") if files else None
+        
+        guid = item.get("guid") or str(item.get("id"))
+        
+        results.append({
+            "id": download_url or guid,
+            "name": name,
+            "description": summary,
+            "version": version,
+            "icon_url": icon_url,
+            "rating": rating,
+        })
+    return results
 
 
 async def search_chrome_webstore(query: str) -> list[dict[str, Any]]:
@@ -411,13 +498,35 @@ async def install_extension_from_bytes(
 
 async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloakbrowser") -> AsyncIterator[dict[str, Any]]:
     """Download and install a Chrome extension with live progress events."""
-    webstore_id = extract_webstore_id(id_or_url)
+    is_firefox = (browser_type == "camoufox")
+    
+    if is_firefox:
+        if id_or_url.startswith("http"):
+            webstore_id = id_or_url.split("/")[-1].replace(".xpi", "")
+            crx_urls = [id_or_url]
+        else:
+            webstore_id = id_or_url
+            crx_urls = [f"https://addons.mozilla.org/firefox/downloads/latest/{id_or_url}/addon-latest.xpi"]
+    else:
+        webstore_id = extract_webstore_id(id_or_url)
+        crx_urls = [
+            (
+                "https://clients2.google.com/service/update2/crx"
+                "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
+                f"&x=id%3D{webstore_id}%26uc"
+            ),
+            (
+                "https://clients2.googleusercontent.com/service/update2/crx"
+                "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
+                f"&x=id%3D{webstore_id}%26uc"
+            ),
+        ]
+
     if not webstore_id:
         yield {
             "stage": "error",
             "message": (
-                f"Invalid Chrome Web Store ID or URL: '{id_or_url}'. "
-                "Must be a 32-character ID or full Web Store URL."
+                f"Invalid ID or URL: '{id_or_url}'."
             ),
             "percent": 0,
             "downloaded_bytes": 0,
@@ -427,32 +536,19 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
 
     yield {
         "stage": "connecting",
-        "message": "正在连接 Chrome 应用商店...",
+        "message": "正在连接 Firefox 附加组件..." if is_firefox else "正在连接 Chrome 应用商店...",
         "percent": 0,
         "downloaded_bytes": 0,
         "total_bytes": 0,
     }
 
-    part_file = Path(tempfile.gettempdir()) / f"cloak_crx_{webstore_id}_{os.getpid()}_{int(time.time() * 1000)}.part"
+    part_file = Path(tempfile.gettempdir()) / f"cloak_ext_{webstore_id.replace('/', '_')}_{os.getpid()}_{int(time.time() * 1000)}.part"
     total_bytes = 0
     downloaded_bytes = 0
     last_yield_time = 0.0
     last_yield_percent = -1
     last_error: Exception | None = None
     success = False
-
-    crx_urls = [
-        (
-            "https://clients2.google.com/service/update2/crx"
-            "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
-            f"&x=id%3D{webstore_id}%26uc"
-        ),
-        (
-            "https://clients2.googleusercontent.com/service/update2/crx"
-            "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
-            f"&x=id%3D{webstore_id}%26uc"
-        ),
-    ]
 
     headers = {
         "User-Agent": (
@@ -708,7 +804,7 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
             file_bytes = part_file.read_bytes()
             ext = await install_extension_from_bytes(
                 file_bytes=file_bytes,
-                filename=f"{webstore_id}.crx",
+                filename=f"{webstore_id.replace('/', '_')}.xpi" if is_firefox else f"{webstore_id}.crx",
                 source="webstore_id",
                 webstore_id=webstore_id,
                 browser_type=browser_type,

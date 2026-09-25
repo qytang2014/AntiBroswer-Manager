@@ -89,7 +89,7 @@ export function ExtensionManagerModal({
 
   const fetchPopular = async () => {
     try {
-      const list = await api.getPopularExtensions();
+      const list = await api.getPopularExtensions(browserType);
       setPopular(list);
     } catch (err) {
       console.error("Failed to load popular extensions:", err);
@@ -164,7 +164,7 @@ export function ExtensionManagerModal({
     setSearching(true);
     setFeedback(null);
     try {
-      const results = await api.searchWebStore(target);
+      const results = await api.searchWebStore(target, browserType);
       setSearchResults(results);
       if (results.length === 0) {
         setFeedback({
@@ -316,7 +316,7 @@ export function ExtensionManagerModal({
             }`}
             onClick={() => {
               setBrowserType("camoufox");
-              setActiveTab("upload"); // Camoufox doesn't support Chrome webstore
+              setActiveTab("webstore");
             }}
           >
             Camoufox (Firefox)
@@ -344,8 +344,6 @@ export function ExtensionManagerModal({
         {/* Installation Tabs */}
         <div className="px-6 pt-4 pb-2 border-b border-gray-800/60">
           <div className="flex gap-2 text-xs font-medium">
-            {browserType === "cloakbrowser" && (
-              <>
                 <button
                   className={`px-3 py-1.5 rounded-md transition ${
                     activeTab === "webstore"
@@ -354,7 +352,7 @@ export function ExtensionManagerModal({
                   }`}
                   onClick={() => setActiveTab("webstore")}
                 >
-                  Web Store ID / URL
+                  {browserType === "cloakbrowser" ? "Web Store ID / URL" : "Addons Store Search"}
                 </button>
                 <button
                   className={`px-3 py-1.5 rounded-md transition ${
@@ -366,8 +364,6 @@ export function ExtensionManagerModal({
                 >
                   Popular Extensions
                 </button>
-              </>
-            )}
             <button
               className={`px-3 py-1.5 rounded-md transition ${
                 activeTab === "upload"
@@ -390,7 +386,7 @@ export function ExtensionManagerModal({
                       className="input w-full pl-8 text-xs"
                       value={webstoreInput}
                       onChange={(e) => setWebstoreInput(e.target.value)}
-                      placeholder="Search Chrome Web Store by keyword, or enter 32-char ID / URL..."
+                      placeholder={browserType === "cloakbrowser" ? "Search Chrome Web Store by keyword, or enter 32-char ID / URL..." : "Search Mozilla Addons by keyword, or enter Addon ID / URL..."}
                       disabled={actionLoading || searching}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") handleSearchOrInstall();

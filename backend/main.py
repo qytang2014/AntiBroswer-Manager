@@ -95,11 +95,13 @@ from .models import (
 )
 from .extension_manager import (
     POPULAR_EXTENSIONS,
+    POPULAR_FIREFOX_EXTENSIONS,
     check_extensions_updates,
     install_extension_from_bytes,
     install_from_webstore,
     remove_extension,
     search_chrome_webstore,
+    search_firefox_addons,
     stream_install_from_webstore,
 )
 from .kernel_manager import (
@@ -656,19 +658,23 @@ async def list_extensions_endpoint(browser_type: str = "cloakbrowser"):
 
 
 @app.get("/api/extensions/popular")
-async def popular_extensions_endpoint():
+async def popular_extensions_endpoint(browser_type: str = "cloakbrowser"):
     """Return popular extensions curated for 1-click install."""
+    if browser_type == "camoufox":
+        return POPULAR_FIREFOX_EXTENSIONS
     return POPULAR_EXTENSIONS
 
 
 @app.get("/api/extensions/webstore/search")
-async def search_webstore_endpoint(q: str = ""):
-    """Search Google Chrome Web Store by keyword."""
+async def search_webstore_endpoint(q: str = "", browser_type: str = "cloakbrowser"):
+    """Search Addons Store by keyword."""
     try:
+        if browser_type == "camoufox":
+            return await search_firefox_addons(q)
         return await search_chrome_webstore(q)
     except Exception as exc:
-        msg = str(exc).strip() or "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
-        logger.warning("Search Web Store failed for '%s': %s", q, msg)
+        msg = str(exc).strip() or "网络错误: 无法连接到应用商店，请检查代理节点配置或网络连接"
+        logger.warning("Search Addons failed for '%s': %s", q, msg)
         raise HTTPException(status_code=502, detail=msg)
 
 

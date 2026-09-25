@@ -363,7 +363,7 @@ export const api = {
 
   listExtensions: (browser_type?: string) => request<Extension[]>(`/api/extensions?browser_type=${encodeURIComponent(browser_type || "cloakbrowser")}`),
 
-  getPopularExtensions: () => request<PopularExtension[]>("/api/extensions/popular"),
+  getPopularExtensions: (browser_type: string = "cloakbrowser") => request<PopularExtension[]>(`/api/extensions/popular?browser_type=${encodeURIComponent(browser_type)}`),
 
   matchProxyGeo: (proxy: string, proxy_type?: string) =>
     request<ProxyTestResult>("/api/profiles/test-proxy", {
@@ -410,8 +410,8 @@ export const api = {
     });
   },
 
-  searchWebStore: (query: string) =>
-    request<WebStoreSearchResult[]>(`/api/extensions/webstore/search?q=${encodeURIComponent(query)}`),
+  searchWebStore: (query: string, browser_type: string = "cloakbrowser") =>
+    request<WebStoreSearchResult[]>(`/api/extensions/webstore/search?q=${encodeURIComponent(query)}&browser_type=${encodeURIComponent(browser_type)}`),
 
   uploadExtension: async (file: File, browser_type: string = "cloakbrowser"): Promise<Extension> => {
     const formData = new FormData();
