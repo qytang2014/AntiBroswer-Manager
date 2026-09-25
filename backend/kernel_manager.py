@@ -183,9 +183,6 @@ def list_available_kernels() -> dict[str, Any]:
                 "size_mb": item["size_mb"],
             })
 
-    # Overall installed flag: True if at least one kernel is ready
-    any_installed = any(k["installed"] for k in kernels)
-
     # 5. Add Camoufox versions (Phase 3)
     try:
         from camoufox.pkgman import list_available_versions
@@ -204,7 +201,12 @@ def list_available_kernels() -> dict[str, Any]:
             camoufox_bin_path = None
             
             import glob
-            installed_match = glob.glob(f"{camoufox_cache_dir}/*/{cv_pure_ver}*")
+            clean_cv = cv_pure_ver.lstrip("v")
+            installed_match = (
+                glob.glob(f"{camoufox_cache_dir}/*/*{clean_cv}*")
+                or glob.glob(f"{camoufox_cache_dir}/*{clean_cv}*")
+                or glob.glob(f"{camoufox_cache_dir}/*/{cv_pure_ver}*")
+            )
             if installed_match:
                 camoufox_ready = True
                 camoufox_bin_path = installed_match[0]
@@ -212,6 +214,10 @@ def list_available_kernels() -> dict[str, Any]:
             size_mb = None
             if getattr(cv, "asset_size", None):
                 size_mb = round(cv.asset_size / (1024 * 1024), 1)
+
+            is_active_camoufox = camoufox_ready and not any(
+                k.get("browser_type") == "camoufox" and k.get("is_active") for k in kernels
+            )
 
             kernels.append({
                 "version": cv_ver,
@@ -221,12 +227,34 @@ def list_available_kernels() -> dict[str, Any]:
                 "description": "基于 Firefox 的指纹浏览器内核 (全平台指纹随机化)",
                 "platform": current_platform,
                 "installed": camoufox_ready,
-                "is_active": False,
+                "is_active": is_active_camoufox,
                 "binary_path": str(camoufox_bin_path) if camoufox_ready else None,
                 "size_mb": size_mb,
             })
     except Exception as e:
         print(f"Failed to fetch Camoufox versions: {e}")
+
+    # Version sorting helper (sort numbers descending)
+    def _version_sort_key(ver_str: str) -> tuple:
+        import re
+        clean = str(ver_str).lstrip("vV")
+        tokens = re.findall(r"\d+|\D+", clean)
+        key = []
+        for t in tokens:
+            if t.isdigit():
+                key.append((0, int(t)))
+            else:
+                key.append((1, t))
+        return tuple(key)
+
+    cloak_kernels = [k for k in kernels if k.get("browser_type") == "cloakbrowser"]
+    camoufox_kernels = [k for k in kernels if k.get("browser_type") == "camoufox"]
+    cloak_kernels.sort(key=lambda k: _version_sort_key(k.get("version", "")), reverse=True)
+    camoufox_kernels.sort(key=lambda k: _version_sort_key(k.get("version", "")), reverse=True)
+    kernels = cloak_kernels + camoufox_kernels
+
+    # Overall installed flag: True if at least one kernel is ready
+    any_installed = any(k["installed"] for k in kernels)
 
     return {
         "current_platform": current_platform,
@@ -584,8 +612,39 @@ async def stream_download_kernel(
                 pass
 
 
-def delete_kernel(version: str, tier: str = "free") -> bool:
+def delete_kernel(version: str, tier: str = "free", browser_type: str = "cloakbrowser") -> bool:
     """Delete an installed kernel from local disk."""
+    if browser_type == "camoufox":
+        from .runtime import resolve_runtime
+        import glob
+        clean_version = version.lstrip("v")
+        dirs_to_check = [
+            resolve_runtime().data_dir / "kernels" / "camoufox" / "browsers",
+        ]
+        try:
+            import camoufox.pkgman as cp
+            dirs_to_check.append(Path(cp.INSTALL_DIR) / "browsers")
+        except Exception:
+            pass
+
+        deleted = False
+        for cdir in dirs_to_check:
+            matched = (
+                glob.glob(f"{cdir}/*/*{clean_version}*")
+                or glob.glob(f"{cdir}/*{clean_version}*")
+                or glob.glob(f"{cdir}/*/*{version}*")
+                or glob.glob(f"{cdir}/*{version}*")
+            )
+            for path_str in matched:
+                p = Path(path_str)
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                    deleted = True
+                elif p.is_file():
+                    p.unlink(missing_ok=True)
+                    deleted = True
+        return deleted
+
     is_pro = tier.lower() == "pro"
     dest_dir = get_binary_dir(version, pro=is_pro)
     if dest_dir.exists():
@@ -686,6 +745,7 @@ class KernelDownloadManager:
                 event_data = {
                     "version": version,
                     "tier": tier,
+                    "browser_type": browser_type,
                     **event,
                 }
                 self._current_info = event_data
@@ -702,6 +762,7 @@ class KernelDownloadManager:
             err_data = {
                 "version": version,
                 "tier": tier,
+                "browser_type": browser_type,
                 "stage": "error",
                 "message": "内核下载已被中止",
                 "percent": 0,
@@ -714,6 +775,7 @@ class KernelDownloadManager:
             err_data = {
                 "version": version,
                 "tier": tier,
+                "browser_type": browser_type,
                 "stage": "error",
                 "message": str(exc),
                 "percent": 0,
@@ -734,6 +796,7 @@ class KernelDownloadManager:
         self,
         version: str | None = None,
         tier: str | None = None,
+        browser_type: str = "cloakbrowser",
         license_key: str | None = None,
         release_channel: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -743,6 +806,7 @@ class KernelDownloadManager:
                 self.start_download(
                     version=version,
                     tier=tier or "free",
+                    browser_type=browser_type,
                     license_key=license_key,
                     release_channel=release_channel,
                 )

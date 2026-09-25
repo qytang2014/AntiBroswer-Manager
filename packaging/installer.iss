@@ -23,7 +23,7 @@ DisableProgramGroupPage=yes
 ; Per-user install — no admin prompt, no code-signing cert needed for the test.
 PrivilegesRequired=lowest
 OutputDir=..\dist_native
-OutputBaseFilename=CloakBrowser-Manager-{#AppVersion}-setup
+OutputBaseFilename=AntiBrowser-Manager-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

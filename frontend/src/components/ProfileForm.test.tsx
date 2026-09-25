@@ -232,6 +232,257 @@ describe("ProfileForm kernel version selection and validation", () => {
     expect(screen.getByText(/当前选中的内核版本 \(v145.0.7632.109.2\) 原生不支持命令行内联代理凭证/)).toBeTruthy();
     expect(screen.getByText(/检测到包含账号密码的内联代理参数/)).toBeTruthy();
   });
+
+  it("filters kernel versions by browser_type and auto-selects latest installed version on switch", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "151.0.7895.120",
+          browser_type: "cloakbrowser",
+          name: "Chromium 151 (Pro)",
+          tier: "pro",
+          platform: "mac-arm64",
+          description: "Chromium Pro",
+          installed: true,
+        },
+        {
+          version: "152.0.4-beta.31",
+          browser_type: "camoufox",
+          name: "Camoufox 152",
+          tier: "free",
+          platform: "mac-arm64",
+          description: "Firefox stealth",
+          installed: true,
+        },
+      ],
+    });
+
+    render(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    // Initial CloakBrowser type: only Chromium kernel option shown
+    await waitFor(() => {
+      expect(screen.getByText(/Chromium 151 \(Pro\)/)).toBeTruthy();
+      expect(screen.queryByText(/Camoufox 152/)).toBeNull();
+    });
+
+    // Switch to Camoufox
+    const typeSelect = screen.getByLabelText(/内核类型/);
+    fireEvent.change(typeSelect, { target: { value: "camoufox" } });
+
+    // After switch: only Camoufox kernel option shown, and version auto-selected
+    await waitFor(() => {
+      expect(screen.getByText(/Camoufox 152/)).toBeTruthy();
+      expect(screen.queryByText(/Chromium 151 \(Pro\)/)).toBeNull();
+      const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
+      expect(versionSelect.value).toBe("152.0.4-beta.31");
+    });
+  });
+
+  it("clears version and shows warning when switching to browser_type without installed kernels", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "151.0.7895.120",
+          browser_type: "cloakbrowser",
+          name: "Chromium 151 (Pro)",
+          tier: "pro",
+          platform: "mac-arm64",
+          description: "Chromium Pro",
+          installed: true,
+        },
+      ],
+    });
+
+    render(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Chromium 151 \(Pro\)/)).toBeTruthy();
+    });
+
+    // Switch to Camoufox (which has 0 installed kernels)
+    const typeSelect = screen.getByLabelText(/内核类型/);
+    fireEvent.change(typeSelect, { target: { value: "camoufox" } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/未检测到已安装的 Camoufox \(Firefox\) 内核/)).toBeTruthy();
+      const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
+      expect(versionSelect.value).toBe("");
+    });
+  });
+
+  it("defaults to highest version even when older versions appear first in list", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "getSettings").mockResolvedValue({ licenses: [] } as any);
+    vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "145.0.7632.109.2",
+          browser_type: "cloakbrowser",
+          name: "Chromium 145 (Free)",
+          tier: "free",
+          platform: "mac-arm64",
+          description: "Chromium Free",
+          installed: true,
+        },
+        {
+          version: "151.0.7922.108.3",
+          browser_type: "cloakbrowser",
+          name: "Chromium 151 (Pro)",
+          tier: "pro",
+          platform: "mac-arm64",
+          description: "Chromium Pro",
+          installed: true,
+        },
+      ],
+    });
+
+    render(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
+      expect(versionSelect.value).toBe("151.0.7922.108.3");
+    });
+  });
+
+  it("automatically updates to highest remaining version when selected version is deleted", async () => {
+    vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+    vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+    vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+    vi.spyOn(api, "getSettings").mockResolvedValue({ licenses: [] } as any);
+
+    // Initially both 151 and 145 are installed
+    const listKernelsMock = vi.spyOn(api, "listKernels").mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "151.0.7922.108.3",
+          browser_type: "cloakbrowser",
+          name: "Chromium 151 (Pro)",
+          tier: "pro",
+          platform: "mac-arm64",
+          description: "Chromium Pro",
+          installed: true,
+        },
+        {
+          version: "145.0.7632.109.2",
+          browser_type: "cloakbrowser",
+          name: "Chromium 145 (Free)",
+          tier: "free",
+          platform: "mac-arm64",
+          description: "Chromium Free",
+          installed: true,
+        },
+      ],
+    });
+
+    const { rerender } = render(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        kernelsUpdated={0}
+      />,
+    );
+
+    await waitFor(() => {
+      const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
+      expect(versionSelect.value).toBe("151.0.7922.108.3");
+    });
+
+    // Now simulate deleting 151 from disk: listKernels returns only 145
+    listKernelsMock.mockResolvedValue({
+      current_platform: "mac",
+      current_tier: "free",
+      installed: true,
+      kernels: [
+        {
+          version: "145.0.7632.109.2",
+          browser_type: "cloakbrowser",
+          name: "Chromium 145 (Free)",
+          tier: "free",
+          platform: "mac-arm64",
+          description: "Chromium Free",
+          installed: true,
+        },
+      ],
+    });
+
+    // Rerender with kernelsUpdated incremented (simulating modal close)
+    rerender(
+      <ProfileForm
+        profile={profile("stopped")}
+        hostOs="linux"
+        viewerMode="vnc"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        kernelsUpdated={1}
+      />,
+    );
+
+    await waitFor(() => {
+      const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
+      expect(versionSelect.value).toBe("145.0.7632.109.2");
+    });
+  });
+
+  describe("compareKernelVersions", () => {
+    it("correctly sorts Chromium and Camoufox versions descending", async () => {
+      const { compareKernelVersions } = await import("./ProfileForm");
+
+      const chromium = ["145.0.7632.109.2", "151.0.7922.108.3", "132.0.6834.83.1"];
+      chromium.sort((a, b) => compareKernelVersions(b, a));
+      expect(chromium).toEqual(["151.0.7922.108.3", "145.0.7632.109.2", "132.0.6834.83.1"]);
+
+      const camoufox = ["v152.0.4-beta.29", "v152.0.4-beta.31", "130.0", "v152.0.4-beta.30"];
+      camoufox.sort((a, b) => compareKernelVersions(b, a));
+      expect(camoufox).toEqual(["v152.0.4-beta.31", "v152.0.4-beta.30", "v152.0.4-beta.29", "130.0"]);
+    });
+  });
 });
 
 

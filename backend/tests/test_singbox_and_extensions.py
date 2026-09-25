@@ -391,7 +391,7 @@ def test_kernel_manager_list_and_binary_ready():
     assert isinstance(ready, bool)
 
 
-def test_kernel_api_endpoints(app_client):
+def test_kernel_api_endpoints(app_client, monkeypatch):
     # 1. GET /api/kernels
     resp = app_client.get("/api/kernels")
     assert resp.status_code == 200
@@ -406,12 +406,50 @@ def test_kernel_api_endpoints(app_client):
     resp_del = app_client.delete("/api/kernels/non_existent_version_999")
     assert resp_del.status_code == 404
 
+    # 2.1 DELETE non-existent camoufox kernel
+    resp_del_fox = app_client.delete("/api/kernels/non_existent_fox_999?browser_type=camoufox")
+    assert resp_del_fox.status_code == 404
+
+    # 2.2 DELETE existing camoufox kernel with 'v' prefix
+    from backend.runtime import resolve_runtime
+    dummy_camoufox_dir = resolve_runtime().data_dir / "kernels" / "camoufox" / "browsers" / "official" / "152.0.4-beta.99-testsha"
+    dummy_camoufox_dir.mkdir(parents=True, exist_ok=True)
+    (dummy_camoufox_dir / "dummy.txt").write_text("test")
+    assert dummy_camoufox_dir.exists()
+
+    resp_del_existing_fox = app_client.delete("/api/kernels/v152.0.4-beta.99?browser_type=camoufox")
+    assert resp_del_existing_fox.status_code == 200
+    assert not dummy_camoufox_dir.exists()
+
     # 3. GET /api/kernels/download-status
     resp_status = app_client.get("/api/kernels/download-status")
     assert resp_status.status_code == 200
     status_data = resp_status.json()
     assert "active" in status_data
     assert isinstance(status_data["active"], bool)
+
+    # 4. GET /api/kernels/download-stream with browser_type="camoufox"
+    # Verify subscribe accepts browser_type parameter without TypeError
+    from backend.kernel_manager import kernel_download_manager
+    async def mock_subscribe(version, tier="free", browser_type="cloakbrowser", **kwargs):
+        yield {
+            "browser_type": browser_type,
+            "version": version,
+            "tier": tier,
+            "stage": "downloading",
+            "percent": 50,
+        }
+
+    monkeypatch.setattr(kernel_download_manager, "subscribe", mock_subscribe)
+    with app_client.stream("GET", "/api/kernels/download-stream?version=v152.0.4-beta.31&browser_type=camoufox") as stream_resp:
+        assert stream_resp.status_code == 200
+        # Read the first event to confirm connection
+        for line in stream_resp.iter_lines():
+            if line.startswith("data:"):
+                import json
+                ev = json.loads(line[len("data:"):].strip())
+                assert ev.get("browser_type") == "camoufox"
+                break
 
 
 

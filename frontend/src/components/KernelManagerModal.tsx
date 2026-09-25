@@ -221,6 +221,14 @@ export function KernelManagerModal({
 
   if (!isOpen) return null;
 
+  const isCloak = activeTab === "cloakbrowser";
+  const currentKernels =
+    kernelData?.kernels.filter(
+      (k) => (k.browser_type || "cloakbrowser") === activeTab
+    ) || [];
+
+  const installedCount = currentKernels.filter((k) => k.installed).length;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
@@ -240,10 +248,10 @@ export function KernelManagerModal({
             </div>
             <div>
               <h2 className="text-base font-semibold text-white">
-                Chromium 内核管理 / Kernel Manager
+                内核管理 / Kernel Manager
               </h2>
               <p className="text-xs text-gray-400">
-                管理 CloakBrowser 的定制 Chromium 内核（支持断点续传与多版本管理）
+                管理 CloakBrowser (Chromium) 与 Camoufox (Firefox) 定制反指纹内核（支持多版本管理与断点续传）
               </p>
             </div>
           </div>
@@ -265,6 +273,30 @@ export function KernelManagerModal({
           </div>
         </div>
 
+        {/* Engine Tabs */}
+        <div className="flex border-b border-gray-800 px-6 pt-3 bg-gray-900/60">
+          <button
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "cloakbrowser"
+                ? "border-blue-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => setActiveTab("cloakbrowser")}
+          >
+            CloakBrowser (Chromium)
+          </button>
+          <button
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "camoufox"
+                ? "border-blue-500 text-white"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
+            }`}
+            onClick={() => setActiveTab("camoufox")}
+          >
+            Camoufox (Firefox)
+          </button>
+        </div>
+
         {/* Platform & Status Ribbon */}
         {kernelData && (
           <div className="px-6 py-2.5 bg-gray-800/40 border-b border-gray-800/60 flex items-center justify-between text-xs">
@@ -272,30 +304,37 @@ export function KernelManagerModal({
               <span>
                 平台架构: <strong className="text-gray-200 font-mono">{kernelData.current_platform}</strong>
               </span>
-              <span>
-                当前授权:{" "}
-                <span
-                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                    kernelData.current_tier === "pro"
-                      ? "bg-purple-950/60 text-purple-300 border border-purple-800/50"
-                      : "bg-blue-950/60 text-blue-300 border border-blue-800/50"
-                  }`}
-                >
-                  {kernelData.current_tier}
+              {isCloak ? (
+                <span>
+                  当前授权:{" "}
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                      kernelData.current_tier === "pro"
+                        ? "bg-purple-950/60 text-purple-300 border border-purple-800/50"
+                        : "bg-blue-950/60 text-blue-300 border border-blue-800/50"
+                    }`}
+                  >
+                    {kernelData.current_tier}
+                  </span>
                 </span>
-              </span>
+              ) : (
+                <span>
+                  内核类型:{" "}
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/50">
+                    开源免授权
+                  </span>
+                </span>
+              )}
             </div>
             <div>
-              {kernelData.installed ? (
-                <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> 内核就绪
-                  {kernelData.active_version && (
-                    <span className="text-gray-400 text-[11px]">({kernelData.active_version})</span>
-                  )}
+              {installedCount > 0 ? (
+                <span className="text-gray-400 font-medium inline-flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  已安装: <strong className="text-emerald-400 font-mono">{installedCount}</strong> 个版本
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-amber-400 font-medium">
-                  <AlertTriangle className="h-3.5 w-3.5" /> 未安装内核
+                  <AlertTriangle className="h-3.5 w-3.5" /> 未安装可用版本
                 </span>
               )}
             </div>
@@ -374,30 +413,6 @@ export function KernelManagerModal({
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex border-b border-gray-800 px-6 pt-4">
-          <button
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === "cloakbrowser"
-                ? "border-blue-500 text-white"
-                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
-            }`}
-            onClick={() => setActiveTab("cloakbrowser")}
-          >
-            CloakBrowser
-          </button>
-          <button
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === "camoufox"
-                ? "border-blue-500 text-white"
-                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
-            }`}
-            onClick={() => setActiveTab("camoufox")}
-          >
-            Camoufox
-          </button>
-        </div>
-
         {/* Kernel List */}
         <div className="p-6 overflow-y-auto flex-1 space-y-3">
           {loading && !kernelData ? (
@@ -405,12 +420,12 @@ export function KernelManagerModal({
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
               <span className="text-xs">正在扫描可用内核...</span>
             </div>
-          ) : !kernelData?.kernels || kernelData.kernels.filter(k => (k.browser_type || "cloakbrowser") === activeTab).length === 0 ? (
+          ) : !kernelData?.kernels || currentKernels.length === 0 ? (
             <div className="text-center py-12 text-gray-500 text-xs">
-              暂无匹配当前平台的 {activeTab === "cloakbrowser" ? "CloakBrowser" : "Camoufox"} 可用内核
+              暂无匹配当前平台的 {isCloak ? "CloakBrowser (Chromium)" : "Camoufox (Firefox)"} 可用内核
             </div>
           ) : (
-            kernelData.kernels.filter(k => (k.browser_type || "cloakbrowser") === activeTab).map((kernel) => {
+            currentKernels.map((kernel) => {
               const isThisDownloading = downloadingVersion === kernel.version;
               const isAnyDownloading = !!downloadingVersion;
 
@@ -446,15 +461,9 @@ export function KernelManagerModal({
                           {kernel.tier}
                         </span>
 
-                        {kernel.is_active && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3" /> 当前使用
-                          </span>
-                        )}
-
-                        {kernel.installed && !kernel.is_active && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
-                            已就绪
+                        {kernel.installed && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 flex items-center gap-1">
+                            <CheckCircle2 className="h-3 w-3" /> 已安装
                           </span>
                         )}
                       </div>

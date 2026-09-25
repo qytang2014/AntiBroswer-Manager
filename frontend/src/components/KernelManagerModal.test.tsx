@@ -50,7 +50,7 @@ describe("KernelManagerModal", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Chromium 145.0.7632.109.2/)).toBeTruthy();
-      expect(screen.getByText(/当前使用/)).toBeTruthy();
+      expect(screen.getAllByText(/已安装/).length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -104,6 +104,60 @@ describe("KernelManagerModal", () => {
 
     await waitFor(() => {
       expect(vi.mocked(api.listKernels).mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+  });
+
+  it("switches tabs, updates dynamic header, and shows open-source badge for Camoufox", async () => {
+    vi.mocked(api.listKernels).mockResolvedValue({
+      current_platform: "darwin-arm64",
+      current_tier: "pro",
+      active_version: "151.0.7922.108.3",
+      installed: true,
+      kernels: [
+        {
+          version: "151.0.7922.108.3",
+          tier: "pro" as const,
+          browser_type: "cloakbrowser",
+          name: "Chromium 151.0 (Pro)",
+          description: "CloakBrowser Pro 内核",
+          platform: "darwin-arm64",
+          installed: true,
+          is_active: true,
+          binary_path: "/path/to/chrome",
+          size_mb: 180,
+        },
+        {
+          version: "152.0.4-beta.31",
+          tier: "free" as const,
+          browser_type: "camoufox",
+          name: "Camoufox 152.0.4-beta.31",
+          description: "基于 Firefox 的指纹浏览器内核",
+          platform: "darwin-arm64",
+          installed: true,
+          is_active: true,
+          binary_path: "/path/to/camoufox",
+          size_mb: 120,
+        },
+      ],
+    });
+
+    render(<KernelManagerModal isOpen={true} onClose={() => {}} />);
+
+    // Default CloakBrowser tab
+    await waitFor(() => {
+      expect(screen.getByText(/内核管理 \/ Kernel Manager/)).toBeTruthy();
+      expect(screen.getAllByText("pro").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/已安装:/)).toBeTruthy();
+      expect(screen.getByText(/个版本/)).toBeTruthy();
+    });
+
+    // Switch to Camoufox tab
+    fireEvent.click(screen.getByRole("button", { name: "Camoufox (Firefox)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/内核管理 \/ Kernel Manager/)).toBeTruthy();
+      expect(screen.getByText("开源免授权")).toBeTruthy();
+      expect(screen.getByText("Camoufox 152.0.4-beta.31")).toBeTruthy();
     });
   });
 });

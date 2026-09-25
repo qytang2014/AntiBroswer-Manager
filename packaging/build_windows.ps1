@@ -77,4 +77,4 @@ if (-not (Get-Command $Iscc -ErrorAction SilentlyContinue)) {
 Write-Host "[build] Inno Setup"
 & $Iscc "/DAppVersion=$Version" "/DSourceDir=$AppDir" (Join-Path $Root "packaging\installer.iss")
 
-Write-Host "[done] $Dist\CloakBrowser-Manager-$Version-setup.exe"
+Write-Host "[done] $Dist\AntiBrowser-Manager-$Version-setup.exe"

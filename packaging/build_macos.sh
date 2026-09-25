@@ -9,7 +9,7 @@
 #     (create once: xcrun notarytool store-credentials CB_NOTARY_PROFILE \
 #        --apple-id you@example.com --team-id TEAMID --password app-specific-pw)
 #
-# Output: dist_native/CloakBrowser-Manager-<version>.dmg
+# Output: dist_native/AntiBrowser-Manager-<version>.dmg
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -130,7 +130,7 @@ fi
 for v in "/Volumes/$APP_NAME"*; do
   [ -d "$v" ] && { hdiutil detach "$v" -force >/dev/null 2>&1 || diskutil unmount force "$v" >/dev/null 2>&1 || true; }
 done
-DMG="$DIST/CloakBrowser-Manager-$VERSION.dmg"
+DMG="$DIST/AntiBrowser-Manager-$VERSION.dmg"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"

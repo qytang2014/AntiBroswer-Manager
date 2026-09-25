@@ -793,6 +793,7 @@ async def download_kernel_stream_endpoint(version: str, tier: str = "free", brow
             async for event in kernel_download_manager.subscribe(
                 version=version,
                 tier=tier,
+                browser_type=browser_type,
                 license_key=browser_mgr.license_key,
                 release_channel=browser_mgr.release_channel,
             ):
@@ -821,8 +822,7 @@ async def download_kernel_stream_endpoint(version: str, tier: str = "free", brow
 @app.delete("/api/kernels/{version}")
 async def delete_kernel_endpoint(version: str, tier: str = "free", browser_type: str = "cloakbrowser"):
     """Delete an installed kernel."""
-    # TODO: Handle Camoufox deletion
-    success = delete_kernel(version, tier=tier)
+    success = delete_kernel(version, tier=tier, browser_type=browser_type)
     browser_mgr.resolve_binary_status()
     if not success:
         raise HTTPException(status_code=404, detail=f"Kernel {version} not found")

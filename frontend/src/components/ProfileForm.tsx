@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
   Extension,
@@ -82,8 +82,40 @@ const ARG_PRESETS = [
   { label: "禁用网页通知", arg: "--disable-notifications", tip: "阻止网页弹窗申请通知权限" },
   { label: "窗口最大化启动", arg: "--start-maximized", tip: "窗口最大化以模拟真实桌面用户行为" },
   { label: "静音所有标签", arg: "--mute-audio", tip: "静音浏览器所有声音输出" },
-  { label: "禁用域可靠性监控", arg: "--disable-domain-reliability", tip: "防止向 Google 上报网络错误与可靠性监测" },
 ];
+
+export function compareKernelVersions(a: string, b: string): number {
+  if (a === b) return 0;
+  const cleanA = a.replace(/^v/i, "");
+  const cleanB = b.replace(/^v/i, "");
+
+  const regex = /(\d+|\D+)/g;
+  const tokensA = cleanA.match(regex) || [];
+  const tokensB = cleanB.match(regex) || [];
+
+  const maxLen = Math.max(tokensA.length, tokensB.length);
+  for (let i = 0; i < maxLen; i++) {
+    const tA = tokensA[i];
+    const tB = tokensB[i];
+
+    if (tA === undefined) return -1;
+    if (tB === undefined) return 1;
+
+    const numA = Number(tA);
+    const numB = Number(tB);
+    const isNumA = !isNaN(numA);
+    const isNumB = !isNaN(numB);
+
+    if (isNumA && isNumB) {
+      if (numA !== numB) {
+        return numA - numB;
+      }
+    } else if (tA !== tB) {
+      return tA.localeCompare(tB);
+    }
+  }
+  return 0;
+}
 
 export function ProfileForm({
   profile,
@@ -248,6 +280,12 @@ export function ProfileForm({
   const [installedKernels, setInstalledKernels] = useState<KernelItem[]>([]);
   const [kernelsLoading, setKernelsLoading] = useState(false);
 
+  const currentTypeInstalledKernels = useMemo(() => {
+    return installedKernels
+      .filter((k) => (k.browser_type || "cloakbrowser") === (form.browser_type || "cloakbrowser"))
+      .sort((a, b) => compareKernelVersions(b.version, a.version));
+  }, [installedKernels, form.browser_type]);
+
   const loadInstalledKernels = useCallback(async () => {
     setKernelsLoading(true);
     try {
@@ -263,6 +301,39 @@ export function ProfileForm({
   useEffect(() => {
     loadInstalledKernels();
   }, [loadInstalledKernels, kernelsUpdated]);
+
+  // Synchronize browser_version with available installed kernels:
+  // - If no version is selected yet, default to the latest installed version.
+  // - If the selected version is deleted from disk / not found, automatically update to the highest available version (or null if none).
+  useEffect(() => {
+    if (installedKernels.length === 0) return;
+
+    const highestVersion = currentTypeInstalledKernels[0]?.version ?? null;
+
+    if (currentTypeInstalledKernels.length === 0) {
+      if (form.browser_version !== null) {
+        setForm((prev) => ({ ...prev, browser_version: null }));
+      }
+      return;
+    }
+
+    const isCurrentValid = currentTypeInstalledKernels.some((k) => k.version === form.browser_version);
+    if (!form.browser_version || !isCurrentValid) {
+      setForm((prev) => ({ ...prev, browser_version: highestVersion }));
+    }
+  }, [form.browser_type, form.browser_version, currentTypeInstalledKernels, installedKernels.length]);
+
+  const handleBrowserTypeChange = (newType: string) => {
+    const matching = installedKernels
+      .filter((k) => (k.browser_type || "cloakbrowser") === newType)
+      .sort((a, b) => compareKernelVersions(b.version, a.version));
+    const newVersion = matching[0]?.version ?? null;
+    setForm((prev) => ({
+      ...prev,
+      browser_type: newType,
+      browser_version: newVersion,
+    }));
+  };
 
   const [licenses, setLicenses] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
   useEffect(() => {
@@ -575,8 +646,8 @@ export function ProfileForm({
 
   const isSelectedKernelMissing = Boolean(
     form.browser_version &&
-    installedKernels.length > 0 &&
-    !installedKernels.some((k) => k.version === form.browser_version)
+    currentTypeInstalledKernels.length > 0 &&
+    !currentTypeInstalledKernels.some((k) => k.version === form.browser_version)
   );
 
   const isOldKernel = Boolean(
@@ -846,39 +917,69 @@ export function ProfileForm({
                 )}
               </div>
               <div className="flex items-center justify-between mt-4">
-                <label className="text-sm font-medium text-slate-300">内核类型 (Browser Type)</label>
+                <label htmlFor="browser_type" className="text-sm font-medium text-slate-300">
+                  内核类型 (Browser Type)
+                </label>
               </div>
               <select
+                id="browser_type"
                 className="input"
                 value={form.browser_type ?? "cloakbrowser"}
-                onChange={(e) => set("browser_type", e.target.value)}
+                onChange={(e) => handleBrowserTypeChange(e.target.value)}
               >
                 <option value="cloakbrowser">CloakBrowser (基于 Chromium)</option>
                 <option value="camoufox">Camoufox (基于 Firefox)</option>
               </select>
 
               <div className="flex items-center justify-between mt-4">
-                <label className="text-sm font-medium text-slate-300">内核版本 (Browser Version)</label>
+                <label htmlFor="browser_version" className="text-sm font-medium text-slate-300">
+                  内核版本 (Browser Version)
+                </label>
               </div>
               <select
-                className="input"
+                id="browser_version"
+                className={`input ${currentTypeInstalledKernels.length === 0 ? "border-amber-500/50 bg-amber-950/10 text-amber-300" : ""}`}
                 value={form.browser_version ?? ""}
                 onChange={(e) => set("browser_version", e.target.value ? e.target.value : null)}
               >
-                <option value="">默认推荐 (跟随系统默认/最新内核)</option>
-                {isSelectedKernelMissing && (
-                  <option value={form.browser_version!} disabled>
-                    ⚠️ v{form.browser_version} (本地已删除 - 启动将自动回退)
+                {currentTypeInstalledKernels.length === 0 && (
+                  <option value="" disabled>
+                    未检测到已安装内核 (请先下载)
                   </option>
                 )}
-                {installedKernels.map((k) => (
+                {isSelectedKernelMissing && (
+                  <option value={form.browser_version!} disabled>
+                    ⚠️ v{form.browser_version} (本地已删除或类型不匹配 - 启动将自动回退)
+                  </option>
+                )}
+                {currentTypeInstalledKernels.map((k) => (
                   <option key={k.version} value={k.version}>
-                    {k.name} (v{k.version}) - {k.tier === "free" ? "免费无限制" : "Pro 授权"}
+                    {k.name} (v{k.version}){k.tier === "pro" ? " - Pro 授权" : ""}
                   </option>
                 ))}
               </select>
 
-              {isSelectedKernelMissing && (
+              {currentTypeInstalledKernels.length === 0 && (
+                <div className="mt-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-600/50 flex items-center justify-between gap-2 text-xs text-amber-300">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                    <span>
+                      未检测到已安装的 {form.browser_type === "camoufox" ? "Camoufox (Firefox)" : "CloakBrowser (Chromium)"} 内核，请先下载内核。
+                    </span>
+                  </div>
+                  {onOpenKernelManager && (
+                    <button
+                      type="button"
+                      onClick={onOpenKernelManager}
+                      className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-medium text-xs border border-amber-500/40 shrink-0 transition cursor-pointer"
+                    >
+                      前往下载
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {isSelectedKernelMissing && currentTypeInstalledKernels.length > 0 && (
                 <div className="mt-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-600/50 flex items-start gap-2 text-xs text-amber-300">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
                   <div>
@@ -893,7 +994,9 @@ export function ProfileForm({
               )}
 
               <p className="text-[11px] text-gray-500 mt-1.5">
-                官方稳定版 (v145) 为免费内核，不受 Pro 授权与席位并发限制；如需更高级指纹防护可选用 Pro 内核。
+                {form.browser_type === "camoufox"
+                  ? "Camoufox 为开源免授权 Firefox 指纹浏览器内核，具备全平台指纹随机化防护能力。"
+                  : "官方稳定版 (v145) 为免费内核，不受 Pro 授权与席位并发限制；如需更高级指纹防护可选用 Pro 内核。"}
               </p>
             </div>
           </div>
