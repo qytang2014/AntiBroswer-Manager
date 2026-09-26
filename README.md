@@ -1,290 +1,171 @@
 <p align="center">
-<img src="https://i.imgur.com/cqkp6fG.png" width="500" alt="CloakBrowser">
-</p>
-
-<h3 align="center">Browser Profile Manager for CloakBrowser</h3>
-
-<p align="center">
-A self-hosted browser for managing unlimited accounts and profiles,<br>
-each one a genuinely separate machine: its own fingerprint, GPU, proxy, cookies, and history.<br>
-Powered by CloakBrowser, the stealth engine that passes Cloudflare Turnstile, reCAPTCHA v3, FingerprintJS and BrowserScan.<br>
-The identities don't just look different. They hold up.
-</p>
-
-<p align="center">
-Self-hosted alternative to Multilogin, GoLogin, and AdsPower.<br>
-Start free with one concurrent browser, scale to more on a paid plan.
-</p>
-
-<p align="center">
-<a href="https://github.com/CloakHQ/CloakBrowser"><img src="https://img.shields.io/github/stars/cloakhq/cloakbrowser?label=CloakBrowser" alt="Stars"></a>
-<a href="https://hub.docker.com/r/cloakhq/cloakbrowser-manager"><img src="https://img.shields.io/docker/pulls/cloakhq/cloakbrowser-manager?label=docker&logo=docker&logoColor=white" alt="Docker Pulls"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+  <h1 align="center">AntiBrowser-Manager</h1>
+  <p align="center">
+    <strong>Self-hosted anti-detect browser profile manager supporting dual engines (Camoufox & CloakBrowser)</strong>
+  </p>
+  <p align="center">
+    <a href="README.md">English</a> | <a href="README_CN.md">简体中文</a>
+  </p>
 </p>
 
 ---
 
-<p align="center">
-<img src="https://raw.githubusercontent.com/CloakHQ/CloakBrowser-Manager/main/assets/manager-macos.png" width="800" alt="CloakBrowser Manager on macOS">
-</p>
+## Overview
 
-Open a profile and you don't get a new tab, you get a different computer: its own browser fingerprint, GPU, screen, timezone, proxy, cookies, and history. Nothing bleeds between profiles, so your accounts never link back to each other, or to you. Close a profile and reopen it next day, it's the same person, warmed up and ready.
+**AntiBrowser-Manager** is an open-source, self-hosted management panel for anti-detect browser profiles. It lets you run isolated browser environments locally (macOS / Windows) or on a server (Linux Docker). Each profile maintains its own dedicated user data directory, fingerprint hardware configuration, network proxy, and cookie storage.
 
-Windows and macOS launch browsers directly in native desktop windows; Linux keeps the Docker/KasmVNC server experience.
+The project natively integrates both **Camoufox** (an open-source anti-detect engine based on Firefox) and **CloakBrowser** (a stealth engine based on Chromium). It also features built-in multi-protocol proxy management and speed testing powered by **sing-box**, alongside end-to-end encrypted (E2EE) cloud backups via S3 / WebDAV.
 
-### Windows and macOS
+## Key Features
 
-Download the installer from the [latest release](https://github.com/CloakHQ/CloakBrowser-Manager/releases) and run it:
+### 1. Dual Engine Support
+- **Camoufox Engine**: Open-source anti-detect browser based on Firefox. Completely free, supports unlimited concurrent profiles out-of-the-box, and requires no commercial license.
+- **CloakBrowser Engine**: Stealth engine based on Chromium, providing patched Chromium identity spoofing.
+- **Centralized Kernel Management**: Download, switch, and delete multiple engine versions directly within the interface. Assign specific engines and versions to each profile.
 
-- **macOS** — open the `.dmg` and drag **CloakBrowser Manager** into Applications. (Unsigned during early access — on first launch, run `xattr -rc "/Applications/CloakBrowser Manager.app"` in Terminal, or approve it under **System Settings → Privacy & Security → Open Anyway**.)
-- **Windows** — run the setup `.exe`. (Unsigned during early access — if SmartScreen warns, click **More info → Run anyway**.)
+### 2. sing-box Proxy & Subscription Management
+- **Modern Protocol Support**: Parses and manages proxy protocols natively, including VLESS, VMESS, Trojan, Hysteria2, TUIC, Shadowsocks, WireGuard, AnyTLS, SSH, SOCKS5, and HTTP.
+- **Node & Subscription Import**: Import single node links or batch-sync subscription URLs with collapsible group management.
+- **Physical Interface Latency Test**: Low-latency 1-RTT connectivity testing bound directly to the active network interface, preventing interference from local system proxies.
+- **Protocol Badges**: The profile sidebar displays the exact proxy protocol badge (e.g., `VLESS`, `SOCKS5`, `Hysteria2`) for instant clarity.
 
-No Python, Node, or git required. The Manager starts on `127.0.0.1:8080` and opens in your default browser. On first launch it downloads the CloakBrowser engine. Profiles are stored in `%LOCALAPPDATA%\CloakBrowser Manager` on Windows and `~/Library/Application Support/CloakBrowser Manager` on macOS; a `logs/manager.log` in that folder records what happened if you need it.
+### 3. Fingerprint & Hardware Isolation
+- **Strict Data Isolation**: Every profile operates in a separate data directory (Cache, Cookies, LocalStorage, IndexedDB, and History).
+- **Hardware Configuration**: Customizable WebGL Vendor & Renderer, Canvas noise, Audio noise, CPU core count, RAM allocation, and display resolutions.
+- **GeoIP & Timezone Sync**: Automatically aligns browser timezone, language (Locale), and geolocation with the proxy exit IP to prevent fingerprint inconsistencies.
 
-Open **Settings** (gear icon, top right) to add your license key and pick the Stable or Preview channel.
+### 4. Extension & Add-on Management
+- **Dual-Engine Extensions**:
+  - Chromium engine: Search, download, and load extensions directly from the Chrome Web Store.
+  - Firefox (Camoufox) engine: Search and install add-ons directly from the official Firefox Add-ons directory.
+- **Local Repository**: Downloaded extensions are cached locally and can be bound across multiple profiles with a click.
 
-#### Run from source (developers)
+### 5. Encrypted Cloud Backup & Restore
+- **Standard Storage Providers**: Supports WebDAV and AWS S3-compatible object storage (e.g., Cloudflare R2, MinIO, Alibaba Cloud OSS).
+- **End-to-End Encryption (E2EE)**: Archives are encrypted on your local machine before upload. Credentials are stored securely with restricted file permissions.
+- **Integrity Verification**: Built-in SHA-256 verification, streaming uploads/downloads, and real-time progress indicators.
 
+### 6. Automation & Cross-Platform Viewers
+- **Native Desktop Windows**: Launches browser profiles directly in native desktop windows on Windows and macOS.
+- **Web VNC Viewer**: Linux / Docker environments provide embedded browser interaction through KasmVNC / noVNC inside the web interface.
+- **CDP Automation Endpoint**: Running CloakBrowser (Chromium) profiles expose a Chrome DevTools Protocol (CDP) endpoint for Playwright / Puppeteer automation (Note: Camoufox is Firefox-based and does not support Chromium CDP).
+
+## Quick Start
+
+### Requirements
+- **macOS / Windows**: Python 3.10+, Node.js 18+
+- **Linux (Docker)**: Docker 20.10+, Docker Compose
+
+### Option 1: One-Click Run from Source (Recommended for Daily Use)
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/your-username/AntiBrowser-Manager.git
+   cd AntiBrowser-Manager
+   ```
+
+2. **Launch the application**:
+   * **macOS**:
+     ```bash
+     ./run-macos.sh
+     ```
+   * **Windows**:
+     ```bat
+     run-windows.bat
+     ```
+
+   The script initializes a Python virtual environment, installs dependencies using `uv`, builds the frontend UI, and starts the local server.
+
+3. **Open the panel**:
+   Once started, visit:
+   ```text
+   http://127.0.0.1:52341
+   ```
+
+### Option 2: Development Mode
+
+**Backend (Python)**:
 ```bash
-git clone https://github.com/CloakHQ/CloakBrowser-Manager.git
-cd CloakBrowser-Manager
-./run-macos.sh      # macOS  (or run-windows.bat on Windows)
-```
-
-This path requires Python 3.10+ and Node 18+; the first run creates a local Python environment, installs dependencies, and builds the React UI before starting the Manager.
-
-### Linux server
-
-```bash
-docker run -p 127.0.0.1:8080:8080 -v cloakprofiles:/data cloakhq/cloakbrowser-manager
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/CloakHQ/CloakBrowser-Manager.git
-cd CloakBrowser-Manager
-docker compose up --build
-```
-
-Open [http://localhost:8080](http://localhost:8080), create a profile, and click Launch.
-
-> **Early alpha** — this project is under active development. Expect bugs. If you find one, please [open an issue](https://github.com/CloakHQ/CloakBrowser-Manager/issues) and attach the log so we can help. On Windows/macOS it's `logs/manager.log` in the data folder (`%LOCALAPPDATA%\CloakBrowser Manager` / `~/Library/Application Support/CloakBrowser Manager`); on Linux/Docker use `docker logs <container>`.
-
-## CloakBrowser license key
-
-The Manager runs on the CloakBrowser engine, so it needs a key.<br>
-[Get a free one with GitHub](https://cloakbrowser.dev/free) to run one profile at a time on the current build.<br>
-[Paid plans](https://cloakbrowser.dev) raise how many profiles run at the same time, from a handful to thousands.
-
-Add your key once and every profile uses it.
-
-**Native app (Windows/macOS):** open **Settings** (gear icon, top right), paste your key, choose the Stable or Preview channel, and Save. It applies immediately, no restart. The badge in the top bar shows which tier and binary version are active.
-
-**Docker:** open **Settings** (gear icon, top right) the same way, paste your key, and Save. It applies immediately and is stored in the mounted `/data` volume, so it persists across restarts and image updates. For automated or headless setups, pass it at `docker run` instead:
-
-```bash
-docker run -p 127.0.0.1:8080:8080 -v cloakprofiles:/data \
-  -e CLOAKBROWSER_LICENSE_KEY=cb_your_key_here \
-  -e CLOAKBROWSER_RELEASE_CHANNEL=preview \
-  cloakhq/cloakbrowser-manager
-```
-
-**Run from source (or `docker compose`):** set it in a manager-root `.env`:
-
-```bash
-cp .env.example .env
-```
-
-```bash
-# .env
-CLOAKBROWSER_LICENSE_KEY=cb_your_key_here
-CLOAKBROWSER_RELEASE_CHANNEL=stable   # or: preview
-```
-
-The file is loaded automatically at startup (`docker compose` reads it too); restart the Manager after changing it. An environment variable overrides the in-app setting.
-
-## Why Not a Cloud Anti-Detect Browser?
-
-The popular anti-detect browsers solve the fingerprint, then hand you a new problem: every account you own, every cookie, every session, sits on someone else's servers. And the disguise increasingly doesn't survive real detection, shortcuts in how fingerprints are faked, GPU and WebGL values that don't add up, identities that pass a test page and fail the real site.
-
-CloakBrowser Manager runs on your own machine, and every profile inherits the CloakBrowser engine, so the identities actually hold up.
-
-| | Typical cloud anti-detect browser | **CloakBrowser Manager** |
-|---|---|---|
-| Pricing model | Per profile + per seat, forced up-tiering | **Flat by concurrency, unlimited profiles** |
-| Where profiles live | Their cloud | **Your machine** |
-| Fingerprinting | JS-injected into a stock browser | **Source-level C++ patched engine** |
-| The app | Closed box | **Open-source GUI (MIT)** |
-| Native desktop windows | Rare | **Windows + macOS** |
-| Automation API | Add-on / higher tier | **CDP built in, every profile** |
-| Cost of idle accounts | Counts against your limit | **Free** |
-
-## Features
-
-- **Unlimited profiles, no per-profile tax** — create as many identities as you want. You pay only for how many run at the same time, not how many you keep. Dormant accounts cost nothing.
-- **Each profile is a different machine** — its own fingerprint seed, GPU family, screen, cookies, localStorage, cache, and history, persistent across restarts
-- **Per-profile network and locale** — proxy, GeoIP, timezone, locale, and screen, per profile; timezone and language follow the proxy exit IP automatically
-- **Platform-aware hardware profiles** — automatic Apple Silicon selection and configurable Windows GPU families, coherent within each profile
-- **Profile organization** — create, search, tag, edit, auto-launch, and delete profiles
-- **Platform-native browsing** — Windows and macOS profiles open in normal desktop windows
-- **Linux server viewing** — interact with Docker-launched browsers through KasmVNC in the web GUI
-- **Playwright/Puppeteer API** — connect to any running profile through CDP while watching the same session live
-- **Humanized interaction** — optional human-like mouse, keyboard, and scrolling behavior
-- **Compatibility controls** — unpacked extensions, third-party-cookie support, and advanced Chromium arguments
-- **Clipboard sync** — copy and paste between the Manager and Linux VNC browser profiles
-- **License and system status** — see the active tier, binary version, and Windows font health in the top bar
-- **Optional authentication** — protect the web UI and API with a single token, or run locally without authentication
-- **Powered by CloakBrowser** — the identities don't just look different, they hold up: a source-level C++ patched Chromium engine tested against Cloudflare Turnstile, reCAPTCHA v3, FingerprintJS, and BrowserScan
-
-## Stack
-
-- **Backend**: FastAPI (Python)
-- **Frontend**: React + Tailwind CSS
-- **Browser viewer**: native windows on Windows/macOS; noVNC/KasmVNC on Linux Docker
-- **Database**: SQLite
-- **Browser engine**: [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) (stealth Chromium binary)
-
-## Development
-
-### Native backend
-
-```bash
+# Recommended with uv
 uv sync
-uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8080
+uv run python run.py
 ```
 
-### Frontend
-
+**Frontend (React + Vite)**:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-### Docker
+### Option 3: Build as Native Desktop Application (macOS / Windows)
+
+You can compile standalone desktop packages that do not require pre-installed Python or Node environments. Outputs are generated in `dist_native/`:
+
+* **macOS (.app / .dmg)**:
+  ```bash
+  ./packaging/build_macos.sh
+  ```
+  > **Note**: The build script bundles the frontend and freezes the backend, producing a `.dmg` installer inside `dist_native/`. If macOS warns about an unsigned application on first launch, run `xattr -rc /Applications/AntiBrowser-Manager.app` in Terminal, or approve it under **System Settings → Privacy & Security → Open Anyway**.
+
+* **Windows (.exe / Setup installer)**:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+  ```
+  > **Note**: Uses PyInstaller and Inno Setup (if installed) to generate `AntiBrowser-Manager-Setup.exe` inside `dist_native\`. If Windows SmartScreen displays a warning, click **More info → Run anyway**.
+
+### Option 4: Docker Deployment (Linux Server)
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
+The manager runs inside the container and serves the web UI and VNC viewer.
 
-## Requirements
+## Engine & License Notes
 
-- Windows or macOS native: Python 3.10+, Node.js 18+
-- Linux server: Docker 20.10+
-- ~2 GB disk (application + browser binary)
-- ~512 MB RAM per running profile
+- **Camoufox Engine**: Open-source (GPL-3.0). Can be downloaded and used directly inside AntiBrowser-Manager with no concurrency limits and no license key required.
+- **CloakBrowser Engine**: If you choose to launch profiles using the CloakBrowser Chromium binary, enter your CloakBrowser license key in Settings.
 
-## Updating
+## CDP Automation
 
-### Windows and macOS
+> [!NOTE]
+> **Scope**: CDP (Chrome DevTools Protocol) debugging endpoints are **only available for CloakBrowser (Chromium) profiles**.
+> **Camoufox Note**: Camoufox is based on the Firefox (Gecko) engine and does not implement Chromium's CDP protocol. To automate Camoufox, use the `camoufox` Python package directly in your scripts.
 
-Pull the latest source and run the platform launcher again. It installs changed dependencies and rebuilds the interface automatically.
-
-```bash
-git pull
-```
-
-```text
-Windows: run-windows.bat
-macOS:   ./run-macos.sh
-```
-
-### Linux server
-
-Pull the latest image and recreate the container:
-
-```bash
-docker pull cloakhq/cloakbrowser-manager
-docker stop <container-id>
-docker rm <container-id>
-docker run -p 127.0.0.1:8080:8080 -v cloakprofiles:/data cloakhq/cloakbrowser-manager
-```
-
-Profiles and session data remain in the native application-data directory or the `cloakprofiles` Docker volume across updates.
-
-## Automation API
-
-Every running profile exposes a CDP (Chrome DevTools Protocol) endpoint. Connect Playwright or Puppeteer to automate a profile while watching it live in the browser.
+When a **CloakBrowser** profile is running, its dedicated CDP endpoint is accessible for Playwright automation:
 
 ```python
+import asyncio
 from playwright.async_api import async_playwright
 
-async with async_playwright() as pw:
-    browser = await pw.chromium.connect_over_cdp(
-        "http://localhost:8080/api/profiles/<profile-id>/cdp"
-    )
-    page = browser.contexts[0].pages[0]
-    await page.goto("https://example.com")
+async def main():
+    async with async_playwright() as p:
+        # Only for CloakBrowser profiles; replace <PROFILE_ID> with the running profile ID
+        browser = await p.chromium.connect_over_cdp("http://127.0.0.1:52341/api/profiles/<PROFILE_ID>/cdp")
+        context = browser.contexts[0]
+        page = context.pages[0] if context.pages else await context.new_page()
+        await page.goto("https://browserleaks.com/ip")
+        print("Page Title:", await page.title())
+
+asyncio.run(main())
 ```
 
-```javascript
-const { chromium } = require("playwright");
+## Tech Stack
 
-const browser = await chromium.connectOverCDP(
-  "http://localhost:8080/api/profiles/<profile-id>/cdp"
-);
-const page = browser.contexts()[0].pages()[0];
-await page.goto("https://example.com");
-```
+- **Backend**: Python 3.10+ / FastAPI / Uvicorn / SQLite / sing-box
+- **Frontend**: React / TypeScript / Tailwind CSS / Lucide Icons / Vite
+- **Browser Engines**: [Camoufox](https://github.com/daijro/camoufox) (Firefox) & [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) (Chromium)
+- **Window Viewers**: Native desktop windows on Windows/macOS; noVNC / KasmVNC on Linux Docker
 
-The CDP URL is available from the running-profile view. The same browser session is accessible through its native window on Windows/macOS or through VNC on Linux Docker, and programmatically through the API on every platform.
+## Acknowledgements
 
-## Remote Access
+AntiBrowser-Manager is built upon and inspired by the work of the following projects:
 
-The container binds to localhost only. To access from a remote server:
-
-```bash
-ssh -L 8080:localhost:8080 your-server
-```
-
-Then open `http://localhost:8080`.
-
-## Authentication
-
-By default, there is no authentication (ideal for local use). To protect the web UI and API when hosting on a network, set the `AUTH_TOKEN` environment variable:
-
-```bash
-docker run -p 127.0.0.1:8080:8080 -v cloakprofiles:/data -e AUTH_TOKEN=your-secret-token cloakhq/cloakbrowser-manager
-```
-
-Or in `docker-compose.yml`:
-
-```yaml
-environment:
-  - AUTH_TOKEN=your-secret-token
-```
-
-When `AUTH_TOKEN` is set:
-
-- The web UI shows a login page. Enter the token to unlock.
-- API consumers pass the token via `Authorization: Bearer <token>` header.
-- VNC WebSocket connections are authenticated via the login cookie.
-- The `/api/health` endpoint remains unauthenticated (for Docker healthcheck); it exposes no system details. The `/api/status` endpoint (running counts, version) now requires authentication.
-
-> **Note**: The auth token is transmitted in cleartext over HTTP. If you expose the Manager to the internet, put it behind a reverse proxy with HTTPS (Caddy, nginx, Traefik).
+- [CloakBrowser-Manager](https://github.com/CloakHQ/CloakBrowser-Manager) & [CloakBrowser](https://github.com/CloakHQ/CloakBrowser): This project originated as a fork of CloakBrowser-Manager. We appreciate the CloakHQ team's foundational design of the self-hosted profile architecture.
+- [Camoufox](https://github.com/daijro/camoufox): Created by [daijro](https://github.com/daijro), providing an outstanding open-source anti-detect Firefox browser engine.
+- [sing-box](https://github.com/SagerNet/sing-box): The universal proxy platform powering our network routing, subscription handling, and low-latency testing.
 
 ## License
 
-- **This application** (GUI source code) — MIT. See [LICENSE](LICENSE).
-- **CloakBrowser binary** (compiled Chromium) — governed by version-specific subscription terms and may not be redistributed. See [BINARY-LICENSE.md](BINARY-LICENSE.md).
-
-The GUI application requires the CloakBrowser Chromium binary to function. The binary is automatically downloaded on first launch and is governed by its own license terms. If you fork or redistribute this application, your users must comply with the [CloakBrowser Binary License](BINARY-LICENSE.md).
-
-## Contributing
-
-Contributions are welcome. Please [open an issue](https://github.com/CloakHQ/CloakBrowser-Manager/issues) first to discuss what you'd like to change.
-
-### Contributors
-
-- [lhq1363511234-arch](https://github.com/lhq1363511234-arch) — native Windows support foundation
-- [quorentindupres-dev](https://github.com/quorentindupres-dev) — native macOS workflow and Manager integration concepts
-- [shellus](https://github.com/shellus) — auth-gated status endpoint and unauthenticated health probe
-- [hayka-pacha](https://github.com/hayka-pacha) — profile reset endpoint
-
-## Links
-
-- **CloakBrowser** — [github.com/CloakHQ/CloakBrowser](https://github.com/CloakHQ/CloakBrowser)
-- **Website** — [cloakbrowser.dev](https://cloakbrowser.dev)
-- **Bug reports** — [GitHub Issues](https://github.com/CloakHQ/CloakBrowser-Manager/issues)
-- **Contact** — cloakhq@pm.me
+- The management panel source code is licensed under the [MIT License](LICENSE).
+- Third-party browser binaries and components (CloakBrowser, Camoufox, sing-box) are subject to their respective open-source licenses or official terms.

@@ -52,15 +52,6 @@ fi
 echo "[build] syncing build venv with uv at $BUILD_VENV"
 UV_PROJECT_ENVIRONMENT="$BUILD_VENV" uv sync --group build --frozen
 
-# if [ -z "${CLOAKBROWSER_SRC:-}" ] && [ -d "$ROOT/../CloakBrowser-Proxy" ]; then
-#   CLOAKBROWSER_SRC="$ROOT/../CloakBrowser-Proxy"
-# fi
-#
-# if [ -n "${CLOAKBROWSER_SRC:-}" ] && [ -d "$CLOAKBROWSER_SRC" ]; then
-#   echo "[build] installing cloakbrowser from local directory: $CLOAKBROWSER_SRC"
-#   uv pip install --python "$BUILD_VENV/bin/python" -q -e "$CLOAKBROWSER_SRC[geoip]"
-# fi
-
 # 2a. Pin cryptography to the self-contained universal2 wheel (static OpenSSL).
 # The newest cryptography ships no single-arch macOS wheel, so on the Intel
 # runner pip source-builds it against Homebrew's openssl@3 and PyInstaller then
