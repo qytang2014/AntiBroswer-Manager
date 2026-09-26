@@ -118,23 +118,30 @@ def test_extract_server_host_port():
 def test_tcp_ping_rtt():
     """Test TCP ping success, timeout, and connection failure cases."""
     # Success
-    with patch("socket.create_connection") as mock_conn:
-        mock_conn.return_value.__enter__ = MagicMock()
-        mock_conn.return_value.__exit__ = MagicMock()
+    mock_sock = MagicMock()
+    mock_sock.connect.return_value = None
+    with patch("socket.socket", return_value=mock_sock), \
+         patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]):
         ok, lat, err = _tcp_ping_rtt("127.0.0.1", 80)
         assert ok is True
         assert lat is not None and lat >= 1
         assert err is None
 
     # Timeout
-    with patch("socket.create_connection", side_effect=socket.timeout("timed out")):
+    mock_sock_timeout = MagicMock()
+    mock_sock_timeout.connect.side_effect = socket.timeout("timed out")
+    with patch("socket.socket", return_value=mock_sock_timeout), \
+         patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]):
         ok, lat, err = _tcp_ping_rtt("127.0.0.1", 80)
         assert ok is False
         assert lat is None
         assert "timed out" in (err or "")
 
     # OSError
-    with patch("socket.create_connection", side_effect=OSError("Connection refused")):
+    mock_sock_err = MagicMock()
+    mock_sock_err.connect.side_effect = OSError("Connection refused")
+    with patch("socket.socket", return_value=mock_sock_err), \
+         patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]):
         ok, lat, err = _tcp_ping_rtt("127.0.0.1", 80)
         assert ok is False
         assert lat is None
@@ -156,3 +163,47 @@ def test_test_node_sync_fast_path(tmp_db):
         assert res.latency_ms == 42
         mock_ping.assert_called_once_with("1.2.3.4", 443)
         mock_db_update.assert_called_once_with("node-fast-1", 42)
+
+
+def test_udp_protocols_fast_icmp_ping(tmp_db):
+    """Test that TUIC and Hysteria 2 UDP protocols use fast 1-RTT ICMP ping when available."""
+    node = {
+        "id": "node-udp-1",
+        "protocol": "TUIC",
+        "raw_uri": "tuic://uuid:pass@1.2.3.4:443#UdpNode",
+        "parsed_config": json.dumps({"type": "tuic", "server": "1.2.3.4", "server_port": 443}),
+    }
+    with patch("backend.subscription_service._icmp_ping_rtt", return_value=(True, 45, None)) as mock_icmp, \
+         patch("backend.singbox_runner.fast_singbox_proxy") as mock_sb, \
+         patch("backend.subscription_service.update_proxy_node_latency") as mock_db_update:
+        res = run_test_node_sync(node)
+        assert res.ok is True
+        assert res.latency_ms == 45
+        mock_icmp.assert_called_once()
+        mock_sb.assert_not_called()
+        mock_db_update.assert_called_once_with("node-udp-1", 45)
+
+
+def test_udp_protocols_fallback_to_singbox(tmp_db):
+    """Test that TUIC and Hysteria 2 fall back to sing-box when raw ICMP and TCP pings fail."""
+    node = {
+        "id": "node-udp-2",
+        "protocol": "HYSTERIA2",
+        "raw_uri": "hysteria2://pass@1.2.3.4:14819#Hy2Node",
+        "parsed_config": json.dumps({"type": "hysteria2", "server": "1.2.3.4", "server_port": 14819}),
+    }
+    with patch("backend.subscription_service._icmp_ping_rtt", return_value=(False, None, "ICMP blocked")), \
+         patch("backend.subscription_service._tcp_ping_rtt", return_value=(False, None, "TCP failed")), \
+         patch("backend.singbox_runner.fast_singbox_proxy") as mock_sb, \
+         patch("backend.subscription_service._measure_proxy_rtt", return_value=(True, 350, None)), \
+         patch("backend.subscription_service.update_proxy_node_latency") as mock_db_update:
+        mock_sb.return_value.__enter__ = MagicMock(return_value="http://127.0.0.1:55555")
+        mock_sb.return_value.__exit__ = MagicMock()
+
+        res = run_test_node_sync(node)
+        assert res.ok is True
+        assert res.latency_ms == 350
+        mock_sb.assert_called_once()
+        mock_db_update.assert_called_once_with("node-udp-2", 350)
+
+

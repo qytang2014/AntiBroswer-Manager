@@ -7,7 +7,10 @@ import base64
 import datetime
 import json
 import logging
+import platform
+import re
 import socket
+import subprocess
 import time
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -250,24 +253,92 @@ def _measure_proxy_rtt(proxy_url: str, timeout: float = _NODE_TEST_TIMEOUT) -> t
 
 
 _TCP_PING_TIMEOUT = 3.0  # seconds
+_UDP_PROTOCOLS = {"tuic", "hysteria", "hysteria2", "hy2"}
+
+
+def _icmp_ping_rtt(host: str, iface: str | None = None, timeout: float = 1.5) -> tuple[bool, int | None, str | None]:
+    """Measure ICMP Ping RTT to host.
+
+    Binds to physical network interface (e.g. en0) when available,
+    bypassing OS-level TUN/VPN to measure direct RTT to the server host.
+    """
+    system = platform.system()
+    cmd: list[str] = []
+    if system == "Darwin":
+        cmd = ["ping", "-c", "1", "-W", str(int(timeout * 1000))]
+        if iface:
+            cmd.extend(["-b", iface])
+        cmd.append(host)
+    elif system == "Linux":
+        cmd = ["ping", "-c", "1", "-W", str(int(timeout))]
+        if iface:
+            cmd.extend(["-I", iface])
+        cmd.append(host)
+    elif system == "Windows":
+        cmd = ["ping", "-n", "1", "-w", str(int(timeout * 1000)), host]
+    else:
+        return False, None, "Unsupported OS for ICMP ping"
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 0.5)
+        if proc.returncode == 0:
+            m = re.search(r"time=([\d.]+)\s*ms", proc.stdout)
+            if m:
+                return True, max(1, round(float(m.group(1)))), None
+        return False, None, proc.stderr or proc.stdout
+    except Exception as e:
+        return False, None, str(e)
 
 
 def _tcp_ping_rtt(host: str, port: int, timeout: float = _TCP_PING_TIMEOUT) -> tuple[bool, int | None, str | None]:
     """Measure TCP handshake RTT to host:port without HTTP overhead or sing-box startup.
 
-    Returns (ok, latency_ms, error).
-    This matches how Karing/Clash measure proxy node latency: raw TCP reachability.
+    Binds to physical network interface (e.g. en0) when available,
+    bypassing OS-level TUN/VPN (e.g. Karing) to measure latency directly
+    from local network to proxy node.
     """
+    import struct
+    from backend.system_proxy_detector import get_physical_default_interface
+
+    physical_iface = get_physical_default_interface()
+    last_err: Exception | None = None
+
     try:
-        t0 = time.monotonic()
-        with socket.create_connection((host, port), timeout=timeout):
-            pass  # Connection established = 3-way handshake complete
-        latency_ms = max(1, round((time.monotonic() - t0) * 1000))
-        return True, latency_ms, None
-    except socket.timeout:
-        return False, None, f"TCP connect to {host}:{port} timed out ({timeout}s)"
-    except OSError as e:
-        return False, None, f"TCP connect to {host}:{port} failed: {e}"
+        addrinfo = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        return False, None, f"DNS resolution failed for {host}: {e}"
+
+    t0 = time.monotonic()
+    for af, socktype, proto, _canonname, sa in addrinfo:
+        sock = socket.socket(af, socktype, proto)
+        sock.settimeout(timeout)
+        if physical_iface:
+            try:
+                if platform.system() == "Darwin":
+                    idx = socket.if_nametoindex(physical_iface)
+                    IP_BOUND_IF = 25
+                    IPV6_BOUND_IF = 125
+                    if af == socket.AF_INET:
+                        sock.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, struct.pack("I", idx))
+                    elif af == socket.AF_INET6:
+                        sock.setsockopt(socket.IPPROTO_IPV6, IPV6_BOUND_IF, struct.pack("I", idx))
+                elif platform.system() == "Linux":
+                    SO_BINDTODEVICE = 25
+                    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, physical_iface.encode())
+            except Exception as e:
+                logger.debug("Could not bind socket to interface %s: %s", physical_iface, e)
+
+        try:
+            sock.connect(sa)
+            latency_ms = max(1, round((time.monotonic() - t0) * 1000))
+            sock.close()
+            return True, latency_ms, None
+        except (socket.timeout, OSError) as e:
+            last_err = e
+            sock.close()
+
+    err_msg = f"TCP connect to {host}:{port} failed: {last_err}" if last_err else f"TCP connect to {host}:{port} failed"
+    return False, None, err_msg
 
 
 def _extract_server_host_port(node: dict[str, Any]) -> tuple[str, int] | None:
@@ -318,30 +389,52 @@ def _extract_server_host_port(node: dict[str, Any]) -> tuple[str, int] | None:
 def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
     """Test a single proxy node synchronously and record pure latency in DB.
 
-    Fast path: TCP RTT directly to node host:port (like Karing/Clash).
-    Fallback: HTTP/sing-box RTT when host:port cannot be extracted.
+    Transport RTT fast path:
+      - For TCP protocols: TCP handshake directly to host:port. If fails, try ICMP ping.
+      - For UDP protocols (TUIC, Hysteria 2): ICMP ping directly to host (fast 1-RTT ping).
+        If ICMP blocked, try TCP ping to node port (if dual-stack) or port 443.
+    Fallback:
+      - sing-box HTTP RTT if raw transport pings fail or host:port cannot be extracted.
     """
     nid = node["id"]
+    protocol = (node.get("protocol") or "").lower()
+    raw_uri = (node.get("raw_uri") or "").strip()
+    is_udp_protocol = protocol in _UDP_PROTOCOLS or any(
+        raw_uri.lower().startswith(p) for p in ("hysteria2://", "tuic://", "hy2://", "hysteria://")
+    )
 
-    # --- Fast path: TCP RTT for all protocols with extractable host:port ---
+    from backend.system_proxy_detector import get_physical_default_interface
+    physical_iface = get_physical_default_interface()
+
     addr = _extract_server_host_port(node)
     if addr:
         host, port = addr
-        ok, lat, err = _tcp_ping_rtt(host, port)
+        ok, lat, err = False, None, None
+
+        if is_udp_protocol:
+            # 1. ICMP ping directly to host (matches Karing/Clash UDP latency)
+            ok, lat, err = _icmp_ping_rtt(host, iface=physical_iface)
+            # 2. If ICMP is blocked, try TCP ping on node port or 443
+            if not ok:
+                ok, lat, err = _tcp_ping_rtt(host, port)
+            if not ok and port != 443:
+                ok, lat, err = _tcp_ping_rtt(host, 443)
+        else:
+            # 1. TCP ping directly to host:port
+            ok, lat, err = _tcp_ping_rtt(host, port)
+            # 2. If TCP ping fails (e.g. firewall SYN drop), try ICMP ping
+            if not ok:
+                ok, lat, err = _icmp_ping_rtt(host, iface=physical_iface)
+
         if ok and lat is not None:
             update_proxy_node_latency(nid, lat)
             return BatchTestResult(node_id=nid, latency_ms=lat, ok=True)
-        else:
-            update_proxy_node_latency(nid, -1)
-            return BatchTestResult(node_id=nid, latency_ms=-1, ok=False, error=err or "Connection failed")
 
-    # --- Fallback: HTTP RTT or sing-box if host:port not extractable ---
-    protocol = (node.get("protocol") or "").lower()
-    raw_uri = node.get("raw_uri") or ""
+    # Fallback / UDP path: HTTP RTT or sing-box
     parsed_config = node.get("parsed_config")
 
     try:
-        if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
+        if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls") or is_udp_protocol:
             from backend.singbox_runner import fast_singbox_proxy
 
             if parsed_config:
@@ -366,6 +459,7 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
     else:
         update_proxy_node_latency(nid, -1)
         return BatchTestResult(node_id=nid, latency_ms=-1, ok=False, error=err or "Connection failed")
+
 
 
 async def test_batch_nodes(node_ids: list[str]) -> list[BatchTestResult]:

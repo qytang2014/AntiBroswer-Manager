@@ -172,3 +172,69 @@ def get_system_proxy_status(force: bool = False) -> SystemProxyStatus:
 
     _STATUS_CACHE = (now, result)
     return result
+
+
+_PHYSICAL_IFACE_CACHE: tuple[float, str | None] | None = None
+_PHYSICAL_IFACE_TTL = 5.0
+
+
+def get_physical_default_interface(force: bool = False) -> str | None:
+    """Return the primary physical network interface (e.g. 'en0', 'eth0').
+
+    Filters out virtual TUN/VPN devices (utun*, tun*, tap*, ppp*, lo*)
+    to enable sockets or child processes to bypass VPN/proxy capture
+    and connect directly to destinations through the physical local network.
+    """
+    global _PHYSICAL_IFACE_CACHE
+    now = time.monotonic()
+    if not force and _PHYSICAL_IFACE_CACHE is not None:
+        cached_time, cached_val = _PHYSICAL_IFACE_CACHE
+        if now - cached_time < _PHYSICAL_IFACE_TTL:
+            return cached_val
+
+    iface: str | None = None
+    system = platform.system()
+    if system == "Darwin":
+        try:
+            import ipaddress
+
+            out = subprocess.check_output(
+                ["netstat", "-rn", "-f", "inet"],
+                timeout=2.0,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and parts[0] == "default":
+                    gw, dev = parts[1], parts[3]
+                    if not any(dev.startswith(p) for p in ("utun", "tun", "tap", "ppp", "lo")):
+                        try:
+                            ipaddress.IPv4Address(gw)
+                            iface = dev
+                            break
+                        except ValueError:
+                            continue
+        except Exception as exc:
+            logger.debug("Failed detecting physical interface via netstat: %s", exc)
+    elif system == "Linux":
+        try:
+            out = subprocess.check_output(
+                ["ip", "route", "show", "default"],
+                timeout=2.0,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            parts = out.split()
+            if "dev" in parts:
+                idx = parts.index("dev")
+                if idx + 1 < len(parts):
+                    dev = parts[idx + 1]
+                    if not any(dev.startswith(p) for p in ("tun", "tap", "ppp", "lo")):
+                        iface = dev
+        except Exception as exc:
+            logger.debug("Failed detecting physical interface on Linux: %s", exc)
+
+    _PHYSICAL_IFACE_CACHE = (now, iface)
+    return iface
+

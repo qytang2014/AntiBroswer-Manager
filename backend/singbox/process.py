@@ -268,6 +268,19 @@ def start_singbox(binary: Path, config: dict) -> SingboxProcess:
         },
     ]
 
+    # Bind outbound connections to physical network interface (bypassing Karing/VPN TUN)
+    try:
+        from backend.system_proxy_detector import get_physical_default_interface
+
+        physical_iface = get_physical_default_interface()
+        if physical_iface:
+            config_with_inbounds.setdefault("route", {})["default_interface"] = physical_iface
+            for ob in config_with_inbounds.get("outbounds", []):
+                if isinstance(ob, dict) and ob.get("type") != "direct":
+                    ob["bind_interface"] = physical_iface
+    except Exception as exc:
+        logger.debug("Failed injecting physical interface into sing-box config: %s", exc)
+
     config_file = _write_temp_config(config_with_inbounds)
 
     cmd = [str(binary), "run", "-c", str(config_file)]
