@@ -86,6 +86,8 @@ class ProfileUpdate(BaseModel):
     memory_gb: int | None = Field(default=None)
     gpu_vendor: str | None = Field(default=None)
     gpu_renderer: str | None = Field(default=None)
+    webgl_vendor: str | None = Field(default=None)
+    webgl_renderer: str | None = Field(default=None)
     canvas_noise: bool | None = None
     audio_noise: bool | None = None
     do_not_track: bool | None = None

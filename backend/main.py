@@ -1008,6 +1008,10 @@ async def get_profile(profile_id: str):
 async def update_profile(profile_id: str, req: ProfileUpdate):
     # Only pass fields that were explicitly set
     data = req.model_dump(exclude_unset=True)
+    if "gpu_vendor" in data and "webgl_vendor" not in data:
+        data["webgl_vendor"] = data.pop("gpu_vendor")
+    if "gpu_renderer" in data and "webgl_renderer" not in data:
+        data["webgl_renderer"] = data.pop("gpu_renderer")
     tags = data.pop("tags", None)
     if tags is not None:
         data["tags"] = [t.model_dump() if hasattr(t, "model_dump") else t for t in tags]

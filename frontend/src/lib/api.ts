@@ -302,6 +302,16 @@ async function request<T>(
     }
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     const detail = body.detail;
+    // FastAPI validation errors return an array of error objects
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((d: any) => {
+          const loc = Array.isArray(d.loc) ? d.loc.filter((p: any) => p !== "body").join(".") : "";
+          return loc ? `${loc}: ${d.msg}` : (d.msg || JSON.stringify(d));
+        })
+        .join("; ");
+      throw new ApiError(res.status, messages || res.statusText);
+    }
     // FastAPI detail is usually a string, but license/seat denials return an
     // object {message, reason, upgrade_url} so the UI can show a CTA.
     if (detail && typeof detail === "object") {
