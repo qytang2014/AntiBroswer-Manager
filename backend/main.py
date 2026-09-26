@@ -1283,12 +1283,13 @@ async def get_profile_status(profile_id: str):
 
 @app.get("/api/health")
 async def health_check():
-    """Unauthenticated liveness probe for the Docker healthcheck.
-
-    Intentionally returns no system details; see /api/status (auth-gated)
-    for running counts and versions.
-    """
-    return {"status": "ok"}
+    """Unauthenticated liveness probe for the Docker healthcheck and manager discovery."""
+    return {
+        "status": "healthy",
+        "app": "antibrowser-manager",
+        "version": diagnostics.app_version(),
+        "pid": os.getpid(),
+    }
 
 
 def _windows_font_health() -> tuple[int | None, int | None, bool | None]:
@@ -1310,8 +1311,7 @@ def _windows_font_health() -> tuple[int | None, int | None, bool | None]:
         return None, None, None
 
 
-@app.get("/api/status", response_model=StatusResponse)
-async def get_system_status():
+async def _build_system_status(request: Request | None = None) -> StatusResponse:
     # Prefer the version/tier resolved at startup (reflects the actual Pro build
     # in use). Fall back to the keyless constant before startup resolution runs.
     binary_version = browser_mgr.binary_version
@@ -1329,6 +1329,33 @@ async def get_system_status():
     fonts_present, fonts_required, fonts_complete = await asyncio.to_thread(
         _windows_font_health
     )
+
+    server_port = getattr(app.state, "server_port", None)
+    if server_port is None and request is not None:
+        try:
+            req_port = request.url.port
+            if req_port and req_port not in (80, 443):
+                server_port = req_port
+        except Exception:
+            pass
+
+    server_host = getattr(app.state, "server_host", None)
+    if not server_host:
+        if request is not None:
+            try:
+                server_host = request.url.hostname or "127.0.0.1"
+            except Exception:
+                server_host = "127.0.0.1"
+        else:
+            server_host = "127.0.0.1"
+
+    server_url = getattr(app.state, "server_url", None)
+    if not server_url:
+        if server_port:
+            server_url = f"http://{server_host}:{server_port}"
+        else:
+            server_url = f"http://{server_host}"
+
     return StatusResponse(
         running_count=len(browser_mgr.running),
         binary_version=binary_version,
@@ -1341,7 +1368,16 @@ async def get_system_status():
         windows_fonts_present=fonts_present,
         windows_fonts_required=fonts_required,
         windows_fonts_complete=fonts_complete,
+        app_version=diagnostics.app_version(),
+        server_port=server_port,
+        server_host=server_host,
+        server_url=server_url,
     )
+
+
+@app.get("/api/status", response_model=StatusResponse)
+async def get_system_status(request: Request):
+    return await _build_system_status(request)
 
 
 # ── Update check ─────────────────────────────────────────────────────────────
@@ -1555,7 +1591,7 @@ async def update_settings(payload: SettingsUpdate):
 
     save_settings(stored)
     await asyncio.to_thread(browser_mgr.resolve_binary_status)
-    return await get_system_status()
+    return await _build_system_status()
 
 
 # ── Clipboard Relay ──────────────────────────────────────────────────────────

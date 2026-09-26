@@ -414,6 +414,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
             onSelect={handleSelect}
             onNew={handleNew}
             onReorder={reorder}
+            systemStatus={systemStatus}
           />
         </div>
       )}

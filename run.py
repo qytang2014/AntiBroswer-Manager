@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import venv
@@ -17,7 +16,6 @@ VENV_DIR = ROOT / ".venv"
 LEGACY_SETUP_MARKER = VENV_DIR / ".manager-setup.json"
 FRONTEND_MARKER = VENV_DIR / ".manager-frontend.json"
 FRONTEND_DIR = ROOT / "frontend"
-SERVER_URL = "http://127.0.0.1:8080"
 
 
 def _venv_python() -> Path:
@@ -140,16 +138,6 @@ def _ensure_environment() -> Path:
     return python
 
 
-def _ensure_server_port_available() -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-        try:
-            server_socket.bind(("127.0.0.1", 8080))
-        except OSError as exc:
-            raise RuntimeError(
-                "Port 8080 is already in use; stop the existing Manager or service"
-            ) from exc
-
-
 def main() -> int:
     try:
         python = _ensure_environment()
@@ -157,14 +145,8 @@ def main() -> int:
         print(f"[error] {exc}", file=sys.stderr, flush=True)
         return 1
 
-    try:
-        _ensure_server_port_available()
-    except RuntimeError as exc:
-        print(f"[error] {exc}", file=sys.stderr, flush=True)
-        return 1
-
     env = {**os.environ, "CLOAKBROWSER_MANAGER_RUNTIME": "native"}
-    print(f"[start] AntiBrowser-Manager: {SERVER_URL}", flush=True)
+    print("[start] Starting AntiBrowser-Manager...", flush=True)
     # Replace this bootstrap process with app_entry.py under the venv python.
     # os.execve hands off entirely — no lingering parent, no wrapper-of-wrapper —
     # so a dev run becomes the exact same in-process server + native webview

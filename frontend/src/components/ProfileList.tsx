@@ -1,4 +1,4 @@
-import { Plus, Search, Monitor } from "lucide-react";
+import { Plus, Search, Monitor, Copy, Check, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import {
   DndContext,
@@ -15,7 +15,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { Profile } from "../lib/api";
+import { api, type Profile, type SystemStatus } from "../lib/api";
 import { StatusIndicator } from "./StatusIndicator";
 
 interface ProfileListProps {
@@ -24,6 +24,7 @@ interface ProfileListProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   onReorder: (orderedIds: string[]) => void;
+  systemStatus?: SystemStatus | null;
 }
 
 interface RowProps {
@@ -33,9 +34,62 @@ interface RowProps {
   onSelect: (id: string) => void;
 }
 
+export function getProxyProtocol(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const obj = JSON.parse(trimmed);
+      const outbounds = obj.outbounds || [];
+      if (Array.isArray(outbounds) && outbounds.length > 0) {
+        const type = outbounds[0]?.type;
+        if (type) return type.toUpperCase();
+      }
+    } catch {
+      // ignore
+    }
+    return "JSON";
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("vless://")) return "VLESS";
+  if (lower.startsWith("vmess://")) return "VMESS";
+  if (lower.startsWith("trojan://")) return "Trojan";
+  if (lower.startsWith("hysteria2://") || lower.startsWith("hy2://")) return "Hysteria2";
+  if (lower.startsWith("tuic://")) return "TUIC";
+  if (lower.startsWith("ss://") || lower.startsWith("shadowsocks://")) return "SS";
+  if (lower.startsWith("wireguard://") || lower.startsWith("wg://")) return "WireGuard";
+  if (lower.startsWith("anytls://")) return "AnyTLS";
+  if (lower.startsWith("ssh://")) return "SSH";
+  if (lower.startsWith("socks5://") || lower.startsWith("socks5h://")) return "SOCKS5";
+  if (lower.startsWith("socks4://") || lower.startsWith("socks4a://")) return "SOCKS4";
+  if (lower.startsWith("https://")) return "HTTPS";
+  if (lower.startsWith("http://")) return "HTTP";
+
+  if (/^([^:@]+:[^:@]+@)?[\w.-]+:\d+$/.test(trimmed)) {
+    return "HTTP";
+  }
+
+  return "Proxy";
+}
+
+export function formatKernelVersion(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const clean = trimmed.replace(/^v+/i, "");
+  const major = clean.split(".")[0];
+  return major ? `v${major}` : null;
+}
+
 function SortableProfileRow({ profile, selected, draggable, onSelect }: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: profile.id, disabled: !draggable });
+
+  const proxyProtocol = getProxyProtocol(profile.proxy);
+  const kernelVersion = formatKernelVersion(profile.browser_version);
 
   return (
     <button
@@ -56,17 +110,26 @@ function SortableProfileRow({ profile, selected, draggable, onSelect }: RowProps
         <StatusIndicator status={profile.status} />
         <span className="text-sm font-medium truncate">{profile.name}</span>
       </div>
-      <div className="flex items-center gap-2 mt-1 ml-4 flex-wrap">
-        {profile.proxy && <span className="text-xs text-gray-500">Proxy</span>}
-        {profile.browser_version && (
-          <span
-            className="text-[10px] px-1.5 py-0.2 rounded bg-surface-2 text-indigo-300 font-mono border border-border"
-            title={`内核版本: ${profile.browser_version}`}
-          >
-            v{profile.browser_version.split(".")[0]}
-          </span>
-        )}
-      </div>
+      {(proxyProtocol || kernelVersion) && (
+        <div className="flex items-center gap-1.5 mt-1 ml-4 flex-wrap">
+          {proxyProtocol && (
+            <span
+              className="text-[10px] px-1.5 py-0.2 rounded bg-surface-2 text-cyan-300 font-mono border border-border uppercase font-semibold"
+              title={`代理协议: ${proxyProtocol}`}
+            >
+              {proxyProtocol}
+            </span>
+          )}
+          {kernelVersion && (
+            <span
+              className="text-[10px] px-1.5 py-0.2 rounded bg-surface-2 text-indigo-300 font-mono border border-border"
+              title={`内核版本: ${profile.browser_version}`}
+            >
+              {kernelVersion}
+            </span>
+          )}
+        </div>
+      )}
       {profile.tags.length > 0 && (
         <div className="flex gap-1 mt-1.5 ml-4 flex-wrap">
           {profile.tags.map((t) => (
@@ -84,14 +147,64 @@ function SortableProfileRow({ profile, selected, draggable, onSelect }: RowProps
   );
 }
 
-export function ProfileList({ profiles, selectedId, onSelect, onNew, onReorder }: ProfileListProps) {
+export function ProfileList({
+  profiles,
+  selectedId,
+  onSelect,
+  onNew,
+  onReorder,
+  systemStatus,
+}: ProfileListProps) {
   const [search, setSearch] = useState("");
+  const [copied, setCopied] = useState(false);
 
   const filtered = profiles.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()),
   );
 
   const runningCount = profiles.filter((p) => p.status === "running").length;
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCopyAccessUrl = () => {
+    const host = systemStatus?.server_host || "127.0.0.1";
+    const port = systemStatus?.server_port ?? 52341;
+    const url = systemStatus?.server_url || `http://${host}:${port}`;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {
+        fallbackCopy(url);
+      });
+    } else {
+      fallbackCopy(url);
+    }
+  };
+
+  const handleOpenAccessUrl = () => {
+    const host = systemStatus?.server_host || "127.0.0.1";
+    const port = systemStatus?.server_port ?? 52341;
+    const url = systemStatus?.server_url || `http://${host}:${port}`;
+    api.openExternal(url).catch(() => {
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+  };
 
   // Reordering is disabled while a search filter is active — dragging within a
   // filtered subset is ambiguous. Empty search means filtered === profiles order.
@@ -111,6 +224,9 @@ export function ProfileList({ profiles, selectedId, onSelect, onNew, onReorder }
     if (from === -1 || to === -1) return;
     onReorder(arrayMove(ids, from, to));
   };
+
+  const serverHost = systemStatus?.server_host || "127.0.0.1";
+  const serverPort = systemStatus?.server_port ?? 52341;
 
   return (
     <div className="flex flex-col h-full">
@@ -160,12 +276,44 @@ export function ProfileList({ profiles, selectedId, onSelect, onNew, onReorder }
         </DndContext>
       </div>
 
-      {/* New profile button */}
-      <div className="p-3 border-t border-border">
+      {/* Footer: New profile button & address badge */}
+      <div className="p-3 border-t border-border space-y-2">
         <button onClick={onNew} className="btn-secondary w-full flex items-center justify-center gap-1.5">
           <Plus className="h-3.5 w-3.5" />
           <span>New Profile</span>
         </button>
+
+        <div className="pt-1 flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 w-full">
+            <button
+              type="button"
+              onClick={handleOpenAccessUrl}
+              className="flex-1 flex items-center gap-1.5 px-2.5 py-1.5 bg-surface-2 hover:bg-surface-3 rounded border border-border text-[11px] text-gray-300 hover:text-white transition-colors group cursor-pointer min-w-0"
+              title="在浏览器中打开 / Open in browser"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="truncate font-mono">
+                {serverHost}:{serverPort}
+              </span>
+              <ExternalLink className="h-3 w-3 ml-auto opacity-60 group-hover:opacity-100 transition-opacity shrink-0" />
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyAccessUrl}
+              className="p-1.5 bg-surface-2 hover:bg-surface-3 rounded border border-border text-gray-400 hover:text-gray-200 transition-colors shrink-0 cursor-pointer"
+              title={copied ? "已复制" : "复制访问地址 / Copy address"}
+            >
+              {copied ? (
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+          <div className="text-[10px] text-gray-500 text-center font-mono select-none">
+            v{systemStatus?.app_version || "0.1.0"}
+          </div>
+        </div>
       </div>
     </div>
   );

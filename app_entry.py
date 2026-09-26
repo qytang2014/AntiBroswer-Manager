@@ -4,7 +4,7 @@ This is the PyInstaller target. Unlike run.py (the dev-from-source launcher,
 which shells out to `uvicorn backend.main:app`), a frozen bundle cannot resolve
 the "backend.main:app" import string, so uvicorn is run in-process here.
 
-Serves on 127.0.0.1:8080. The UI is shown in one of two shells, chosen by the
+Serves on 127.0.0.1:52341. The UI is shown in one of two shells, chosen by the
 CLOAKBROWSER_MANAGER_UI env var:
   - "webview" — a dedicated native app window (WKWebView on macOS, WebView2 on
     Windows) via pywebview. No browser chrome, its own Dock/taskbar entry.
@@ -18,25 +18,24 @@ in the data dir (see backend/main.py logging setup).
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import threading
 import time
 import urllib.request
-import webbrowser
 
-SERVER_URL = "http://127.0.0.1:8080"
+DEFAULT_PORT = 52341
 HOST = "127.0.0.1"
-PORT = 8080
 WINDOW_TITLE = "AntiBrowser-Manager"
 
 
-def _port_available(retries: int = 3, retry_delay: float = 0.4) -> bool:
+def _is_port_bindable(port: int, host: str = HOST, retries: int = 1, retry_delay: float = 0.2) -> bool:
     for i in range(retries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.bind((HOST, PORT))
+                sock.bind((host, port))
                 return True
             except OSError:
                 if i < retries - 1:
@@ -44,20 +43,57 @@ def _port_available(retries: int = 3, retry_delay: float = 0.4) -> bool:
     return False
 
 
-def _is_manager_running() -> bool:
-    """Check if an active AntiBrowser-Manager instance is responding on PORT."""
+def _get_dynamic_free_port(host: str = HOST) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
+def _probe_manager_health(port: int, host: str = HOST) -> dict | None:
     try:
+        url = f"http://{host}:{port}/api/health"
         req = urllib.request.Request(
-            f"{SERVER_URL}/api/health",
+            url,
             headers={"User-Agent": "AntiBrowser-Manager-Probe"},
         )
         with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict) and data.get("app") == "antibrowser-manager":
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+def _shutdown_remote_instance(port: int, host: str = HOST) -> bool:
+    try:
+        url = f"http://{host}:{port}/api/shutdown"
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={
+                "User-Agent": "AntiBrowser-Manager-Updater",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             return resp.status == 200
-    except OSError:
+    except Exception:
         return False
 
 
-def _wait_until_ready(timeout: float = 180.0) -> bool:
+def _wait_for_port_release(port: int, host: str = HOST, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _is_port_bindable(port, host):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _wait_until_ready(server_url: str, timeout: float = 180.0) -> bool:
     """Poll /api/health until the server answers or the timeout elapses.
 
     First launch may download the stealth Chromium binary (140MB), which
@@ -66,16 +102,99 @@ def _wait_until_ready(timeout: float = 180.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"{SERVER_URL}/api/health", timeout=0.5):
+            with urllib.request.urlopen(f"{server_url}/api/health", timeout=0.5):
                 return True
         except OSError:
             time.sleep(0.2)
     return False
 
 
-def _open_browser_when_ready() -> None:
-    if _wait_until_ready():
-        webbrowser.open(SERVER_URL)
+def _save_server_info(port: int, host: str, url: str) -> None:
+    try:
+        from backend.runtime import resolve_runtime
+
+        path = resolve_runtime().data_dir / "server_info.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"port": port, "host": host, "url": url, "pid": os.getpid()},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _resolve_server_port() -> tuple[int, bool]:
+    """Determine the server port to listen on.
+
+    Returns:
+        (port, should_run)
+        - If should_run is False, an existing instance of the same version is running
+          and was focused; caller should exit cleanly with 0.
+        - If should_run is True, port is allocated and ready to bind.
+    """
+    env_port = os.environ.get("PORT")
+    preferred_port = int(env_port) if env_port and env_port.isdigit() else DEFAULT_PORT
+
+    if _is_port_bindable(preferred_port, HOST):
+        return preferred_port, True
+
+    # preferred_port is occupied; probe for existing AntiBrowser-Manager
+    probe_data = _probe_manager_health(preferred_port, HOST)
+    if probe_data is not None:
+        from backend.diagnostics import app_version
+
+        running_version = str(probe_data.get("version") or "")
+        my_version = str(app_version() or "")
+
+        if running_version == my_version and running_version != "unknown":
+            # Same version: activate window and exit without opening browser
+            _focus_existing_window()
+            import sys
+
+            if sys.platform == "darwin":
+                try:
+                    import subprocess
+
+                    subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            'display notification "AntiBrowser-Manager 已在运行中，请查看 Dock 或已打开的窗口。" with title "AntiBrowser-Manager"',
+                        ],
+                        capture_output=True,
+                        timeout=2,
+                    )
+                except Exception:
+                    pass
+            print(
+                f"[info] AntiBrowser-Manager (v{running_version}) is already running on port {preferred_port}."
+            )
+            return preferred_port, False
+
+        # Older or different version: request shutdown to let new version take over
+        print(
+            f"[upgrade] Existing instance (v{running_version}) detected on port {preferred_port}. Shutting down to upgrade to v{my_version}..."
+        )
+        _shutdown_remote_instance(preferred_port, HOST)
+        if _wait_for_port_release(preferred_port, HOST, timeout=5.0):
+            print(f"[upgrade] Port {preferred_port} released. Starting updated version...")
+            return preferred_port, True
+
+        # If port not released in 5s, allocate OS dynamic port
+        print(
+            f"[upgrade] Port {preferred_port} not freed in time. Allocating dynamic port..."
+        )
+        return _get_dynamic_free_port(HOST), True
+
+    # Occupied by third-party application: allocate OS dynamic port immediately
+    dynamic_port = _get_dynamic_free_port(HOST)
+    print(
+        f"[info] Port {preferred_port} is in use by another application. Dynamically allocated port {dynamic_port}."
+    )
+    return dynamic_port, True
 
 
 def _window_state_path():
@@ -237,7 +356,7 @@ def _focus_existing_window() -> bool:
     return False
 
 
-def _run_webview(server) -> int:
+def _run_webview(server, server_url: str) -> int:
     """Run the server in a background thread and the native window on main.
 
     macOS/Cocoa requires the webview event loop to own the main thread, so the
@@ -264,10 +383,9 @@ def _run_webview(server) -> int:
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    if not _wait_until_ready():
-        # Server never came up — log the failure. If in browser mode, surface in browser.
-        if _ui_mode() != "webview":
-            webbrowser.open(SERVER_URL)
+    if not _wait_until_ready(server_url):
+        # Server never came up — log the failure. Never open browser automatically.
+        print(f"[error] Server failed to start at {server_url}", file=sys.stderr, flush=True)
         server.should_exit = True
         server_thread.join(timeout=10)
         return 1
@@ -281,7 +399,7 @@ def _run_webview(server) -> int:
     if "x" in geometry and "y" in geometry:
         window_kwargs["x"] = geometry["x"]
         window_kwargs["y"] = geometry["y"]
-    window = webview.create_window(WINDOW_TITLE, SERVER_URL, **window_kwargs)
+    window = webview.create_window(WINDOW_TITLE, server_url, **window_kwargs)
 
     # Track live geometry so we can restore the window next launch. Saved once
     # on close (below) rather than on every resize/move tick.
@@ -346,50 +464,19 @@ def main() -> int:
     _harden_std_streams()
     os.environ.setdefault("CLOAKBROWSER_MANAGER_RUNTIME", "native")
 
-    if not _port_available():
-        # Port 8080 is not bindable. Check if another Manager instance is running.
-        if _is_manager_running():
-            focused = _focus_existing_window()
-            if not focused:
-                import sys
-                if sys.platform == "darwin":
-                    try:
-                        import subprocess
-                        subprocess.run(
-                            [
-                                "osascript",
-                                "-e",
-                                'display notification "AntiBrowser-Manager 已在运行中，请查看 Dock 或已打开的窗口。" with title "AntiBrowser-Manager"',
-                            ],
-                            capture_output=True,
-                            timeout=2,
-                        )
-                    except Exception:
-                        pass
-                if _ui_mode() != "webview":
-                    webbrowser.open(SERVER_URL)
-            return 0
-        else:
-            # Port is held by another application
-            import sys
-            if sys.platform == "darwin":
-                try:
-                    import subprocess
-                    subprocess.run(
-                        [
-                            "osascript",
-                            "-e",
-                            f'display alert "端口已被占用" message "端口 {PORT} 已被其他程序占用，AntiBrowser-Manager 无法启动。请先释放端口 {PORT}。" as critical',
-                        ],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
-            return 1
+    port, should_run = _resolve_server_port()
+    if not should_run:
+        return 0
+
+    server_url = f"http://{HOST}:{port}"
+    _save_server_info(port, HOST, server_url)
 
     import uvicorn
     from backend.main import app
+
+    app.state.server_port = port
+    app.state.server_host = HOST
+    app.state.server_url = server_url
 
     # log_config=None lets uvicorn's own loggers propagate to the root handlers
     # configured in backend/main.py (console + rotating file), instead of
@@ -398,14 +485,14 @@ def main() -> int:
     # Build the Server explicitly (instead of uvicorn.run) and stash it on
     # app.state so the /api/shutdown endpoint can flip should_exit for a clean
     # cross-platform quit from the UI.
-    config = uvicorn.Config(app, host=HOST, port=PORT, log_config=None)
+    config = uvicorn.Config(app, host=HOST, port=port, log_config=None)
     server = uvicorn.Server(config)
     app.state.uvicorn_server = server
 
     if _ui_mode() == "webview":
-        return _run_webview(server)
+        return _run_webview(server, server_url)
 
-    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
+    print(f"AntiBrowser-Manager started at {server_url}", flush=True)
     server.run()
     return 0
 

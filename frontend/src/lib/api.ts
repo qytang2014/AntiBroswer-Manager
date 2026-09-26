@@ -196,6 +196,10 @@ export interface SystemStatus {
   windows_fonts_present: number | null;
   windows_fonts_required: number | null;
   windows_fonts_complete: boolean | null;
+  app_version?: string;
+  server_port?: number | null;
+  server_host?: string | null;
+  server_url?: string | null;
 }
 
 export interface KernelItem {

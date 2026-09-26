@@ -206,6 +206,10 @@ class StatusResponse(BaseModel):
     windows_fonts_present: int | None = None
     windows_fonts_required: int | None = None
     windows_fonts_complete: bool | None = None
+    app_version: str = "0.1.0"
+    server_port: int | None = None
+    server_host: str | None = None
+    server_url: str | None = None
 
 
 class UpdateCheckResponse(BaseModel):
