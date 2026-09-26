@@ -7,6 +7,7 @@ import base64
 import datetime
 import json
 import logging
+import socket
 import time
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -218,7 +219,7 @@ async def run_subscription_scheduler() -> None:
 
 _SPEED_TEST_URLS = [
     "http://cp.cloudflare.com/generate_204",
-    "http://connectivitycheck.gstatic.com/generate_204",
+    "http://www.gstatic.com/generate_204",
 ]
 _NODE_TEST_TIMEOUT = 2.5  # 2.5 seconds max per test endpoint (fast fail like Clash/Karing)
 
@@ -248,9 +249,93 @@ def _measure_proxy_rtt(proxy_url: str, timeout: float = _NODE_TEST_TIMEOUT) -> t
     return False, None, last_err or "Connection timed out"
 
 
+_TCP_PING_TIMEOUT = 3.0  # seconds
+
+
+def _tcp_ping_rtt(host: str, port: int, timeout: float = _TCP_PING_TIMEOUT) -> tuple[bool, int | None, str | None]:
+    """Measure TCP handshake RTT to host:port without HTTP overhead or sing-box startup.
+
+    Returns (ok, latency_ms, error).
+    This matches how Karing/Clash measure proxy node latency: raw TCP reachability.
+    """
+    try:
+        t0 = time.monotonic()
+        with socket.create_connection((host, port), timeout=timeout):
+            pass  # Connection established = 3-way handshake complete
+        latency_ms = max(1, round((time.monotonic() - t0) * 1000))
+        return True, latency_ms, None
+    except socket.timeout:
+        return False, None, f"TCP connect to {host}:{port} timed out ({timeout}s)"
+    except OSError as e:
+        return False, None, f"TCP connect to {host}:{port} failed: {e}"
+
+
+def _extract_server_host_port(node: dict[str, Any]) -> tuple[str, int] | None:
+    """Extract (host, port) from a proxy node for TCP ping.
+
+    Supports:
+    - parsed_config JSON: {"server": "...", "server_port": ...}
+    - raw_uri: parsed via urlparse for http/socks5/vless/trojan etc.
+    - vmess base64 JSON in raw_uri
+    """
+    # 1. Try parsed_config (sing-box outbound JSON)
+    parsed_config = node.get("parsed_config")
+    if parsed_config:
+        try:
+            cfg = json.loads(parsed_config) if isinstance(parsed_config, str) else parsed_config
+            host = cfg.get("server") or cfg.get("host")
+            port = cfg.get("server_port") or cfg.get("port")
+            if host and port:
+                return str(host), int(port)
+        except Exception:
+            pass
+
+    # 2. Try raw_uri
+    raw_uri = (node.get("raw_uri") or "").strip()
+    if raw_uri:
+        if raw_uri.startswith("vmess://"):
+            try:
+                raw_b64 = raw_uri[len("vmess://") :]
+                padded = raw_b64 + "=" * ((4 - len(raw_b64) % 4) % 4)
+                data = json.loads(base64.b64decode(padded).decode("utf-8", errors="ignore"))
+                host = data.get("add") or data.get("host")
+                port = data.get("port")
+                if host and port:
+                    return str(host), int(port)
+            except Exception:
+                pass
+
+        try:
+            p = urlparse(raw_uri)
+            if p.hostname and p.port:
+                return p.hostname, p.port
+        except Exception:
+            pass
+
+    return None
+
+
 def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
-    """Test a single proxy node synchronously and record pure latency in DB."""
+    """Test a single proxy node synchronously and record pure latency in DB.
+
+    Fast path: TCP RTT directly to node host:port (like Karing/Clash).
+    Fallback: HTTP/sing-box RTT when host:port cannot be extracted.
+    """
     nid = node["id"]
+
+    # --- Fast path: TCP RTT for all protocols with extractable host:port ---
+    addr = _extract_server_host_port(node)
+    if addr:
+        host, port = addr
+        ok, lat, err = _tcp_ping_rtt(host, port)
+        if ok and lat is not None:
+            update_proxy_node_latency(nid, lat)
+            return BatchTestResult(node_id=nid, latency_ms=lat, ok=True)
+        else:
+            update_proxy_node_latency(nid, -1)
+            return BatchTestResult(node_id=nid, latency_ms=-1, ok=False, error=err or "Connection failed")
+
+    # --- Fallback: HTTP RTT or sing-box if host:port not extractable ---
     protocol = (node.get("protocol") or "").lower()
     raw_uri = node.get("raw_uri") or ""
     parsed_config = node.get("parsed_config")
@@ -261,7 +346,7 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
 
             if parsed_config:
                 try:
-                    cfg = json.loads(parsed_config)
+                    cfg = json.loads(parsed_config) if isinstance(parsed_config, str) else parsed_config
                     proxy_payload = {"type": "singbox", "config": {"outbounds": [cfg]}}
                 except Exception:
                     proxy_payload = {"type": "singbox", "config": raw_uri}

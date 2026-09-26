@@ -6,6 +6,8 @@ import {
   ProxyNode,
   ApiError,
 } from "../lib/api";
+import { SystemProxyWarningBanner } from "./SystemProxyWarningBanner";
+import { useSystemProxyStatus } from "../hooks/useSystemProxyStatus";
 
 interface ProxyManagerModalProps {
   isOpen: boolean;
@@ -26,6 +28,12 @@ export function ProxyManagerModal({
   const [testingBatch, setTestingBatch] = useState(false);
   const [testingNodeId, setTestingNodeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const {
+    status: systemProxyStatus,
+    loading: systemProxyLoading,
+    refresh: refreshSystemProxyStatus,
+  } = useSystemProxyStatus(isOpen);
 
   // Sub-modal states
   const [showNewSubModal, setShowNewSubModal] = useState(false);
@@ -335,6 +343,17 @@ export function ProxyManagerModal({
             >
               <X className="h-3.5 w-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* System proxy warning banner */}
+        {systemProxyStatus?.active && (
+          <div className="px-6 pt-2">
+            <SystemProxyWarningBanner
+              status={systemProxyStatus}
+              onRefresh={refreshSystemProxyStatus}
+              loading={systemProxyLoading}
+            />
           </div>
         )}
 

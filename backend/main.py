@@ -82,6 +82,7 @@ from .models import (
     ProxyNodeResponse,
     ProxyTestRequest,
     ProxyTestResponse,
+    SystemProxyStatusResponse,
     ReorderRequest,
     SettingsResponse,
     SettingsUpdate,
@@ -659,9 +660,17 @@ async def list_profiles():
 async def test_proxy_endpoint(req: ProxyTestRequest):
     """Connect through a proxy and report exit IP + geo + latency."""
     try:
-        return await test_proxy(req.proxy, req.proxy_type)
+        return await test_proxy(req.proxy, req.proxy_type, force=req.force)
     except ValueError as exc:  # bad proxy format from _validate_proxy
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/system/proxy-status", response_model=SystemProxyStatusResponse)
+async def get_system_proxy_status_endpoint(force: bool = False):
+    """Return current OS-level proxy/VPN status for UI warning display."""
+    from backend.system_proxy_detector import get_system_proxy_status
+
+    return await asyncio.to_thread(get_system_proxy_status, force=force)
 
 
 # ---------------------------------------------------------------------------

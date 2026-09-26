@@ -260,6 +260,7 @@ class ProxyTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     proxy: str | None = None
     proxy_type: str | None = None
+    force: bool = False
 
 
 class ProxyTestResponse(BaseModel):
@@ -272,6 +273,13 @@ class ProxyTestResponse(BaseModel):
     latency_ms: int | None = None
     error: str | None = None
     cached: bool = False
+
+
+class SystemProxyStatusResponse(BaseModel):
+    active: bool
+    tun_mode: bool = False
+    http_proxy: str | None = None
+    detected_app: str | None = None
 
 
 class LoginRequest(BaseModel):

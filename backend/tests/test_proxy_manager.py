@@ -135,8 +135,9 @@ def test_proxy_nodes_api_and_testing(app_client, tmp_db):
     manual_nodes = resp.json()
     assert len(manual_nodes) == 2
 
-    # 3. Test single node (mock subscription_service._measure_proxy_rtt)
-    with patch("backend.subscription_service._measure_proxy_rtt", return_value=(True, 150, None)):
+    # 3. Test single node (mock TCP ping RTT / HTTP RTT)
+    with patch("backend.subscription_service._tcp_ping_rtt", return_value=(True, 150, None)), \
+         patch("backend.subscription_service._measure_proxy_rtt", return_value=(True, 150, None)):
         resp = app_client.post(f"/api/proxies/nodes/{node1_id}/test")
         assert resp.status_code == 200
         result = resp.json()

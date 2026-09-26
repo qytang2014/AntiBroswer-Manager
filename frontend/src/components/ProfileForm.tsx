@@ -18,6 +18,8 @@ import {
 } from "../lib/geoData";
 import { ProxyManagerModal } from "./ProxyManagerModal";
 import { CustomSelect, CustomSelectOption, BadgeVariant } from "./common/CustomSelect";
+import { SystemProxyWarningBanner } from "./SystemProxyWarningBanner";
+import { useSystemProxyStatus } from "../hooks/useSystemProxyStatus";
 
 function detectProxyType(raw: string | null | undefined): "standard" | "singbox_uri" | "singbox_sub" | "singbox_json" {
   if (!raw) return "standard";
@@ -300,6 +302,12 @@ export function ProfileForm({
   const [proxySearch, setProxySearch] = useState("");
   const [expandedSubIds, setExpandedSubIds] = useState<Set<string>>(new Set());
   const proxyDropdownRef = useRef<HTMLDivElement>(null);
+
+  const {
+    status: systemProxyStatus,
+    loading: systemProxyLoading,
+    refresh: refreshSystemProxyStatus,
+  } = useSystemProxyStatus();
 
   const [tzDropdownOpen, setTzDropdownOpen] = useState(false);
   const [tzSearch, setTzSearch] = useState("");
@@ -745,6 +753,9 @@ export function ProfileForm({
   const handleTestProxy = async () => {
     setTestingProxy(true);
     try {
+      if (!form.proxy) {
+        refreshSystemProxyStatus();
+      }
       const res = await api.testProxy(form.proxy, form.proxy ? proxyType : "direct");
       setProxyTest(res);
       if (!res.ok) {
@@ -1825,6 +1836,15 @@ export function ProfileForm({
                       (proxyTest.cached ? " (cached)" : "")
                     : proxyTest.error || "网络测速/连接失败"}
                 </p>
+              )}
+
+              {/* System Proxy / VPN Warning Banner when direct connection is active */}
+              {!form.proxy && (
+                <SystemProxyWarningBanner
+                  status={systemProxyStatus}
+                  onRefresh={refreshSystemProxyStatus}
+                  loading={systemProxyLoading}
+                />
               )}
             </div>
 

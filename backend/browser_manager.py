@@ -182,15 +182,19 @@ def _validate_proxy(proxy: Any) -> None:
         raise ValueError(f"Proxy URL missing port: {url}")
 
 
-async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str, Any]:
+async def test_proxy(raw_proxy: Any, proxy_type: str | None = None, force: bool = False) -> dict[str, Any]:
     """Connect through a proxy, return exit IP + geo + latency (or an error).
 
     Includes 30s LRU caching and concurrency locking to avoid resource exhaustion
-    from rapid repeated clicks.
+    from rapid repeated clicks. When force is True or testing direct connection,
+    cache is bypassed to ensure live network accuracy.
     """
+    is_direct = not raw_proxy or proxy_type == "direct" or raw_proxy == "direct"
+    use_cache = not force and not is_direct
+
     cache_key = f"{proxy_type}:{raw_proxy if isinstance(raw_proxy, str) else json.dumps(raw_proxy, sort_keys=True)}"
     now = time.monotonic()
-    if cache_key in _PROXY_TEST_CACHE:
+    if use_cache and cache_key in _PROXY_TEST_CACHE:
         cached_time, cached_result = _PROXY_TEST_CACHE[cache_key]
         if now - cached_time < _PROXY_CACHE_TTL:
             return {**cached_result, "cached": True}
@@ -198,12 +202,12 @@ async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str,
     lock = _PROXY_TEST_LOCKS.setdefault(cache_key, asyncio.Lock())
     async with lock:
         now = time.monotonic()
-        if cache_key in _PROXY_TEST_CACHE:
+        if use_cache and cache_key in _PROXY_TEST_CACHE:
             cached_time, cached_result = _PROXY_TEST_CACHE[cache_key]
             if now - cached_time < _PROXY_CACHE_TTL:
                 return {**cached_result, "cached": True}
 
-        if not raw_proxy or proxy_type == "direct" or raw_proxy == "direct":
+        if is_direct:
             proxy = None
         else:
             proxy = _normalize_proxy(raw_proxy, proxy_type)
@@ -216,7 +220,7 @@ async def test_proxy(raw_proxy: Any, proxy_type: str | None = None) -> dict[str,
 
 _FAST_SPEED_TEST_URLS = [
     "http://cp.cloudflare.com/generate_204",
-    "http://connectivitycheck.gstatic.com/generate_204",
+    "http://www.gstatic.com/generate_204",
 ]
 
 _FAST_IP_ECHO_URLS = [

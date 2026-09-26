@@ -127,6 +127,13 @@ export interface ProxyTestResult {
   cached?: boolean;
 }
 
+export interface SystemProxyStatus {
+  active: boolean;
+  tun_mode: boolean;
+  http_proxy: string | null;
+  detected_app: string | null;
+}
+
 export interface DownloadProgress {
   stage: "connecting" | "downloading" | "unpacking" | "completed" | "error";
   message: string;
@@ -339,11 +346,18 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  testProxy: (proxy?: string | null, proxy_type?: string | null) =>
+  testProxy: (proxy?: string | null, proxy_type?: string | null, force: boolean = true) =>
     request<ProxyTestResult>("/api/profiles/test-proxy", {
       method: "POST",
-      body: JSON.stringify({ proxy: proxy || null, proxy_type: proxy_type || (proxy ? undefined : "direct") }),
+      body: JSON.stringify({
+        proxy: proxy || null,
+        proxy_type: proxy_type || (proxy ? undefined : "direct"),
+        force,
+      }),
     }),
+
+  getSystemProxyStatus: (force: boolean = false) =>
+    request<SystemProxyStatus>(`/api/system/proxy-status${force ? "?force=true" : ""}`),
 
   updateProfile: (id: string, data: Partial<ProfileCreateData>) =>
     request<Profile>(`/api/profiles/${id}`, {
