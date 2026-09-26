@@ -554,6 +554,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
 
           {view === "create" && (
             <ProfileForm
+              key="create"
               profile={null}
               hostOs={systemStatus?.host_os ?? null}
               viewerMode={systemStatus?.viewer_mode ?? null}
@@ -568,6 +569,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
 
           {view === "edit" && selected && (
             <ProfileForm
+              key={selected.id}
               profile={selected}
               hostOs={systemStatus?.host_os ?? null}
               viewerMode={systemStatus?.viewer_mode ?? null}

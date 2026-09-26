@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Globe, Loader2, Network, Plus, Puzzle, RotateCcw, Save, Search, Sliders, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Clock, Copy, Cpu, Globe, HardDrive, Key, Languages, Loader2, Monitor, Network, Plus, Puzzle, RotateCcw, Save, Search, ShieldCheck, Sliders, Sparkles, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type {
@@ -11,7 +11,13 @@ import type {
   ProxyTestResult,
   ViewerMode,
 } from "../lib/api";
+import {
+  TIMEZONE_GROUPS,
+  LOCALE_OPTIONS,
+  getDefaultLocaleForTimezone,
+} from "../lib/geoData";
 import { ProxyManagerModal } from "./ProxyManagerModal";
+import { CustomSelect, CustomSelectOption, BadgeVariant } from "./common/CustomSelect";
 
 function detectProxyType(raw: string | null | undefined): "standard" | "singbox_uri" | "singbox_sub" | "singbox_json" {
   if (!raw) return "standard";
@@ -101,12 +107,88 @@ const FIREFOX_ARG_PRESETS = [
 
 const WEBGL_PRESETS: { label: string; vendor: string | null; renderer: string | null }[] = [
   { label: "自动跟随系统 / 种子推导 (Auto)", vendor: null, renderer: null },
+  // Apple Silicon 系列 (macOS 真实设备)
+  { label: "Apple Silicon (Apple M1)", vendor: "Apple", renderer: "Apple M1" },
   { label: "Apple Silicon (Apple M2)", vendor: "Apple", renderer: "Apple M2" },
   { label: "Apple Silicon (Apple M3)", vendor: "Apple", renderer: "Apple M3" },
-  { label: "Intel Iris Xe Graphics", vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Xe Graphics" },
-  { label: "NVIDIA GeForce RTX 4070", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 4070/PCIe/SSE2" },
-  { label: "NVIDIA GeForce RTX 3060", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2" },
+  { label: "Apple Silicon (Apple M3 Pro)", vendor: "Apple", renderer: "Apple M3 Pro" },
+  { label: "Apple Silicon (Apple M4)", vendor: "Apple", renderer: "Apple M4" },
+  // AMD Radeon 系列 (独显与核显)
+  { label: "AMD Radeon Graphics (核显)", vendor: "AMD", renderer: "AMD Radeon(TM) Graphics" },
+  { label: "AMD Radeon RX 580", vendor: "AMD", renderer: "Radeon RX 580 Series" },
   { label: "AMD Radeon RX 6700 XT", vendor: "AMD", renderer: "AMD Radeon RX 6700 XT" },
+  { label: "AMD Radeon RX 7800 XT", vendor: "AMD", renderer: "AMD Radeon RX 7800 XT" },
+  // Intel 系列 (核显/主流办公本与独显)
+  { label: "Intel Arc A770 Graphics", vendor: "Intel Inc.", renderer: "Intel(R) Arc(TM) A770 Graphics" },
+  { label: "Intel Iris Xe Graphics", vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Xe Graphics" },
+  { label: "Intel UHD Graphics 630", vendor: "Intel Inc.", renderer: "Intel(R) UHD Graphics 630" },
+  { label: "Intel UHD Graphics 770", vendor: "Intel Inc.", renderer: "Intel(R) UHD Graphics 770" },
+  // NVIDIA 系列 (桌面/游戏主流，全球市场份额极高)
+  { label: "NVIDIA GeForce GTX 1660 Ti", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce GTX 1660 Ti/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 2060", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 2060/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 3060", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 3080", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 3080/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 4060", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 4060/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 4070", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 4070/PCIe/SSE2" },
+  { label: "NVIDIA GeForce RTX 4090", vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 4090/PCIe/SSE2" },
+];
+
+const BROWSER_TYPE_OPTIONS: CustomSelectOption<string>[] = [
+  {
+    value: "cloakbrowser",
+    label: "CloakBrowser (基于 Chromium)",
+    sublabel: "多开防关联，支持扩展管理与指纹注入",
+    badge: "Chromium",
+    badgeVariant: "blue",
+    icon: <Globe className="h-4 w-4 text-blue-400" />,
+  },
+  {
+    value: "camoufox",
+    label: "Camoufox (基于 Firefox)",
+    sublabel: "内核级 C++ 反指纹伪装，极致防追踪",
+    badge: "Firefox",
+    badgeVariant: "amber",
+    icon: <ShieldCheck className="h-4 w-4 text-amber-400" />,
+  },
+];
+
+const CPU_OPTIONS: CustomSelectOption<number | null>[] = [
+  { value: null, label: "自动 (跟随指纹种子推导)", sublabel: "根据种子生成匹配硬件核心数", badge: "推荐", badgeVariant: "emerald" },
+  { value: 2, label: "2 核心 (2 Cores)", sublabel: "低配双核" },
+  { value: 4, label: "4 核心 (4 Cores)", sublabel: "主流办公四核" },
+  { value: 6, label: "6 核心 (6 Cores)", sublabel: "主流六核" },
+  { value: 8, label: "8 核心 (8 Cores)", sublabel: "主流八核", badge: "推荐", badgeVariant: "blue" },
+  { value: 12, label: "12 核心 (12 Cores)", sublabel: "高性能多核" },
+  { value: 16, label: "16 核心 (16 Cores)", sublabel: "工作站配置" },
+  { value: 24, label: "24 核心 (24 Cores)", sublabel: "高端工作站" },
+  { value: 32, label: "32 核心 (32 Cores)", sublabel: "服务器级多核" },
+];
+
+const MEMORY_OPTIONS: CustomSelectOption<number | null>[] = [
+  { value: null, label: "自动 (跟随指纹种子推导)", sublabel: "根据种子生成匹配内存容量", badge: "推荐", badgeVariant: "emerald" },
+  { value: 2, label: "2 GB", sublabel: "入门低配" },
+  { value: 4, label: "4 GB", sublabel: "轻量配置" },
+  { value: 8, label: "8 GB", sublabel: "最常见标准配置", badge: "推荐", badgeVariant: "blue" },
+  { value: 16, label: "16 GB", sublabel: "主流高性能" },
+  { value: 32, label: "32 GB", sublabel: "专业级开发配置" },
+  { value: 64, label: "64 GB", sublabel: "顶级大内存" },
+];
+
+const HUMAN_PRESET_OPTIONS: CustomSelectOption<string>[] = [
+  {
+    value: "default",
+    label: "Default (normal speed)",
+    sublabel: "自然模拟真人鼠标移动、滚动与输入节奏",
+    badge: "推荐",
+    badgeVariant: "emerald",
+  },
+  {
+    value: "careful",
+    label: "Careful (slower, deliberate)",
+    sublabel: "更慢速、谨慎的操作节奏，适合严格风控",
+    badge: "慢速",
+    badgeVariant: "amber",
+  },
 ];
 
 export function compareKernelVersions(a: string, b: string): number {
@@ -159,19 +241,22 @@ export function ProfileForm({
   const isEdit = profile !== null;
 
   const [form, setForm] = useState<ProfileCreateData>({
-    name: "",
+    name: profile?.name ?? "",
     browser_version: profile?.browser_version ?? null,
     browser_type: profile?.browser_type ?? "cloakbrowser",
-    screen_width: 1920,
-    screen_height: 1080,
-    gpu_family: "auto",
-    humanize: false,
-    human_preset: "default",
-    geoip: true,
-    clipboard_sync: true,
-    auto_launch: false,
-    allow_3p_cookies: true,
-    set_google_default: true,
+    proxy: profile?.proxy ?? null,
+    timezone: profile?.timezone ?? null,
+    locale: profile?.locale ?? null,
+    screen_width: profile?.screen_width ?? 1920,
+    screen_height: profile?.screen_height ?? 1080,
+    gpu_family: profile?.gpu_family ?? "auto",
+    humanize: profile?.humanize ?? false,
+    human_preset: profile?.human_preset ?? "default",
+    geoip: profile?.geoip ?? true,
+    clipboard_sync: profile?.clipboard_sync ?? true,
+    auto_launch: profile?.auto_launch ?? false,
+    allow_3p_cookies: profile?.allow_3p_cookies ?? true,
+    set_google_default: profile?.set_google_default ?? true,
     search_engine_name: "Google",
     search_engine_keyword: "google.com",
     search_engine_url: "https://www.google.com/search?q=%s",
@@ -216,6 +301,14 @@ export function ProfileForm({
   const [expandedSubIds, setExpandedSubIds] = useState<Set<string>>(new Set());
   const proxyDropdownRef = useRef<HTMLDivElement>(null);
 
+  const [tzDropdownOpen, setTzDropdownOpen] = useState(false);
+  const [tzSearch, setTzSearch] = useState("");
+  const tzDropdownRef = useRef<HTMLDivElement>(null);
+
+  const [localeDropdownOpen, setLocaleDropdownOpen] = useState(false);
+  const [localeSearch, setLocaleSearch] = useState("");
+  const localeDropdownRef = useRef<HTMLDivElement>(null);
+
   const toggleExpandGroup = (groupId: string) => {
     setExpandedSubIds((prev) => {
       const next = new Set(prev);
@@ -252,6 +345,12 @@ export function ProfileForm({
       }
       if (proxyDropdownRef.current && !proxyDropdownRef.current.contains(e.target as Node)) {
         setProxyDropdownOpen(false);
+      }
+      if (tzDropdownRef.current && !tzDropdownRef.current.contains(e.target as Node)) {
+        setTzDropdownOpen(false);
+      }
+      if (localeDropdownRef.current && !localeDropdownRef.current.contains(e.target as Node)) {
+        setLocaleDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -501,6 +600,15 @@ export function ProfileForm({
         setProxyType(detectProxyType(profile.proxy));
         setPreviewError(false);
         setPreviewBuster(Date.now());
+        setProxyTest(null);
+        setTzDropdownOpen(false);
+        setTzSearch("");
+        setLocaleDropdownOpen(false);
+        setLocaleSearch("");
+        setTagInput("");
+        setLaunchArgInput("");
+        setPrefKeyInput("");
+        setPrefValInput("");
       }
     } else {
       if (prevProfileIdRef.current !== null) {
@@ -541,9 +649,19 @@ export function ProfileForm({
         });
         setPreviewError(false);
         setPreviewBuster(Date.now());
+        setProxyTest(null);
+        setTzDropdownOpen(false);
+        setTzSearch("");
+        setLocaleDropdownOpen(false);
+        setLocaleSearch("");
+        setTagInput("");
+        setLaunchArgInput("");
+        setPrefKeyInput("");
+        setPrefValInput("");
       }
     }
   }, [profile?.id]);
+
 
   useEffect(() => {
     // If native mode forces host OS to mac/windows, reset any incompatible GPU selection
@@ -622,49 +740,38 @@ export function ProfileForm({
     toggleExtension(pathToRemove);
   };
 
-  const [matchingGeo, setMatchingGeo] = useState(false);
-  const [geoMatchMessage, setGeoMatchMessage] = useState<string | null>(null);
+  const [testingProxy, setTestingProxy] = useState(false);
 
-  const handleMatchProxyGeo = async () => {
-    setMatchingGeo(true);
-    setGeoMatchMessage(null);
+  const handleTestProxy = async () => {
+    setTestingProxy(true);
     try {
       const res = await api.testProxy(form.proxy, form.proxy ? proxyType : "direct");
       setProxyTest(res);
       if (!res.ok) {
-        alert(`无法获取网络 IP 信息: ${res.error || "连接失败"}`);
+        alert(`网络连接测试失败: ${res.error || "无法连接"}`);
         return;
       }
-      const newTz = res.timezone || null;
-      const newLoc = res.locale || null;
-
-      if (!newTz && !newLoc) {
-        alert(`已解析出口 IP (${res.ip})，但未在 IP 数据库中查询到对应的时区或语言信息。`);
-        return;
-      }
-
-      const hasExistingTz = Boolean(form.timezone && form.timezone.trim());
-      const hasExistingLoc = Boolean(form.locale && form.locale.trim());
-
-      if ((hasExistingTz && form.timezone !== newTz) || (hasExistingLoc && form.locale !== newLoc)) {
-        const confirmMsg =
-          `检测到已设置的时区/语言配置：\n` +
-          `· 时区: ${form.timezone || "未设置"} -> ${newTz || "未匹配"}\n` +
-          `· 语言: ${form.locale || "未设置"} -> ${newLoc || "未匹配"}\n\n` +
-          `是否确认按出口 IP (${res.ip}) 覆盖现有设置？`;
-        if (!window.confirm(confirmMsg)) {
-          return;
+      // If user is in manual mode, offer optional quick sync
+      if (!form.geoip) {
+        const newTz = res.timezone || null;
+        const newLoc = res.locale || null;
+        if (newTz || newLoc) {
+          const confirmMsg =
+            `检测到当前网络出口 (${res.ip}) 的地理信息：\n` +
+            `· 时区: ${newTz || "未匹配"}\n` +
+            `· 语言: ${newLoc || "未匹配"}\n\n` +
+            `您当前处于【手动模式】，是否将下拉框快速填充为该出口的时区与语言？`;
+          if (window.confirm(confirmMsg)) {
+            if (newTz) set("timezone", newTz);
+            if (newLoc) set("locale", newLoc);
+          }
         }
       }
-
-      if (newTz) set("timezone", newTz);
-      if (newLoc) set("locale", newLoc);
-      setGeoMatchMessage(`已按出口 IP (${res.ip}) 匹配设置: 时区 ${newTz || "-"} / 语言 ${newLoc || "-"}`);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "匹配地理信息失败";
-      alert(`匹配失败: ${message}`);
+      const message = err instanceof ApiError ? err.message : "测试代理连接失败";
+      alert(`测试失败: ${message}`);
     } finally {
-      setMatchingGeo(false);
+      setTestingProxy(false);
     }
   };
 
@@ -675,8 +782,20 @@ export function ProfileForm({
     try {
       const curType = form.browser_type || "cloakbrowser";
       const finalExtra = { ...(form.extra_launch_args ?? {}), [curType]: form.launch_args ?? [] };
+
+      const derivedGpuFamily = (vendor: string | null | undefined): "auto" | "nvidia" | "intel" => {
+        if (!vendor) return form.gpu_family ?? "auto";
+        const lower = vendor.toLowerCase();
+        if (lower.includes("nvidia")) return "nvidia";
+        if (lower.includes("intel")) return "intel";
+        return "auto";
+      };
+
       await onSave({
         ...form,
+        gpu_family: derivedGpuFamily(form.webgl_vendor),
+        timezone: form.geoip ? null : (form.timezone || null),
+        locale: form.geoip ? null : (form.locale || null),
         extra_launch_args: finalExtra,
       });
       setSaved(true);
@@ -782,6 +901,110 @@ export function ProfileForm({
     !currentTypeInstalledKernels.some((k) => k.version === form.browser_version)
   );
 
+  const browserVersionOptions = useMemo<CustomSelectOption<string | null>[]>(() => {
+    if (!kernelsLoaded && !form.browser_version) {
+      return [{ value: null, label: "正在检测已安装内核...", disabled: true }];
+    }
+    if (!kernelsLoaded && form.browser_version && !currentTypeInstalledKernels.some((k) => k.version === form.browser_version)) {
+      return [{ value: form.browser_version, label: `v${form.browser_version}`, sublabel: "正在加载内核...", badge: "Loading", badgeVariant: "gray" }];
+    }
+    if (kernelsLoaded && currentTypeInstalledKernels.length === 0) {
+      return [{ value: null, label: "未检测到已安装内核 (请先下载)", disabled: true, badge: "未安装", badgeVariant: "amber" }];
+    }
+
+    const list: CustomSelectOption<string | null>[] = [];
+    if (isSelectedKernelMissing && form.browser_version) {
+      list.push({
+        value: form.browser_version,
+        label: `⚠️ v${form.browser_version}`,
+        sublabel: "本地已删除或类型不匹配 - 启动将自动回退",
+        badge: "缺失回退",
+        badgeVariant: "rose",
+      });
+    }
+    currentTypeInstalledKernels.forEach((k) => {
+      list.push({
+        value: k.version,
+        label: `${k.name} (v${k.version})`,
+        sublabel: k.is_active ? "当前运行内核" : k.description || undefined,
+        badge: k.tier === "pro" ? "Pro 授权" : "官方内核",
+        badgeVariant: k.tier === "pro" ? "purple" : "blue",
+      });
+    });
+    return list;
+  }, [kernelsLoaded, form.browser_version, currentTypeInstalledKernels, isSelectedKernelMissing]);
+
+  const licenseOptions = useMemo<CustomSelectOption<string | null>[]>(() => [
+    {
+      value: null,
+      label: "Keyless (无授权) / 免费内核模式",
+      sublabel: "无需授权码，使用基础功能",
+      badge: "免费版",
+      badgeVariant: "gray",
+      icon: <Key className="h-4 w-4 text-gray-400" />,
+    },
+    ...licenses.map((l) => ({
+      value: l.id,
+      label: l.name,
+      sublabel: l.is_default ? "系统默认全局授权" : undefined,
+      badge: l.is_default ? "默认授权" : "已绑定",
+      badgeVariant: (l.is_default ? "emerald" : "blue") as BadgeVariant,
+      icon: <Key className="h-4 w-4 text-emerald-400" />,
+    })),
+  ], [licenses]);
+
+  const resolutionOptions = useMemo<CustomSelectOption<string>[]>(() => [
+    ...Object.entries(RESOLUTION_PRESETS).map(([name, res]) => ({
+      value: name,
+      label: name,
+      sublabel: `${res.width} × ${res.height}`,
+      badge: name.includes("Full HD") ? "最常用" : "常用预设",
+      badgeVariant: (name.includes("Full HD") ? "blue" : "gray") as BadgeVariant,
+      icon: <Monitor className="h-4 w-4 text-indigo-400" />,
+    })),
+    {
+      value: "custom",
+      label: "自定义分辨率 (Custom)",
+      sublabel: "手动指定宽和高",
+      badge: "自定义",
+      badgeVariant: "amber",
+      icon: <Monitor className="h-4 w-4 text-amber-400" />,
+    },
+  ], []);
+
+  const currentWebglPresetLabel = useMemo(() => {
+    return WEBGL_PRESETS.find(
+      (p) => p.vendor === (form.webgl_vendor ?? null) && p.renderer === (form.webgl_renderer ?? null)
+    )?.label ?? "custom";
+  }, [form.webgl_vendor, form.webgl_renderer]);
+
+  const webglPresetOptions = useMemo<CustomSelectOption<string>[]>(() => [
+    ...WEBGL_PRESETS.map((p) => {
+      let badgeVariant: BadgeVariant = "gray";
+      if (p.label.includes("NVIDIA")) badgeVariant = "emerald";
+      else if (p.label.includes("Apple")) badgeVariant = "purple";
+      else if (p.label.includes("Intel")) badgeVariant = "blue";
+      else if (p.label.includes("AMD")) badgeVariant = "rose";
+
+      return {
+        value: p.label,
+        label: p.label,
+        sublabel: p.renderer ? p.renderer : "由指纹种子自动推导并保持系统一致",
+        badge: p.vendor ? p.vendor.replace("Google Inc. (", "").replace(")", "") : "Auto",
+        badgeVariant,
+        icon: <Cpu className="h-4 w-4 text-purple-400" />,
+      };
+    }),
+    {
+      value: "custom",
+      label: "自定义输入 (Custom)",
+      sublabel: "手动输入 Vendor 与 Renderer 字符串",
+      badge: "自定义",
+      badgeVariant: "amber",
+      icon: <Cpu className="h-4 w-4 text-amber-400" />,
+    },
+  ], []);
+
   const isOldKernel = Boolean(
     form.browser_version &&
     ["144.", "145.", "146.", "147."].some((prefix) => form.browser_version?.startsWith(prefix))
@@ -790,6 +1013,64 @@ export function ProfileForm({
   const hasInlineProxyAuthArg = (form.launch_args ?? []).some(
     (arg) => arg.startsWith("--proxy-server=") && arg.includes("@")
   );
+
+  const selectedTzInfo = useMemo(() => {
+    if (!form.timezone) return null;
+    for (const group of TIMEZONE_GROUPS) {
+      const match = group.options.find((opt) => opt.value === form.timezone);
+      if (match) return match;
+    }
+    return { value: form.timezone, label: "自定义时区", offset: "" };
+  }, [form.timezone]);
+
+  const selectedLocaleInfo = useMemo(() => {
+    if (!form.locale) return null;
+    const match = LOCALE_OPTIONS.find((loc) => loc.value === form.locale);
+    if (match) return match;
+    return { value: form.locale, label: "自定义语言", nativeName: "" };
+  }, [form.locale]);
+
+  const filteredTimezoneGroups = useMemo(() => {
+    const q = tzSearch.trim().toLowerCase();
+    if (!q) return TIMEZONE_GROUPS;
+    return TIMEZONE_GROUPS.map((group) => {
+      const isGroupMatch = group.region.toLowerCase().includes(q);
+      const filteredOptions = group.options.filter(
+        (opt) =>
+          isGroupMatch ||
+          opt.value.toLowerCase().includes(q) ||
+          opt.label.toLowerCase().includes(q) ||
+          opt.offset.toLowerCase().includes(q)
+      );
+      return { ...group, options: filteredOptions };
+    }).filter((group) => group.options.length > 0);
+  }, [tzSearch]);
+
+  const isExactTzMatch = useMemo(() => {
+    const q = tzSearch.trim().toLowerCase();
+    if (!q) return true;
+    for (const group of TIMEZONE_GROUPS) {
+      if (group.options.some((o) => o.value.toLowerCase() === q)) return true;
+    }
+    return false;
+  }, [tzSearch]);
+
+  const filteredLocales = useMemo(() => {
+    const q = localeSearch.trim().toLowerCase();
+    if (!q) return LOCALE_OPTIONS;
+    return LOCALE_OPTIONS.filter(
+      (loc) =>
+        loc.value.toLowerCase().includes(q) ||
+        loc.label.toLowerCase().includes(q) ||
+        (loc.nativeName && loc.nativeName.toLowerCase().includes(q))
+    );
+  }, [localeSearch]);
+
+  const isExactLocaleMatch = useMemo(() => {
+    const q = localeSearch.trim().toLowerCase();
+    if (!q) return true;
+    return LOCALE_OPTIONS.some((l) => l.value.toLowerCase() === q);
+  }, [localeSearch]);
 
   const addLaunchArg = (customArg?: string) => {
     const raw = (customArg || launchArgInput).trim();
@@ -984,18 +1265,13 @@ export function ProfileForm({
             {form.browser_type === "cloakbrowser" && (
               <div className="col-span-2">
                 <label className="label">绑定 License 授权 (License Binding)</label>
-                <select
-                  className="input"
-                  value={form.license_id ?? ""}
-                  onChange={(e) => set("license_id", e.target.value ? e.target.value : null)}
-                >
-                  <option value="">Keyless (无授权) / 免费内核模式</option>
-                  {licenses.map(l => (
-                    <option key={l.id} value={l.id}>
-                      {l.name} {l.is_default ? "(默认)" : ""}
-                    </option>
-                  ))}
-                </select>
+                <CustomSelect
+                  id="license_id"
+                  value={form.license_id ?? null}
+                  options={licenseOptions}
+                  onChange={(val) => set("license_id", val)}
+                  placeholder="Keyless (无授权) / 免费内核模式"
+                />
                 <p className="text-[11px] text-gray-500 mt-1.5">
                   可选择列表管理中的 License。如果没有选择，则回退到无 License (Keyless) 的免费内核模式。
                 </p>
@@ -1062,58 +1338,35 @@ export function ProfileForm({
                   </button>
                 )}
               </div>
-              <div className="flex items-center justify-between mt-4">
+              <div className="flex items-center justify-between mt-4 mb-1">
                 <label htmlFor="browser_type" className="text-sm font-medium text-slate-300">
                   内核类型 (Browser Type)
                 </label>
               </div>
-              <select
+              <CustomSelect
                 id="browser_type"
-                className="input"
                 value={form.browser_type ?? "cloakbrowser"}
-                onChange={(e) => handleBrowserTypeChange(e.target.value)}
-              >
-                <option value="cloakbrowser">CloakBrowser (基于 Chromium)</option>
-                <option value="camoufox">Camoufox (基于 Firefox)</option>
-              </select>
+                options={BROWSER_TYPE_OPTIONS}
+                onChange={(val) => handleBrowserTypeChange(val || "cloakbrowser")}
+              />
 
-              <div className="flex items-center justify-between mt-4">
+              <div className="flex items-center justify-between mt-4 mb-1">
                 <label htmlFor="browser_version" className="text-sm font-medium text-slate-300">
                   内核版本 (Browser Version)
                 </label>
               </div>
-              <select
+              <CustomSelect
                 id="browser_version"
-                className={`input ${kernelsLoaded && currentTypeInstalledKernels.length === 0 ? "border-amber-500/50 bg-amber-950/10 text-amber-300" : ""}`}
-                value={form.browser_version ?? ""}
-                onChange={(e) => set("browser_version", e.target.value ? e.target.value : null)}
-              >
-                {!kernelsLoaded && form.browser_version && !currentTypeInstalledKernels.some((k) => k.version === form.browser_version) && (
-                  <option value={form.browser_version}>
-                    v{form.browser_version} (正在加载内核...)
-                  </option>
-                )}
-                {!kernelsLoaded && !form.browser_version && (
-                  <option value="" disabled>
-                    正在检测已安装内核...
-                  </option>
-                )}
-                {kernelsLoaded && currentTypeInstalledKernels.length === 0 && (
-                  <option value="" disabled>
-                    未检测到已安装内核 (请先下载)
-                  </option>
-                )}
-                {isSelectedKernelMissing && (
-                  <option value={form.browser_version!} disabled>
-                    ⚠️ v{form.browser_version} (本地已删除或类型不匹配 - 启动将自动回退)
-                  </option>
-                )}
-                {currentTypeInstalledKernels.map((k) => (
-                  <option key={k.version} value={k.version}>
-                    {k.name} (v{k.version}){k.tier === "pro" ? " - Pro 授权" : ""}
-                  </option>
-                ))}
-              </select>
+                value={form.browser_version ?? null}
+                options={browserVersionOptions}
+                onChange={(val) => set("browser_version", val)}
+                placeholder="-- 选择或检测内核版本 --"
+                triggerClassName={
+                  kernelsLoaded && currentTypeInstalledKernels.length === 0
+                    ? "border-amber-500/50 bg-amber-950/10 text-amber-300"
+                    : ""
+                }
+              />
 
               {kernelsLoaded && currentTypeInstalledKernels.length === 0 && (
                 <div className="mt-2 p-2.5 rounded-lg bg-amber-950/40 border border-amber-600/50 flex items-center justify-between gap-2 text-xs text-amber-300">
@@ -1291,7 +1544,6 @@ export function ProfileForm({
                           onClick={() => {
                             set("proxy", null);
                             setProxyTest(null);
-                            setGeoMatchMessage(null);
                             setProxyDropdownOpen(false);
                           }}
                           className={`p-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition ${
@@ -1380,7 +1632,6 @@ export function ProfileForm({
                                           set("proxy", n.raw_uri);
                                           setProxyType(detectProxyType(n.raw_uri));
                                           setProxyTest(null);
-                                          setGeoMatchMessage(null);
                                           setProxyDropdownOpen(false);
                                         }}
                                         className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
@@ -1461,7 +1712,6 @@ export function ProfileForm({
                                           set("proxy", n.raw_uri);
                                           setProxyType(detectProxyType(n.raw_uri));
                                           setProxyTest(null);
-                                          setGeoMatchMessage(null);
                                           setProxyDropdownOpen(false);
                                         }}
                                         className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
@@ -1507,19 +1757,20 @@ export function ProfileForm({
                   )}
                 </div>
 
-                {/* Match Proxy Geo button (also tests connection and latency) */}
+                {/* Test Proxy / Network Connection button */}
                 <button
                   type="button"
-                  className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-indigo-300 hover:text-indigo-200 shrink-0 h-[38px] px-3"
-                  onClick={handleMatchProxyGeo}
-                  disabled={matchingGeo}
-                  title={
-                    form.proxy
-                      ? "根据当前代理节点的出口 IP 自动测试并匹配填入 Timezone 与 Locale"
-                      : "测试本机真实直连出口 IP 并自动匹配填入 Timezone 与 Locale (强制跳过系统代理)"
-                  }
+                  className="btn-secondary text-xs whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-gray-300 hover:text-white shrink-0 h-[38px] px-3"
+                  onClick={handleTestProxy}
+                  disabled={testingProxy}
+                  title="测试当前代理节点（或本机直连）的网络连通性、出口 IP、地理位置与延迟"
                 >
-                  {matchingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "⚡ 按 IP 匹配设置"}
+                  {testingProxy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                  ) : (
+                    <HardDrive className="h-3.5 w-3.5 text-accent" />
+                  )}
+                  <span>测试连接</span>
                 </button>
               </div>
 
@@ -1553,7 +1804,6 @@ export function ProfileForm({
                       onChange={(e) => {
                         set("proxy", e.target.value || null);
                         setProxyTest(null);
-                        setGeoMatchMessage(null);
                       }}
                       placeholder="http://user:pass@host:port"
                     />
@@ -1576,118 +1826,710 @@ export function ProfileForm({
                     : proxyTest.error || "网络测速/连接失败"}
                 </p>
               )}
+            </div>
 
-              {/* Geo matching notification */}
-              {geoMatchMessage && (
-                <p className="text-xs mt-1 text-indigo-400 flex items-center gap-1">
-                  <span>✓</span>
-                  <span>{geoMatchMessage}</span>
-                </p>
+            {/* GeoIP & Timezone/Locale Card */}
+            <div className="p-3.5 bg-surface-1/40 border border-border rounded-lg space-y-3">
+              {/* Main Switch / Checkbox */}
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex items-start gap-2.5 text-xs text-gray-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.geoip ?? true}
+                    onChange={(e) => set("geoip", e.target.checked)}
+                    className="rounded border-border bg-surface-2 text-accent focus:ring-accent mt-0.5"
+                  />
+                  <div>
+                    <span className="font-semibold text-gray-100 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                      基于网络出口 IP 自动匹配时区与语言 (GeoIP · 推荐)
+                    </span>
+                    <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">
+                      启动浏览器时根据实际网络出口 IP 动态设置，彻底杜绝 IP 与时区矛盾。无论是使用代理还是直连，切换节点时时区自动保持一致。
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Status Banner when Auto-detect is enabled */}
+              {form.geoip ? (
+                <div className="p-2.5 rounded border border-purple-500/20 bg-purple-500/5 text-xs flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-purple-300">
+                    <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shrink-0" />
+                    <span>
+                      {proxyTest?.ok && (proxyTest.timezone || proxyTest.locale) ? (
+                        <span>
+                          实时探测出口：
+                          <strong className="text-white font-medium">
+                            {[proxyTest.city, proxyTest.country].filter(Boolean).join(", ")}
+                          </strong>
+                          {" → "}
+                          匹配 IANA 标准时区：
+                          <strong className="text-purple-200 font-mono">
+                            {proxyTest.timezone || "未解析"}
+                          </strong>
+                          {proxyTest.locale ? (
+                            <span className="text-purple-300 font-mono"> ({proxyTest.locale})</span>
+                          ) : null}
+                          {" · 启动时将自动生效"}
+                        </span>
+                      ) : (
+                        "自动探测已激活 · 启动浏览器时将根据实时出口 IP 自动注入时区与语言"
+                      )}
+                    </span>
+                  </div>
+                  {proxyTest?.country && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-200 shrink-0">
+                      出口节点: {[proxyTest.city, proxyTest.country].filter(Boolean).join(", ")}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="p-2.5 rounded border border-amber-500/20 bg-amber-500/5 text-[11px] text-amber-300 flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                  <span>
+                    手动固定模式已启用：请务必确保选定的时区/语言与实际网络出口匹配，避免产生时区与 IP 不一致的指纹特征。
+                  </span>
+                </div>
               )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Timezone</label>
-                <input
-                  className="input"
-                  value={form.timezone ?? ""}
-                  onChange={(e) => set("timezone", e.target.value || null)}
-                  placeholder="America/New_York"
-                />
+
+              {/* Timezone and Locale Selectors */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Timezone Selector */}
+                <div className="relative" ref={tzDropdownRef}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="label mb-0 text-xs">
+                      时区 (Timezone)
+                      {form.geoip && (
+                        <span className="text-[10px] text-gray-500 ml-1.5 font-normal">
+                          (由出口 IP 自动接管)
+                        </span>
+                      )}
+                    </label>
+                    {!form.geoip && (
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {form.timezone || "未选择"}
+                      </span>
+                    )}
+                  </div>
+
+                  {form.geoip ? (
+                    <div>
+                      <div className="w-full input flex items-center justify-between py-2 text-left bg-surface-2/40 opacity-60 cursor-not-allowed">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Clock className="h-4 w-4 text-purple-400/60 shrink-0" />
+                          <span className="text-xs text-gray-200 truncate font-mono">
+                            {proxyTest?.ok && proxyTest.timezone
+                              ? proxyTest.timezone
+                              : "自动跟随网络出口 (Auto GeoIP)"}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-purple-300 font-medium bg-purple-950/60 border border-purple-800/50 rounded px-1.5 py-0.5 shrink-0 ml-2">
+                          自动接管
+                        </span>
+                      </div>
+                      {proxyTest?.ok && proxyTest.timezone && proxyTest.city && (
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          💡 注：{proxyTest.city} 位于该区域，遵循全球 IANA 标准归属于 {proxyTest.timezone} 时区
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <button
+                        type="button"
+                        aria-label="Timezone selector"
+                        onClick={() => {
+                          setLocaleDropdownOpen(false);
+                          setProxyDropdownOpen(false);
+                          setTzDropdownOpen(!tzDropdownOpen);
+                        }}
+                        className="w-full input flex items-center justify-between py-2 text-left cursor-pointer hover:border-gray-600 transition"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Clock className="h-4 w-4 text-purple-400 shrink-0" />
+                          <div className="min-w-0 flex-1 truncate text-xs text-gray-200">
+                            {form.timezone ? (
+                              <span className="font-mono">
+                                {selectedTzInfo?.value}
+                                {selectedTzInfo?.label && selectedTzInfo.label !== "自定义时区" ? (
+                                  <span className="text-gray-400 font-sans ml-1.5">({selectedTzInfo.label})</span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">-- 请选择标准时区 (支持搜索) --</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                          {selectedTzInfo?.offset && (
+                            <span className="text-gray-300 font-mono text-[10px] bg-gray-800/90 border border-gray-700 rounded px-1.5 py-0.5">
+                              {selectedTzInfo.offset}
+                            </span>
+                          )}
+                          {tzDropdownOpen ? (
+                            <ChevronUp className="h-4 w-4 text-gray-400 shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Timezone Dropdown Popup */}
+                      {tzDropdownOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-2 max-h-80 flex flex-col">
+                          {/* Search Input */}
+                          <div className="relative pb-2 border-b border-gray-800">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+                            <input
+                              type="text"
+                              placeholder="搜索时区名称、代表城市或区域..."
+                              value={tzSearch}
+                              onChange={(e) => setTzSearch(e.target.value)}
+                              className="input w-full pl-8 py-1.5 text-xs"
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                            />
+                          </div>
+
+                          {/* Options list */}
+                          <div className="flex-1 overflow-y-auto py-1 space-y-1">
+                            {/* Empty / default option */}
+                            <div
+                              onClick={() => {
+                                set("timezone", null);
+                                setTzDropdownOpen(false);
+                                setTzSearch("");
+                              }}
+                              className={`p-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition ${
+                                !form.timezone
+                                  ? "bg-purple-950/70 border border-purple-800/60 text-white"
+                                  : "hover:bg-gray-800 text-gray-300"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Clock className="h-4 w-4 text-gray-400 shrink-0" />
+                                <span className="text-xs">-- 留空 / 默认未设置 (Default) --</span>
+                              </div>
+                              {!form.timezone && <Check className="h-3.5 w-3.5 text-purple-400 shrink-0" />}
+                            </div>
+
+                            {/* Grouped Timezone Options */}
+                            {filteredTimezoneGroups.map((group) => (
+                              <div key={group.region} className="pt-1.5">
+                                <div className="px-2 py-1 text-[11px] font-semibold text-gray-400 flex items-center justify-between">
+                                  <span>{group.region}</span>
+                                  <span className="text-[10px] text-gray-500 font-normal">{group.options.length} 个时区</span>
+                                </div>
+                                <div className="space-y-0.5">
+                                  {group.options.map((opt) => {
+                                    const isSelected = form.timezone === opt.value;
+                                    return (
+                                      <div
+                                        key={opt.value}
+                                        onClick={() => {
+                                          set("timezone", opt.value);
+                                          const recLocale = getDefaultLocaleForTimezone(opt.value);
+                                          if (recLocale) {
+                                            set("locale", recLocale);
+                                          }
+                                          setTzDropdownOpen(false);
+                                          setTzSearch("");
+                                        }}
+                                        className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                          isSelected
+                                            ? "bg-purple-950/70 border border-purple-800/60 text-white"
+                                            : "hover:bg-gray-800 text-gray-300"
+                                        }`}
+                                      >
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-xs font-mono font-medium flex items-center gap-1.5">
+                                            <span>{opt.value}</span>
+                                          </div>
+                                          <div className="text-[11px] text-gray-400 truncate">
+                                            {opt.label}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                          <span className="text-[10px] text-gray-400 font-mono bg-gray-800 px-1.5 py-0.5 rounded">
+                                            {opt.offset}
+                                          </span>
+                                          {isSelected && (
+                                            <Check className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* Custom timezone fallback */}
+                            {!isExactTzMatch && tzSearch.trim().length > 0 && (
+                              <div
+                                onClick={() => {
+                                  const customTz = tzSearch.trim();
+                                  set("timezone", customTz);
+                                  const recLocale = getDefaultLocaleForTimezone(customTz);
+                                  if (recLocale) set("locale", recLocale);
+                                  setTzDropdownOpen(false);
+                                  setTzSearch("");
+                                }}
+                                className="p-2 mt-1 rounded cursor-pointer border border-dashed border-purple-500/40 hover:bg-purple-950/40 text-purple-300 text-xs flex items-center justify-between transition"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <Plus className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                  <span className="truncate">使用自定义时区：<strong className="font-mono text-white">{tzSearch.trim()}</strong></span>
+                                </div>
+                                <span className="text-[10px] text-purple-300 bg-purple-900/40 px-1.5 py-0.5 rounded shrink-0">点击应用</span>
+                              </div>
+                            )}
+
+                            {filteredTimezoneGroups.length === 0 && isExactTzMatch && (
+                              <div className="p-3 text-center text-xs text-gray-500">
+                                未找到匹配的时区
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Locale Selector */}
+                <div className="relative" ref={localeDropdownRef}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="label mb-0 text-xs">
+                      语言 (Locale)
+                      {form.geoip && (
+                        <span className="text-[10px] text-gray-500 ml-1.5 font-normal">
+                          (由出口 IP 自动接管)
+                        </span>
+                      )}
+                    </label>
+                    {!form.geoip && (
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {form.locale || "未选择"}
+                      </span>
+                    )}
+                  </div>
+
+                  {form.geoip ? (
+                    <div>
+                      <div className="w-full input flex items-center justify-between py-2 text-left bg-surface-2/40 opacity-60 cursor-not-allowed">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Languages className="h-4 w-4 text-blue-400/60 shrink-0" />
+                          <span className="text-xs text-gray-200 truncate font-mono">
+                            {proxyTest?.ok && proxyTest.locale
+                              ? proxyTest.locale
+                              : "自动跟随网络出口 (Auto GeoIP)"}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-blue-300 font-medium bg-blue-950/60 border border-blue-800/50 rounded px-1.5 py-0.5 shrink-0 ml-2">
+                          自动接管
+                        </span>
+                      </div>
+                      {proxyTest?.ok && proxyTest.locale && proxyTest.country && (
+                        <p className="text-[10px] text-gray-400 mt-1">
+                          💡 注：根据网络出口国家/地区 ({proxyTest.country}) 匹配首选标准语言 {proxyTest.locale}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <button
+                        type="button"
+                        aria-label="Locale selector"
+                        onClick={() => {
+                          setTzDropdownOpen(false);
+                          setProxyDropdownOpen(false);
+                          setLocaleDropdownOpen(!localeDropdownOpen);
+                        }}
+                        className="w-full input flex items-center justify-between py-2 text-left cursor-pointer hover:border-gray-600 transition"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Languages className="h-4 w-4 text-blue-400 shrink-0" />
+                          <div className="min-w-0 flex-1 truncate text-xs text-gray-200">
+                            {form.locale ? (
+                              <span className="font-mono">
+                                {selectedLocaleInfo?.value}
+                                {selectedLocaleInfo?.label && selectedLocaleInfo.label !== "自定义语言" ? (
+                                  <span className="text-gray-400 font-sans ml-1.5">({selectedLocaleInfo.label})</span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">-- 请选择标准语言 (支持搜索) --</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                          {selectedLocaleInfo?.nativeName && (
+                            <span className="text-gray-300 text-[10px] bg-gray-800/90 border border-gray-700 rounded px-1.5 py-0.5">
+                              {selectedLocaleInfo.nativeName}
+                            </span>
+                          )}
+                          {localeDropdownOpen ? (
+                            <ChevronUp className="h-4 w-4 text-gray-400 shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Locale Dropdown Popup */}
+                      {localeDropdownOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-2 max-h-80 flex flex-col">
+                          {/* Search Input */}
+                          <div className="relative pb-2 border-b border-gray-800">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+                            <input
+                              type="text"
+                              placeholder="搜索语言代码、名称或母语 (如 zh-CN, English, 日本語)..."
+                              value={localeSearch}
+                              onChange={(e) => setLocaleSearch(e.target.value)}
+                              className="input w-full pl-8 py-1.5 text-xs"
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                            />
+                          </div>
+
+                          {/* Options list */}
+                          <div className="flex-1 overflow-y-auto py-1 space-y-1">
+                            {/* Empty / default option */}
+                            <div
+                              onClick={() => {
+                                set("locale", null);
+                                setLocaleDropdownOpen(false);
+                                setLocaleSearch("");
+                              }}
+                              className={`p-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition ${
+                                !form.locale
+                                  ? "bg-blue-950/70 border border-blue-800/60 text-white"
+                                  : "hover:bg-gray-800 text-gray-300"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Languages className="h-4 w-4 text-gray-400 shrink-0" />
+                                <span className="text-xs">-- 留空 / 默认未设置 (Default) --</span>
+                              </div>
+                              {!form.locale && <Check className="h-3.5 w-3.5 text-blue-400 shrink-0" />}
+                            </div>
+
+                            {/* Locale Options */}
+                            <div className="space-y-0.5">
+                              {filteredLocales.map((loc) => {
+                                const isSelected = form.locale === loc.value;
+                                return (
+                                  <div
+                                    key={loc.value}
+                                    onClick={() => {
+                                      set("locale", loc.value);
+                                      setLocaleDropdownOpen(false);
+                                      setLocaleSearch("");
+                                    }}
+                                    className={`px-2.5 py-1.5 rounded cursor-pointer flex items-center justify-between gap-2 transition ${
+                                      isSelected
+                                        ? "bg-blue-950/70 border border-blue-800/60 text-white"
+                                        : "hover:bg-gray-800 text-gray-300"
+                                    }`}
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-xs font-mono font-medium flex items-center gap-1.5">
+                                        <span>{loc.value}</span>
+                                        <span className="text-gray-400 font-sans font-normal text-[11px] truncate">({loc.label})</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                      {loc.nativeName && (
+                                        <span className="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded">
+                                          {loc.nativeName}
+                                        </span>
+                                      )}
+                                      {isSelected && (
+                                        <Check className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {/* Custom locale fallback */}
+                            {!isExactLocaleMatch && localeSearch.trim().length > 0 && (
+                              <div
+                                onClick={() => {
+                                  set("locale", localeSearch.trim());
+                                  setLocaleDropdownOpen(false);
+                                  setLocaleSearch("");
+                                }}
+                                className="p-2 mt-1 rounded cursor-pointer border border-dashed border-blue-500/40 hover:bg-blue-950/40 text-blue-300 text-xs flex items-center justify-between transition"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <Plus className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                                  <span className="truncate">使用自定义语言代码：<strong className="font-mono text-white">{localeSearch.trim()}</strong></span>
+                                </div>
+                                <span className="text-[10px] text-blue-300 bg-blue-900/40 px-1.5 py-0.5 rounded shrink-0">点击应用</span>
+                              </div>
+                            )}
+
+                            {filteredLocales.length === 0 && isExactLocaleMatch && (
+                              <div className="p-3 text-center text-xs text-gray-500">
+                                未找到匹配的语言
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div>
-                <label className="label">Locale</label>
-                <input
-                  className="input"
-                  value={form.locale ?? ""}
-                  onChange={(e) => set("locale", e.target.value || null)}
-                  placeholder="en-US"
-                />
-              </div>
             </div>
-            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.geoip ?? false}
-                onChange={(e) => set("geoip", e.target.checked)}
-                className="rounded border-border bg-surface-2"
-              />
-              Auto-detect timezone/locale from the proxy exit, or host public IP without a proxy (GeoIP)
-            </label>
           </div>
         </section>
 
-        {/* Hardware */}
-        <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Hardware</h3>
-          <div className="space-y-3">
-            <div>
-              <label className="label">Screen Resolution</label>
-              <select
-                className="input"
+        {/* Hardware & Advanced Fingerprints */}
+        <section className="rounded-md border border-border bg-surface-1 p-4 space-y-4">
+          <div className="flex items-center justify-between border-b border-border/60 pb-3">
+            <div className="flex items-center gap-2">
+              <Sliders className="h-4 w-4 text-indigo-400" />
+              <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+                高级硬件与隐私指纹 (Hardware & Advanced Fingerprints)
+              </h3>
+            </div>
+            <span className="text-[10px] text-gray-400 font-normal">
+              屏幕分辨率 / CPU / 内存 / WebGL GPU / 防追踪噪点
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 -mt-1">
+            统一配置底层硬件指标与隐私噪点微扰。默认均为「自动跟随指纹种子推导」，与操作系统和浏览器身份保持高度一致。
+          </p>
+
+          <div className="space-y-4">
+            {/* Screen Resolution */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-gray-300 block mb-1">
+                屏幕分辨率 (Screen Resolution)
+              </label>
+              <CustomSelect
+                id="screen_resolution"
                 value={currentResolution}
-                onChange={(e) => {
-                  const preset = RESOLUTION_PRESETS[e.target.value];
+                options={resolutionOptions}
+                onChange={(val) => {
+                  const preset = RESOLUTION_PRESETS[val];
                   if (preset) {
                     set("screen_width", preset.width);
                     set("screen_height", preset.height);
                   }
                 }}
-              >
-                {Object.keys(RESOLUTION_PRESETS).map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-                <option value="custom">Custom</option>
-              </select>
+              />
+              {currentResolution === "custom" && (
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">Width (宽度 - 像素)</label>
+                    <input
+                      className="input w-full text-xs font-mono"
+                      type="number"
+                      value={form.screen_width ?? 1920}
+                      onChange={(e) => set("screen_width", Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">Height (高度 - 像素)</label>
+                    <input
+                      className="input w-full text-xs font-mono"
+                      type="number"
+                      value={form.screen_height ?? 1080}
+                      onChange={(e) => set("screen_height", Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            {currentResolution === "custom" && (
-              <div className="grid grid-cols-2 gap-3">
+
+            {/* CPU & Memory */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-border/50">
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  CPU 核心数 (Hardware Concurrency)
+                </label>
+                <CustomSelect
+                  id="cpu_cores"
+                  value={form.cpu_cores ?? null}
+                  options={CPU_OPTIONS}
+                  onChange={(val) => set("cpu_cores", val)}
+                  placeholder="自动 (跟随指纹种子推导)"
+                />
+                <span className="block text-[11px] text-gray-500 mt-1">
+                  控制 <code>navigator.hardwareConcurrency</code>。
+                </span>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  物理内存容量 (Device Memory)
+                </label>
+                <CustomSelect
+                  id="memory_gb"
+                  value={form.memory_gb ?? null}
+                  options={MEMORY_OPTIONS}
+                  onChange={(val) => set("memory_gb", val)}
+                  placeholder="自动 (跟随指纹种子推导)"
+                />
+                <span className="block text-[11px] text-gray-500 mt-1">
+                  控制 <code>navigator.deviceMemory</code> (Chromium)。
+                </span>
+              </div>
+            </div>
+
+            {/* WebGL GPU Preset Selector & Custom Inputs */}
+            <div className="pt-2 border-t border-border/50 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-300 block mb-1">
+                  WebGL GPU 厂商与渲染器预设 (Vendor & Renderer)
+                </label>
+                <CustomSelect
+                  id="webgl_preset"
+                  value={currentWebglPresetLabel}
+                  options={webglPresetOptions}
+                  onChange={(label) => {
+                    const selected = WEBGL_PRESETS.find((p) => p.label === label);
+                    if (selected) {
+                      const vendor = selected.vendor;
+                      const lower = vendor ? vendor.toLowerCase() : "";
+                      const derivedGpu = lower.includes("nvidia") ? "nvidia" : lower.includes("intel") ? "intel" : "auto";
+                      setForm((prev) => ({
+                        ...prev,
+                        webgl_vendor: selected.vendor,
+                        webgl_renderer: selected.renderer,
+                        gpu_family: derivedGpu,
+                      }));
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Width</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-gray-400">
+                      WebGL Vendor (厂商提供商)
+                    </label>
+                    <span className="text-[10px] text-gray-500">可自动推导或手动覆盖</span>
+                  </div>
                   <input
-                    className="input"
-                    type="number"
-                    value={form.screen_width ?? 1920}
-                    onChange={(e) => set("screen_width", Number(e.target.value))}
+                    type="text"
+                    className="input w-full text-xs font-mono"
+                    placeholder="默认留空由种子推导，或输入 NVIDIA Corporation / Apple / Intel Inc."
+                    value={form.webgl_vendor ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value || null;
+                      const lower = (val || "").toLowerCase();
+                      const derivedGpu = lower.includes("nvidia") ? "nvidia" : lower.includes("intel") ? "intel" : "auto";
+                      setForm((prev) => ({
+                        ...prev,
+                        webgl_vendor: val,
+                        gpu_family: derivedGpu,
+                      }));
+                    }}
                   />
                 </div>
                 <div>
-                  <label className="label">Height</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-gray-400">
+                      WebGL Renderer (渲染器 / GPU 型号)
+                    </label>
+                    <span className="text-[10px] text-gray-500">直接输入 GPU 型号即可</span>
+                  </div>
                   <input
-                    className="input"
-                    type="number"
-                    value={form.screen_height ?? 1080}
-                    onChange={(e) => set("screen_height", Number(e.target.value))}
+                    type="text"
+                    className="input w-full text-xs font-mono"
+                    placeholder="输入 GPU 型号，如 NVIDIA GeForce RTX 4060 或 Apple M2"
+                    value={form.webgl_renderer ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value || null;
+                      let updatedVendor = form.webgl_vendor;
+                      if (val && (!updatedVendor || updatedVendor === "auto")) {
+                        const lower = val.toLowerCase();
+                        if (lower.includes("nvidia") || lower.includes("geforce") || lower.includes("rtx") || lower.includes("gtx")) {
+                          updatedVendor = "NVIDIA Corporation";
+                        } else if (lower.includes("intel") || lower.includes("iris") || lower.includes("arc")) {
+                          updatedVendor = "Intel Inc.";
+                        } else if (lower.includes("amd") || lower.includes("radeon")) {
+                          updatedVendor = "AMD";
+                        } else if (lower.includes("apple") || lower.startsWith("m1") || lower.startsWith("m2") || lower.startsWith("m3") || lower.startsWith("m4")) {
+                          updatedVendor = "Apple";
+                        }
+                      }
+                      const vendorLower = (updatedVendor || "").toLowerCase();
+                      const derivedGpu = vendorLower.includes("nvidia") ? "nvidia" : vendorLower.includes("intel") ? "intel" : "auto";
+                      setForm((prev) => ({
+                        ...prev,
+                        webgl_renderer: val,
+                        webgl_vendor: updatedVendor,
+                        gpu_family: derivedGpu,
+                      }));
+                    }}
                   />
                 </div>
               </div>
-            )}
-            <div>
-              <label className="label">GPU Family</label>
-              {hostOs === "macos" ? (
-                <select className="input" value="auto" disabled>
-                  <option value="auto">Apple Silicon (automatic)</option>
-                </select>
-              ) : hostOs === null ? (
-                <select className="input" value="auto" disabled>
-                  <option value="auto">Automatic (detecting runtime…)</option>
-                </select>
-              ) : (
-                <select
-                  className="input"
-                  value={form.gpu_family ?? "auto"}
-                  onChange={(e) => set("gpu_family", e.target.value as "auto" | "nvidia" | "intel")}
-                >
-                  <option value="auto">Auto (from seed)</option>
-                  <option value="nvidia">NVIDIA</option>
-                  <option value="intel">Intel</option>
-                </select>
-              )}
-              <p className="text-xs text-gray-500 mt-1">
-                {hostOs === "macos"
-                  ? "The seed selects a coherent Apple Silicon model and matching hardware profile."
-                  : "The seed selects a coherent GPU model, CPU, memory, and screen profile within the family."}
+              <p className="text-[10px] text-gray-500">
+                💡 提示：在【自定义输入】时，直接在渲染器中填入 GPU 型号（如 <code className="text-gray-400">NVIDIA GeForce RTX 4060</code> 或 <code className="text-gray-400">Apple M2</code>），系统会自动推导填充对应的 Vendor 提供商并注入底层内核。
               </p>
+            </div>
+
+            {/* Fingerprint Noise & Privacy */}
+            <div className="pt-2 border-t border-border/50 space-y-2">
+              <div className="text-[11px] font-medium text-gray-400">指纹微扰与防追踪：</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.canvas_noise ?? true}
+                    onChange={(e) => set("canvas_noise", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">Canvas 噪点保护</span>
+                    <span className="block text-[10px] text-gray-500">
+                      注入轻微噪点，扰乱跨站画布哈希追踪
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.audio_noise ?? true}
+                    onChange={(e) => set("audio_noise", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">AudioContext 音频噪点</span>
+                    <span className="block text-[10px] text-gray-500">
+                      混淆声学生成特征，阻止音频指纹
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.do_not_track ?? false}
+                    onChange={(e) => set("do_not_track", e.target.checked)}
+                    className="rounded border-border bg-surface-2 mt-0.5"
+                  />
+                  <div>
+                    <span className="font-medium text-gray-200">请勿追踪 (Do Not Track)</span>
+                    <span className="block text-[10px] text-gray-500">
+                      发送 DNT: 1 并置 navigator.doNotTrack
+                    </span>
+                  </div>
+                </label>
+              </div>
             </div>
           </div>
         </section>
@@ -1708,14 +2550,12 @@ export function ProfileForm({
             {form.humanize && (
               <div>
                 <label className="label">Human Preset</label>
-                <select
-                  className="input"
-                  value={form.human_preset}
-                  onChange={(e) => set("human_preset", e.target.value)}
-                >
-                  <option value="default">Default (normal speed)</option>
-                  <option value="careful">Careful (slower, deliberate)</option>
-                </select>
+                <CustomSelect
+                  id="human_preset"
+                  value={form.human_preset ?? "default"}
+                  options={HUMAN_PRESET_OPTIONS}
+                  onChange={(val) => set("human_preset", String(val || "default"))}
+                />
               </div>
             )}
             {viewerMode === "vnc" && (
@@ -2085,184 +2925,6 @@ export function ProfileForm({
             </div>
           )}
         </section>
-
-        {/* Hardware & Privacy Fingerprints */}
-        <details className="rounded-md border border-border bg-surface-1 p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <Sliders className="h-3.5 w-3.5 text-indigo-400" />
-              高级硬件与隐私指纹 (Hardware & Privacy Fingerprints)
-            </span>
-            <span className="text-[10px] text-gray-500 font-normal">
-              CPU / 内存 / WebGL / Canvas / Audio / DNT
-            </span>
-          </summary>
-          <p className="text-xs text-gray-500 my-3">
-            定制底层硬件并发指标与隐私噪点微扰。默认均为「自动跟随指纹种子」，与操作系统和身份保持高度一致。
-          </p>
-
-          <div className="space-y-4">
-            {/* CPU & Memory */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-gray-300 block mb-1">
-                  CPU 核心数 (Hardware Concurrency)
-                </label>
-                <select
-                  className="input w-full text-xs"
-                  value={form.cpu_cores ?? ""}
-                  onChange={(e) => set("cpu_cores", e.target.value ? Number(e.target.value) : null)}
-                >
-                  <option value="">自动 (跟随指纹种子推导)</option>
-                  <option value="2">2 核心 (2 Cores)</option>
-                  <option value="4">4 核心 (4 Cores)</option>
-                  <option value="6">6 核心 (6 Cores)</option>
-                  <option value="8">8 核心 (8 Cores - 推荐)</option>
-                  <option value="12">12 核心 (12 Cores)</option>
-                  <option value="16">16 核心 (16 Cores)</option>
-                  <option value="24">24 核心 (24 Cores)</option>
-                  <option value="32">32 核心 (32 Cores)</option>
-                </select>
-                <span className="block text-[11px] text-gray-500 mt-1">
-                  控制 <code>navigator.hardwareConcurrency</code>。
-                </span>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-300 block mb-1">
-                  物理内存容量 (Device Memory)
-                </label>
-                <select
-                  className="input w-full text-xs"
-                  value={form.memory_gb ?? ""}
-                  onChange={(e) => set("memory_gb", e.target.value ? Number(e.target.value) : null)}
-                >
-                  <option value="">自动 (跟随指纹种子推导)</option>
-                  <option value="2">2 GB</option>
-                  <option value="4">4 GB</option>
-                  <option value="8">8 GB (推荐)</option>
-                  <option value="16">16 GB</option>
-                  <option value="32">32 GB</option>
-                  <option value="64">64 GB</option>
-                </select>
-                <span className="block text-[11px] text-gray-500 mt-1">
-                  控制 <code>navigator.deviceMemory</code> (Chromium)。
-                </span>
-              </div>
-            </div>
-
-            {/* WebGL GPU Preset Selector & Custom Inputs */}
-            <div className="pt-2 border-t border-border/50 space-y-3">
-              <div>
-                <label className="text-xs font-medium text-gray-300 block mb-1">
-                  WebGL GPU 厂商与渲染器预设 (Vendor & Renderer)
-                </label>
-                <select
-                  className="input w-full text-xs"
-                  value={
-                    WEBGL_PRESETS.find(
-                      (p) => p.vendor === (form.webgl_vendor ?? null) && p.renderer === (form.webgl_renderer ?? null)
-                    )?.label ?? "custom"
-                  }
-                  onChange={(e) => {
-                    const selected = WEBGL_PRESETS.find((p) => p.label === e.target.value);
-                    if (selected) {
-                      setForm((prev) => ({
-                        ...prev,
-                        webgl_vendor: selected.vendor,
-                        webgl_renderer: selected.renderer,
-                      }));
-                    }
-                  }}
-                >
-                  {WEBGL_PRESETS.map((p) => (
-                    <option key={p.label} value={p.label}>
-                      {p.label}
-                    </option>
-                  ))}
-                  <option value="custom">自定义输入 (Custom)</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">
-                    WebGL Vendor (提供商)
-                  </label>
-                  <input
-                    type="text"
-                    className="input w-full text-xs font-mono"
-                    placeholder="默认留空由种子推导，或输入 Apple / NVIDIA Corporation / Intel Inc."
-                    value={form.webgl_vendor ?? ""}
-                    onChange={(e) => set("webgl_vendor", e.target.value || null)}
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">
-                    WebGL Renderer (渲染器)
-                  </label>
-                  <input
-                    type="text"
-                    className="input w-full text-xs font-mono"
-                    placeholder="默认留空由种子推导，或输入 Apple M2 / ANGLE (NVIDIA...)"
-                    value={form.webgl_renderer ?? ""}
-                    onChange={(e) => set("webgl_renderer", e.target.value || null)}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Fingerprint Noise & Privacy */}
-            <div className="pt-2 border-t border-border/50 space-y-2">
-              <div className="text-[11px] font-medium text-gray-400">指纹微扰与防追踪：</div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.canvas_noise ?? true}
-                    onChange={(e) => set("canvas_noise", e.target.checked)}
-                    className="rounded border-border bg-surface-2 mt-0.5"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-200">Canvas 噪点保护</span>
-                    <span className="block text-[10px] text-gray-500">
-                      注入轻微噪点，扰乱跨站画布哈希追踪
-                    </span>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.audio_noise ?? true}
-                    onChange={(e) => set("audio_noise", e.target.checked)}
-                    className="rounded border-border bg-surface-2 mt-0.5"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-200">AudioContext 音频噪点</span>
-                    <span className="block text-[10px] text-gray-500">
-                      混淆声学生成特征，阻止音频指纹
-                    </span>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.do_not_track ?? false}
-                    onChange={(e) => set("do_not_track", e.target.checked)}
-                    className="rounded border-border bg-surface-2 mt-0.5"
-                  />
-                  <div>
-                    <span className="font-medium text-gray-200">请勿追踪 (Do Not Track)</span>
-                    <span className="block text-[10px] text-gray-500">
-                      发送 DNT: 1 并置 navigator.doNotTrack
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
-          </div>
-        </details>
 
         {/* Firefox User Preferences (about:config) - Only shown for Camoufox */}
         {form.browser_type === "camoufox" && (

@@ -15,6 +15,24 @@ import {
 } from "lucide-react";
 import { api, type SystemStatus, type SettingsUpdate } from "../lib/api";
 import { BackupRestorePanel } from "./BackupRestorePanel";
+import { CustomSelect, CustomSelectOption } from "./common/CustomSelect";
+
+const RELEASE_CHANNEL_OPTIONS: CustomSelectOption<"stable" | "preview">[] = [
+  {
+    value: "stable",
+    label: "Stable (稳定官方版 - 推荐)",
+    sublabel: "经过充分稳定性测试，推荐绝大多数生产环境使用",
+    badge: "推荐",
+    badgeVariant: "emerald",
+  },
+  {
+    value: "preview",
+    label: "Preview (抢先预览版 - 体验最新特性)",
+    sublabel: "包含最新实验性指纹特性与 Chromium 更新",
+    badge: "抢先体验",
+    badgeVariant: "purple",
+  },
+];
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -333,24 +351,18 @@ export function SettingsPanel({
 
               {/* Release Channel */}
               <div className="pt-3 border-t border-border">
-                <label className="text-xs font-medium text-gray-200 block mb-1">
+                <label htmlFor="release_channel" className="text-xs font-medium text-gray-200 block mb-1">
                   官方分发发布渠道 (Release Channel)
                 </label>
                 <p className="text-[11px] text-gray-400 mb-2">
                   选择 CloakBrowser 内核官方二进制文件的下载源（仅控制 CloakBrowser，不影响 Camoufox）
                 </p>
-                <select
-                  className="input text-xs"
+                <CustomSelect
+                  id="release_channel"
                   value={channel}
-                  onChange={(e) =>
-                    setChannel(
-                      e.target.value === "preview" ? "preview" : "stable"
-                    )
-                  }
-                >
-                  <option value="stable">Stable (稳定官方版 - 推荐)</option>
-                  <option value="preview">Preview (抢先预览版 - 体验最新特性)</option>
-                </select>
+                  options={RELEASE_CHANNEL_OPTIONS}
+                  onChange={(val) => setChannel(val || "stable")}
+                />
               </div>
             </div>
           )}

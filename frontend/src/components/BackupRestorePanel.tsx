@@ -28,6 +28,15 @@ import {
   type BackupFile,
   type BackupProgressEvent,
 } from "../lib/api";
+import { CustomSelect, CustomSelectOption } from "./common/CustomSelect";
+
+const BACKUP_INTERVAL_OPTIONS: CustomSelectOption<number>[] = [
+  { value: 0, label: "禁用自动备份", sublabel: "仅在需要时手动触发备份", badge: "手动", badgeVariant: "gray" },
+  { value: 6, label: "每 6 小时", sublabel: "高频快照备份", badge: "高频", badgeVariant: "blue" },
+  { value: 12, label: "每 12 小时", sublabel: "半天自动快照", badge: "推荐", badgeVariant: "emerald" },
+  { value: 24, label: "每天一次 (24 小时)", sublabel: "日常定期保护", badge: "常用", badgeVariant: "blue" },
+  { value: 168, label: "每周一次 (7 天)", sublabel: "周度常规存档", badge: "低频", badgeVariant: "gray" },
+];
 
 export function BackupRestorePanel() {
   const [loading, setLoading] = useState(false);
@@ -914,32 +923,39 @@ export function BackupRestorePanel() {
                   <span className="text-xs font-medium text-gray-200">自动定时备份与保留策略</span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="space-y-3">
                   <div>
-                    <label className="text-[11px] text-gray-300 block mb-1">备份执行周期</label>
-                    <select
-                      className="input text-xs"
+                    <label htmlFor="auto_backup_interval" className="text-[11px] text-gray-300 block mb-1">
+                      备份执行周期
+                    </label>
+                    <CustomSelect
+                      id="auto_backup_interval"
                       value={autoBackupInterval}
-                      onChange={(e) => setAutoBackupInterval(Number(e.target.value))}
-                    >
-                      <option value={0}>禁用自动备份</option>
-                      <option value={6}>每 6 小时</option>
-                      <option value={12}>每 12 小时</option>
-                      <option value={24}>每天一次 (24 小时)</option>
-                      <option value={168}>每周一次 (7 天)</option>
-                    </select>
+                      options={BACKUP_INTERVAL_OPTIONS}
+                      onChange={(val) => setAutoBackupInterval(val ?? 0)}
+                      size="sm"
+                    />
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-gray-300 block mb-1">保留备份份数</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      className="input text-xs font-mono"
-                      value={retainCount}
-                      onChange={(e) => setRetainCount(Math.max(1, Number(e.target.value)))}
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label htmlFor="retain_count" className="text-[11px] text-gray-300">
+                        保留历史备份份数
+                      </label>
+                      <span className="text-[10px] text-gray-400">保留最新份数，超出自动轮转清理</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="retain_count"
+                        type="number"
+                        min={1}
+                        max={100}
+                        className="input text-xs font-mono w-28"
+                        value={retainCount}
+                        onChange={(e) => setRetainCount(Math.max(1, Number(e.target.value)))}
+                      />
+                      <span className="text-xs text-gray-400">份</span>
+                    </div>
                   </div>
                 </div>
 

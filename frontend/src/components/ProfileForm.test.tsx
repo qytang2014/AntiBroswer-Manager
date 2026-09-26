@@ -285,7 +285,7 @@ describe("ProfileForm kernel version selection and validation", () => {
 
     // After switch: only Camoufox kernel option shown, and version auto-selected
     await waitFor(() => {
-      expect(screen.getByText(/Camoufox 152/)).toBeTruthy();
+      expect(screen.getAllByText(/Camoufox 152/).length).toBeGreaterThan(0);
       expect(screen.queryByText(/Chromium 151 \(Pro\)/)).toBeNull();
       const versionSelect = screen.getByLabelText(/内核版本/) as HTMLSelectElement;
       expect(versionSelect.value).toBe("152.0.4-beta.31");
@@ -564,7 +564,7 @@ describe("ProfileForm kernel version selection and validation", () => {
       // Warning should NOT be displayed while kernels are still loading
       expect(screen.queryByText(/未检测到已安装的.*内核，请先下载内核/)).toBeNull();
       // Select option should retain the profile's browser_version instead of dropping to "未检测到已安装内核"
-      expect(screen.getByText(/151.0.7922.108.3/)).toBeTruthy();
+      expect(screen.getAllByText(/151.0.7922.108.3/).length).toBeGreaterThan(0);
 
       // Now resolve the API call
       resolveKernels!({
@@ -580,7 +580,67 @@ describe("ProfileForm kernel version selection and validation", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText(/Chromium 151 \(v151.0.7922.108.3\)/)).toBeTruthy();
+        expect(screen.getAllByText(/Chromium 151 \(v151.0.7922.108.3\)/).length).toBeGreaterThan(0);
+      });
+    });
+
+    it("resets proxy test results when switching to another profile or create mode", async () => {
+      vi.spyOn(api, "listKernels").mockResolvedValue({ kernels: [] } as any);
+      vi.spyOn(api, "listExtensions").mockResolvedValue([]);
+      vi.spyOn(api, "getSubscriptions").mockResolvedValue([]);
+      vi.spyOn(api, "getProxyNodes").mockResolvedValue([]);
+      vi.spyOn(api, "getSettings").mockResolvedValue({ licenses: [] } as any);
+      vi.spyOn(api, "testProxy").mockResolvedValue({
+        ok: true,
+        ip: "198.51.100.99",
+        country: "JP",
+        city: "Tokyo",
+        timezone: "Asia/Tokyo",
+        locale: "ja-JP",
+        latency_ms: 45,
+        cached: false,
+      });
+
+      const p1 = { ...profile("stopped"), id: "p1", name: "Profile 1", proxy: "http://1.1.1.1:8080" };
+      const { rerender } = render(
+        <ProfileForm
+          profile={p1}
+          hostOs="linux"
+          viewerMode="vnc"
+          onSave={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      // Trigger test connection
+      const testBtn = screen.getByRole("button", { name: /测试连接/ });
+      fireEvent.click(testBtn);
+
+      await waitFor(() => {
+        expect(api.testProxy).toHaveBeenCalled();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/198\.51\.100\.99/)).toBeTruthy();
+        expect(screen.getAllByText(/Asia\/Tokyo/).length).toBeGreaterThan(0);
+      });
+
+      // Switch to Profile 2
+      const p2 = { ...profile("stopped"), id: "p2", name: "Profile 2", proxy: "http://2.2.2.2:8080" };
+      rerender(
+        <ProfileForm
+          profile={p2}
+          hostOs="linux"
+          viewerMode="vnc"
+          onSave={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      // Previous test result from Profile 1 MUST be cleared
+      await waitFor(() => {
+        expect(screen.queryByText(/198\.51\.100\.99/)).toBeNull();
+        expect(screen.queryAllByText(/Asia\/Tokyo/)).toHaveLength(0);
       });
     });
   });

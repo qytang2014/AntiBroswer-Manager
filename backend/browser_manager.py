@@ -343,32 +343,39 @@ def _resolve_profile_network_fingerprint_sync(
     Returns (timezone, locale, extra_webrtc_args).
 
     Protections:
-    1. If timezone or locale is not specified (or geoip is True), probes the proxy's
-       actual exit IP using fast sing-box/direct probe instead of letting upstream
-       fall back to local direct connection (which leaks China real IP/timezone).
-    2. Spoofs WebRTC to the proxy exit IP: --fingerprint-webrtc-ip=<exit_ip>.
-    3. Forces WebRTC to never leak non-proxied UDP: --force-webrtc-ip-handling-policy=disable_non_proxied_udp.
+    1. If geoip is True (default), automatically probes the proxy's (or direct host's)
+       actual exit IP and dynamically resolves timezone and locale via offline GeoIP.
+       In this mode, dynamic detection always takes precedence, preventing timezone/IP
+       mismatches when switching nodes or toggling proxies.
+    2. If geoip is False (manual mode), honors user-specified timezone and locale.
+    3. Spoofs WebRTC to the exit IP: --fingerprint-webrtc-ip=<exit_ip>.
+    4. Forces WebRTC to never leak non-proxied UDP: --force-webrtc-ip-handling-policy=disable_non_proxied_udp.
     """
     from cloakbrowser.geoip import COUNTRY_LOCALE_MAP, _ensure_geoip_db
 
     extra_args: list[str] = []
     user_launch_args = profile.get("launch_args") or []
+    is_auto_geo = bool(profile.get("geoip", True))
     timezone = profile.get("timezone") or None
     locale = profile.get("locale") or None
     exit_ip = None
 
-    if proxy:
+    has_proxy = bool(proxy and proxy != "direct")
+
+    if has_proxy:
         # Enforce strict WebRTC interface policy: prevent non-proxied UDP on local interfaces
         has_user_policy = any(a.startswith("--force-webrtc-ip-handling-policy") for a in user_launch_args)
         if not has_user_policy:
             extra_args.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
 
-    # If timezone or locale is missing or geoip is enabled, resolve exit IP through proxy
-    need_probe = proxy and (bool(profile.get("geoip", True)) or timezone is None or locale is None)
+    # Probe exit IP if auto geo is enabled, or if manual timezone/locale is missing
+    need_probe = is_auto_geo or timezone is None or locale is None
 
     if need_probe:
         try:
-            if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+            if not has_proxy:
+                exit_ip, _, _ = _probe_proxy_target(None)
+            elif isinstance(proxy, dict) and proxy.get("type") == "singbox":
                 from backend.singbox_runner import fast_singbox_proxy
 
                 with fast_singbox_proxy(proxy) as target_proxy_url:
@@ -377,23 +384,36 @@ def _resolve_profile_network_fingerprint_sync(
                 exit_ip, _, _ = _probe_proxy_target(proxy)
 
             if exit_ip:
-                has_user_webrtc_ip = any(a.startswith("--fingerprint-webrtc-ip") for a in user_launch_args)
-                if not has_user_webrtc_ip:
-                    extra_args.append(f"--fingerprint-webrtc-ip={exit_ip}")
+                if has_proxy:
+                    has_user_webrtc_ip = any(a.startswith("--fingerprint-webrtc-ip") for a in user_launch_args)
+                    if not has_user_webrtc_ip:
+                        extra_args.append(f"--fingerprint-webrtc-ip={exit_ip}")
                 try:
                     import geoip2.database
 
                     with geoip2.database.Reader(_ensure_geoip_db()) as reader:
                         resp = reader.city(exit_ip)
-                        if timezone is None and resp.location.time_zone:
-                            timezone = resp.location.time_zone
-                        if locale is None and resp.country.iso_code:
-                            country = resp.country.iso_code
-                            locale = COUNTRY_LOCALE_MAP.get(country, "en-US")
+                        detected_tz = resp.location.time_zone
+                        detected_locale = None
+                        if resp.country.iso_code:
+                            detected_locale = COUNTRY_LOCALE_MAP.get(resp.country.iso_code, "en-US")
+
+                        if is_auto_geo:
+                            # In auto geo mode, dynamic exit IP detection always takes precedence!
+                            if detected_tz:
+                                timezone = detected_tz
+                            if detected_locale:
+                                locale = detected_locale
+                        else:
+                            # In manual mode, only fill in if user left it blank
+                            if timezone is None and detected_tz:
+                                timezone = detected_tz
+                            if locale is None and detected_locale:
+                                locale = detected_locale
                 except Exception as geo_exc:
                     logger.warning("Failed to resolve GeoIP from exit IP %s: %s", exit_ip, geo_exc)
         except Exception as exc:
-            logger.warning("Failed to pre-probe proxy for network fingerprint: %s", exc)
+            logger.warning("Failed to pre-probe network fingerprint: %s", exc)
 
     return timezone, locale, extra_args
 
@@ -968,10 +988,24 @@ class BrowserManager:
                     # Hardware & WebGL & Privacy configurations
                     if profile.get("cpu_cores"):
                         cam_config["navigator.hardwareConcurrency"] = int(profile["cpu_cores"])
-                    if profile.get("webgl_vendor"):
-                        cam_config["webGl:vendor"] = str(profile["webgl_vendor"])
-                    if profile.get("webgl_renderer"):
-                        cam_config["webGl:renderer"] = str(profile["webgl_renderer"])
+
+                    webgl_vendor = profile.get("webgl_vendor")
+                    webgl_renderer = profile.get("webgl_renderer")
+                    if not webgl_vendor and webgl_renderer:
+                        r_lower = str(webgl_renderer).lower()
+                        if any(k in r_lower for k in ("nvidia", "geforce", "rtx", "gtx")):
+                            webgl_vendor = "NVIDIA Corporation"
+                        elif any(k in r_lower for k in ("intel", "iris", "arc")):
+                            webgl_vendor = "Intel Inc."
+                        elif any(k in r_lower for k in ("amd", "radeon")):
+                            webgl_vendor = "AMD"
+                        elif any(k in r_lower for k in ("apple", "m1", "m2", "m3", "m4")):
+                            webgl_vendor = "Apple"
+
+                    if webgl_vendor:
+                        cam_config["webGl:vendor"] = str(webgl_vendor)
+                    if webgl_renderer:
+                        cam_config["webGl:renderer"] = str(webgl_renderer)
 
                     # Deterministic seeds and noise control
                     seed = int(profile.get("fingerprint_seed") or 0)
@@ -1014,8 +1048,8 @@ class BrowserManager:
                         # we've already resolved timezone/locale via geoip ourselves.
                         "i_know_what_im_doing": True,
                     }
-                    if profile.get("webgl_vendor") and profile.get("webgl_renderer"):
-                        camoufox_options["webgl_config"] = (str(profile["webgl_vendor"]), str(profile["webgl_renderer"]))
+                    if webgl_vendor and webgl_renderer:
+                        camoufox_options["webgl_config"] = (str(webgl_vendor), str(webgl_renderer))
                     if effective_kernel:
                         # If effective_kernel is a file path, pass executable_path.
                         # If it is a version identifier (e.g. '152.0.4'), pass browser.
@@ -1192,9 +1226,21 @@ class BrowserManager:
                     init_overrides.append(
                         "Object.defineProperty(Navigator.prototype, 'doNotTrack', { get: () => '1', configurable: true });"
                     )
-                if profile.get("webgl_vendor") or profile.get("webgl_renderer"):
-                    v = json.dumps(profile.get("webgl_vendor") or "")
-                    r = json.dumps(profile.get("webgl_renderer") or "")
+                wv = profile.get("webgl_vendor")
+                wr = profile.get("webgl_renderer")
+                if not wv and wr:
+                    r_lower = str(wr).lower()
+                    if any(k in r_lower for k in ("nvidia", "geforce", "rtx", "gtx")):
+                        wv = "NVIDIA Corporation"
+                    elif any(k in r_lower for k in ("intel", "iris", "arc")):
+                        wv = "Intel Inc."
+                    elif any(k in r_lower for k in ("amd", "radeon")):
+                        wv = "AMD"
+                    elif any(k in r_lower for k in ("apple", "m1", "m2", "m3", "m4")):
+                        wv = "Apple"
+                if wv or wr:
+                    v = json.dumps(wv or "")
+                    r = json.dumps(wr or "")
                     init_overrides.append(f"""
                         (() => {{
                             const v = {v};
@@ -1866,12 +1912,14 @@ class BrowserManager:
                 args.append("--fingerprint-gpu-vendor=NVIDIA")
             elif gpu_family == "intel":
                 args.append("--fingerprint-gpu-vendor=Intel")
-            elif profile.get("webgl_vendor"):
-                wv = str(profile["webgl_vendor"]).lower()
-                if "nvidia" in wv:
+            elif profile.get("webgl_vendor") or profile.get("webgl_renderer"):
+                wv_combined = f"{profile.get('webgl_vendor') or ''} {profile.get('webgl_renderer') or ''}".lower()
+                if any(k in wv_combined for k in ("nvidia", "geforce", "rtx", "gtx")):
                     args.append("--fingerprint-gpu-vendor=NVIDIA")
-                elif "intel" in wv:
+                elif any(k in wv_combined for k in ("intel", "iris", "arc")):
                     args.append("--fingerprint-gpu-vendor=Intel")
+                elif any(k in wv_combined for k in ("amd", "radeon")):
+                    args.append("--fingerprint-gpu-vendor=AMD")
 
         if profile.get("do_not_track", False):
             args.append("--enable-do-not-track")

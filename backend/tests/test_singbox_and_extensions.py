@@ -366,9 +366,23 @@ def test_resolve_profile_network_fingerprint_sync():
         assert loc_m == "en-GB"
         assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args_m
 
-        # 3. Profile without proxy -> no probe, no WebRTC args
+        # 3. Profile without proxy -> probes direct host, no WebRTC spoofing args
         tz_none, loc_none, args_none = _resolve_profile_network_fingerprint_sync(None, profile_auto)
         assert args_none == []
+        assert tz_none == "America/Chicago"
+        assert loc_none == "en-US"
+
+        # 4. Profile with geoip=True and stale timezone/locale -> dynamic exit IP takes precedence
+        profile_stale = {
+            "timezone": "Asia/Shanghai",
+            "locale": "zh-CN",
+            "geoip": True,
+            "launch_args": [],
+        }
+        tz_s, loc_s, args_s = _resolve_profile_network_fingerprint_sync("http://127.0.0.1:1080", profile_stale)
+        assert tz_s == "America/Chicago"
+        assert loc_s == "en-US"
+        assert "--fingerprint-webrtc-ip=8.8.8.8" in args_s
 
 
 def test_kernel_manager_list_and_binary_ready():
