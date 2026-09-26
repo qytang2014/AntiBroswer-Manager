@@ -842,4 +842,77 @@ async def test_camoufox_launch_config_and_user_prefs(monkeypatch, tmp_path):
     await manager.stop("prof-cam-config")
 
 
+@pytest.mark.asyncio
+async def test_camoufox_kernel_resolution_and_cdp_none(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME)
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+    monkeypatch.setattr(manager, "_ensure_camoufox_search_engine", AsyncMock())
+
+    captured_options = {}
+
+    async def mock_camoufox_browser(pw, **kwargs):
+        captured_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("camoufox.async_api.AsyncNewBrowser", mock_camoufox_browser)
+
+    mock_pw = MagicMock()
+    mock_pw.stop = AsyncMock()
+
+    class MockAsyncPlaywright:
+        async def start(self):
+            return mock_pw
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
+
+    # Mock camoufox multiversion installed versions
+    mock_version = MagicMock()
+    mock_version.version = "152.0.4"
+    mock_version.build = "beta.31"
+    mock_version.full_string = "152.0.4-beta.31"
+
+    mock_inst = MagicMock()
+    mock_inst.version = mock_version
+    mock_inst.path = Path("/mock/camoufox/152.0.4-beta.31")
+    mock_inst.is_active = True
+
+    monkeypatch.setattr("camoufox.multiversion.list_installed", lambda: [mock_inst])
+
+    # 1. Profile with leading 'v' prefix
+    profile_v = {
+        "id": "prof-cam-v",
+        "user_data_dir": str(tmp_path / "p-cam-v"),
+        "browser_type": "camoufox",
+        "browser_version": "v152.0.4-beta.31",
+    }
+    Path(profile_v["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running_v = await manager.launch(profile_v)
+    assert running_v.profile_id == "prof-cam-v"
+    assert running_v.cdp_port == 0
+    # Browser option must strip leading 'v'
+    assert captured_options["browser"] == "152.0.4-beta.31"
+    # CDP URL must be None
+    status = manager.get_status("prof-cam-v")
+    assert status["cdp_url"] is None
+    await manager.stop("prof-cam-v")
+
+    # 2. Profile with nonexistent version falls back to installed Camoufox, NOT Chromium
+    profile_unknown = {
+        "id": "prof-cam-unknown",
+        "user_data_dir": str(tmp_path / "p-cam-unknown"),
+        "browser_type": "camoufox",
+        "browser_version": "nonexistent-version",
+    }
+    Path(profile_unknown["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running_unknown = await manager.launch(profile_unknown)
+    assert running_unknown.is_fallback is True
+    assert captured_options["browser"] == "152.0.4-beta.31"
+    await manager.stop("prof-cam-unknown")
+
+
+
 

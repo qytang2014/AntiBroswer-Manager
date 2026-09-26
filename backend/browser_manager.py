@@ -803,25 +803,64 @@ class BrowserManager:
             effective_kernel = requested_kernel
             is_fallback = False
 
-            if requested_kernel:
-                is_ready = False
-                for pro_candidate in (False, True):
-                    bp = get_binary_path(requested_kernel, pro=pro_candidate)
-                    if bp.exists() and _is_executable(bp):
-                        is_ready = True
-                        break
+            if browser_type == "camoufox":
+                import camoufox.pkgman as cp
+                import camoufox.multiversion as cm
+                from .runtime import resolve_runtime
 
-                if not is_ready:
-                    info = binary_info()
-                    fallback_kernel = info.get("version")
-                    logger.warning(
-                        "Profile %s 绑定的内核 %s 未在本地安装，已自动回退到系统当前默认可用内核 %s",
-                        profile_id,
-                        requested_kernel,
-                        fallback_kernel,
-                    )
+                _cam_data_dir = resolve_runtime().data_dir / "kernels" / "camoufox"
+                cp.INSTALL_DIR = _cam_data_dir
+                cm.BROWSERS_DIR = _cam_data_dir / "browsers"
+
+                installed_camoufox = cm.list_installed()
+                if not installed_camoufox:
+                    raise RuntimeError("本地未安装任何 Camoufox 内核，请先前往『内核管理』下载 Camoufox 内核。")
+
+                matched_version = None
+                if requested_kernel:
+                    clean_req = requested_kernel.lstrip("vV").strip()
+                    for inst in installed_camoufox:
+                        v_obj = inst.version
+                        full_str = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
+                        if clean_req in (str(v_obj.version), str(v_obj.build), full_str, inst.path.name) or clean_req.startswith(str(v_obj.version)):
+                            matched_version = full_str
+                            break
+
+                if matched_version:
+                    effective_kernel = matched_version
+                else:
+                    active_inst = next((inst for inst in installed_camoufox if inst.is_active), installed_camoufox[0])
+                    v_obj = active_inst.version
+                    fallback_kernel = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
+                    if requested_kernel:
+                        logger.warning(
+                            "Profile %s 绑定的 Camoufox 内核 %s 未在本地安装，已自动回退到系统可用内核 %s",
+                            profile_id,
+                            requested_kernel,
+                            fallback_kernel,
+                        )
+                        is_fallback = True
                     effective_kernel = fallback_kernel
-                    is_fallback = True
+            else:
+                if requested_kernel:
+                    is_ready = False
+                    for pro_candidate in (False, True):
+                        bp = get_binary_path(requested_kernel, pro=pro_candidate)
+                        if bp.exists() and _is_executable(bp):
+                            is_ready = True
+                            break
+
+                    if not is_ready:
+                        info = binary_info()
+                        fallback_kernel = info.get("version")
+                        logger.warning(
+                            "Profile %s 绑定的内核 %s 未在本地安装，已自动回退到系统当前默认可用内核 %s",
+                            profile_id,
+                            requested_kernel,
+                            fallback_kernel,
+                        )
+                        effective_kernel = fallback_kernel
+                        is_fallback = True
 
             # 2. Launch arguments version compatibility validation
             for arg in normal_launch_args:
@@ -1061,7 +1100,7 @@ class BrowserManager:
                         if "/" in eff_str or "\\" in eff_str:
                             camoufox_options["executable_path"] = eff_str
                         else:
-                            camoufox_options["browser"] = effective_kernel
+                            camoufox_options["browser"] = eff_str.lstrip("vV")
                     if cam_proxy is not None:
                         camoufox_options["proxy"] = cam_proxy
                     if cam_config:
@@ -1531,7 +1570,7 @@ class BrowserManager:
                 if browser_version:
                     try:
                         from camoufox.multiversion import find_installed_version
-                        found_ver = find_installed_version(browser_version)
+                        found_ver = find_installed_version(browser_version.lstrip("vV"))
                         if found_ver:
                             cam_exe = Path(launch_path(found_ver))
                     except Exception:
@@ -1779,7 +1818,11 @@ class BrowserManager:
                 if running and running.display is not None
                 else None
             ),
-            "cdp_url": f"/api/profiles/{profile_id}/cdp" if running else None,
+            "cdp_url": (
+                f"/api/profiles/{profile_id}/cdp"
+                if (running and getattr(running, "cdp_port", 0) > 0)
+                else None
+            ),
             # Set when the last launch closed on a license denial (post-handshake
             # out-of-seats / bad key). Only meaningful while stopped; cleared on
             # the next launch. {message, reason, upgrade_url?} or None.

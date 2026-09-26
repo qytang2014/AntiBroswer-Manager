@@ -1257,7 +1257,7 @@ async def launch_profile(profile_id: str):
         viewer_mode=browser_mgr.runtime.viewer_mode,
         vnc_ws_port=running.ws_port,
         display=f":{running.display}" if running.display is not None else None,
-        cdp_url=f"/api/profiles/{profile_id}/cdp",
+        cdp_url=f"/api/profiles/{profile_id}/cdp" if (running and getattr(running, "cdp_port", 0) > 0) else None,
     )
 
 
@@ -1880,6 +1880,8 @@ async def cdp_info(profile_id: str):
     running = browser_mgr.running.get(profile_id)
     if not running:
         raise HTTPException(status_code=404, detail="Profile not running")
+    if getattr(running, "cdp_port", 0) <= 0:
+        raise HTTPException(status_code=400, detail="CDP is not supported for Camoufox profiles")
     return {
         "cdp_url": f"/api/profiles/{profile_id}/cdp",
         "usage": "playwright.chromium.connect_over_cdp('http://<host>/api/profiles/"
