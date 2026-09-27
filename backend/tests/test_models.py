@@ -31,6 +31,8 @@ def test_profile_create_minimal():
     assert p.human_preset == "default"
     assert p.extension_paths == []
     assert p.allow_3p_cookies is True
+    assert p.canvas_noise is False
+    assert p.audio_noise is True
 
 
 def test_profile_create_all_fields():

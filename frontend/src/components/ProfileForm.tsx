@@ -271,7 +271,7 @@ export function ProfileForm({
     memory_gb: profile?.memory_gb ?? null,
     webgl_vendor: profile?.webgl_vendor ?? null,
     webgl_renderer: profile?.webgl_renderer ?? null,
-    canvas_noise: profile?.canvas_noise ?? true,
+    canvas_noise: profile?.canvas_noise ?? false,
     audio_noise: profile?.audio_noise ?? true,
     do_not_track: profile?.do_not_track ?? false,
     firefox_user_prefs: profile?.firefox_user_prefs ?? null,
@@ -596,7 +596,7 @@ export function ProfileForm({
           memory_gb: profile.memory_gb ?? null,
           webgl_vendor: profile.webgl_vendor ?? null,
           webgl_renderer: profile.webgl_renderer ?? null,
-          canvas_noise: profile.canvas_noise ?? true,
+          canvas_noise: profile.canvas_noise ?? false,
           audio_noise: profile.audio_noise ?? true,
           do_not_track: profile.do_not_track ?? false,
           firefox_user_prefs: profile.firefox_user_prefs ?? null,
@@ -649,7 +649,7 @@ export function ProfileForm({
           memory_gb: null,
           webgl_vendor: null,
           webgl_renderer: null,
-          canvas_noise: true,
+          canvas_noise: false,
           audio_noise: true,
           do_not_track: false,
           firefox_user_prefs: null,
@@ -2508,14 +2508,14 @@ export function ProfileForm({
                 <label className="flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={form.canvas_noise ?? true}
+                    checked={form.canvas_noise ?? false}
                     onChange={(e) => set("canvas_noise", e.target.checked)}
                     className="rounded border-border bg-surface-2 mt-0.5"
                   />
                   <div>
                     <span className="font-medium text-gray-200">Canvas 噪点保护</span>
                     <span className="block text-[10px] text-gray-500">
-                      注入轻微噪点，扰乱跨站画布哈希追踪
+                      注入噪点扰乱画布哈希（推荐关闭，现代检测器会将噪点识别为 Bot 异常）
                     </span>
                   </div>
                 </label>

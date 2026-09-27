@@ -159,8 +159,9 @@ def test_build_args_screen():
 
 def test_build_args_empty_profile():
     args = _mgr._build_fingerprint_args({})
-    # Docker software rendering + runtime platform.
-    assert len(args) == 2
+    # Docker software rendering + runtime platform + default noise suppression.
+    assert len(args) == 3
+    assert "--fingerprint-noise=false" in args
 
 
 def test_native_build_args_do_not_force_software_gl():
@@ -729,6 +730,36 @@ def test_build_fingerprint_args_dnt_and_webgl():
     assert "--fingerprint-gpu-vendor=NVIDIA" in args_linux
 
 
+def test_build_fingerprint_args_noise_control():
+    # When canvas_noise is False or omitted, --fingerprint-noise=false is appended
+    args_default = _mgr._build_fingerprint_args({})
+    assert "--fingerprint-noise=false" in args_default
+
+    args_false = _mgr._build_fingerprint_args({"canvas_noise": False})
+    assert "--fingerprint-noise=false" in args_false
+
+    args_zero = _mgr._build_fingerprint_args({"canvas_noise": 0})
+    assert "--fingerprint-noise=false" in args_zero
+
+    # When canvas_noise is True, --fingerprint-noise=false is NOT appended
+    args_true = _mgr._build_fingerprint_args({"canvas_noise": True})
+    assert "--fingerprint-noise=false" not in args_true
+
+
+def test_build_fingerprint_args_hardware_and_webgl():
+    manager_mac = BrowserManager(RuntimeConfig(runtime_mode="native", viewer_mode="native-window", host_os="macos", data_dir=Path("/data")))
+    args = manager_mac._build_fingerprint_args({
+        "cpu_cores": 8,
+        "memory_gb": 16,
+        "webgl_renderer": "ANGLE (Apple, Apple M3, OpenGL 4.1)",
+        "webgl_vendor": "Google Inc. (Apple)",
+    })
+    assert "--fingerprint-hardware-concurrency=8" in args
+    assert "--fingerprint-device-memory=16" in args
+    assert "--fingerprint-gpu-renderer=ANGLE (Apple, Apple M3, OpenGL 4.1)" in args
+    assert "--fingerprint-gpu-vendor=Google Inc. (Apple)" in args
+
+
 @pytest.mark.asyncio
 async def test_launch_uses_engine_isolated_extra_launch_args(monkeypatch, tmp_path):
     manager = BrowserManager(NATIVE_RUNTIME)
@@ -912,6 +943,112 @@ async def test_camoufox_kernel_resolution_and_cdp_none(monkeypatch, tmp_path):
     assert running_unknown.is_fallback is True
     assert captured_options["browser"] == "152.0.4-beta.31"
     await manager.stop("prof-cam-unknown")
+
+
+@pytest.mark.asyncio
+async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tmp_path):
+    manager = BrowserManager(NATIVE_RUNTIME)
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+    monkeypatch.setattr(manager, "_ensure_camoufox_search_engine", AsyncMock())
+
+    captured_options = {}
+
+    async def mock_camoufox_browser(pw, **kwargs):
+        captured_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("camoufox.async_api.AsyncNewBrowser", mock_camoufox_browser)
+
+    mock_pw = MagicMock()
+    mock_pw.stop = AsyncMock()
+
+    class MockAsyncPlaywright:
+        async def start(self):
+            return mock_pw
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
+
+    profile = {
+        "id": "prof-coherence",
+        "user_data_dir": str(tmp_path / "p-coherence"),
+        "browser_type": "camoufox",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "webgl_vendor": "Apple",
+        "webgl_renderer": "Apple M1",
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    running = await manager.launch(profile)
+    assert running.profile_id == "prof-coherence"
+
+    cfg = captured_options["config"]
+
+    # 1. Fonts: should NOT be restricted to hardcoded list when not set in profile
+    assert "fonts" not in captured_options
+
+    # 2. Screen & Window geometry coherence
+    assert cfg["screen.width"] == 1920
+    assert cfg["screen.height"] == 1080
+    assert cfg["screen.availWidth"] == 1920
+    assert cfg["screen.availLeft"] == 0
+    assert cfg["screen.availTop"] + cfg["screen.availHeight"] <= cfg["screen.height"]
+    assert cfg["window.outerWidth"] <= cfg["screen.availWidth"]
+    assert cfg["window.outerHeight"] <= cfg["screen.availHeight"]
+
+    # 3. WebGL parameter anisotropy (must always be 16 to avoid null detection anomaly)
+    assert cfg["webGl:parameters"]["34047"] == 16
+    assert cfg["webGl2:parameters"]["34047"] == 16
+
+    # 4. Media devices defaults
+    assert cfg["mediaDevices:enabled"] is True
+    assert cfg["mediaDevices:micros"] == 1
+    assert cfg["mediaDevices:webcams"] == 1
+
+    # 5. User-Agent coherence: Camoufox native UA to prevent Firefox anomaly penalty
+    assert "Camoufox/" in cfg["navigator.userAgent"]
+    assert "Firefox/" not in cfg["navigator.userAgent"]
+    assert cfg["headers.User-Agent"] == cfg["navigator.userAgent"]
+
+    await manager.stop("prof-coherence")
+
+    # 6. Verify default profile with None for WebGL vendor/renderer also sets 34047 == 16
+    prof_default = {
+        "id": "prof-default-webgl",
+        "user_data_dir": str(tmp_path / "p-default-webgl"),
+        "browser_type": "camoufox",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "webgl_vendor": None,
+        "webgl_renderer": None,
+    }
+    Path(prof_default["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+    running_def = await manager.launch(prof_default)
+    cfg_def = captured_options["config"]
+    assert cfg_def["webGl:parameters"]["34047"] == 16
+    assert cfg_def["webGl2:parameters"]["34047"] == 16
+    assert cfg_def["webGl:vendor"] is not None
+    assert cfg_def["webGl:renderer"] is not None
+    assert "Camoufox/" in cfg_def["navigator.userAgent"]
+    assert "Firefox/" not in cfg_def["navigator.userAgent"]
+    await manager.stop("prof-default-webgl")
+
+    # 7. Custom User-Agent support for Camoufox
+    prof_custom_ua = {
+        "id": "prof-custom-ua",
+        "user_data_dir": str(tmp_path / "p-custom-ua"),
+        "browser_type": "camoufox",
+        "user_agent": "CustomTestUA/1.0",
+    }
+    Path(prof_custom_ua["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+    await manager.launch(prof_custom_ua)
+    cfg_custom = captured_options["config"]
+    assert cfg_custom["navigator.userAgent"] == "CustomTestUA/1.0"
+    assert cfg_custom["headers.User-Agent"] == "CustomTestUA/1.0"
+    await manager.stop("prof-custom-ua")
+
 
 
 

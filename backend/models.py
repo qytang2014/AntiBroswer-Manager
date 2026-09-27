@@ -44,7 +44,7 @@ class ProfileCreate(BaseModel):
     memory_gb: int | None = Field(default=None, ge=1, le=512)
     webgl_vendor: str | None = None
     webgl_renderer: str | None = None
-    canvas_noise: bool = True
+    canvas_noise: bool = False
     audio_noise: bool = True
     do_not_track: bool = False
     firefox_user_prefs: dict[str, Any] | None = None
@@ -177,7 +177,7 @@ class ProfileResponse(BaseModel):
     memory_gb: int | None = None
     webgl_vendor: str | None = None
     webgl_renderer: str | None = None
-    canvas_noise: bool = True
+    canvas_noise: bool = False
     audio_noise: bool = True
     do_not_track: bool = False
     firefox_user_prefs: dict[str, Any] | None = None

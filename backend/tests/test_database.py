@@ -132,6 +132,8 @@ def test_create_profile_defaults(tmp_db: Path):
     assert p["allow_3p_cookies"] == 1
     assert p["human_preset"] == "default"
     assert p["launch_args"] == []
+    assert p["canvas_noise"] is False
+    assert p["audio_noise"] is True
 
 
 def test_create_profile_with_launch_args(tmp_db: Path):

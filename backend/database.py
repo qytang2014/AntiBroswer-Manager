@@ -319,7 +319,7 @@ def create_profile(
         "memory_gb": fields.get("memory_gb"),
         "webgl_vendor": fields.get("webgl_vendor"),
         "webgl_renderer": fields.get("webgl_renderer"),
-        "canvas_noise": 1 if fields.get("canvas_noise", True) else 0,
+        "canvas_noise": 1 if fields.get("canvas_noise", False) else 0,
         "audio_noise": 1 if fields.get("audio_noise", True) else 0,
         "do_not_track": 1 if fields.get("do_not_track", False) else 0,
         "firefox_user_prefs": json.dumps(fields.get("firefox_user_prefs")) if fields.get("firefox_user_prefs") is not None else None,
@@ -355,7 +355,7 @@ def _hydrate_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, An
     profile["extension_paths"] = _json_list(profile.get("extension_paths"))
     profile["firefox_user_prefs"] = _json_dict(profile.get("firefox_user_prefs"))
     profile["extra_launch_args"] = _json_dict(profile.get("extra_launch_args"))
-    profile["canvas_noise"] = bool(profile.get("canvas_noise", 1)) if profile.get("canvas_noise") is not None else True
+    profile["canvas_noise"] = bool(profile.get("canvas_noise", 0)) if profile.get("canvas_noise") is not None else False
     profile["audio_noise"] = bool(profile.get("audio_noise", 1)) if profile.get("audio_noise") is not None else True
     profile["do_not_track"] = bool(profile.get("do_not_track", 0)) if profile.get("do_not_track") is not None else False
     tags = conn.execute(

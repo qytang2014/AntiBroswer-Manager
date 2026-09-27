@@ -222,6 +222,9 @@ def get_camoufox_user_prefs(
         "browser.urlbar.placeholderName": engine_name,
         # Web compatibility: restore standard HTML5 features
         "dom.iframe_lazy_loading.enabled": True,
+        # Media devices & WebRTC probe smoothness: avoid hanging on permission dialogs during tests
+        "media.navigator.permission.disabled": True,
+        "media.navigator.enabled": True,
     }
 
     # Explicit fallback font families to prevent font/glyph corruption (乱码) across platforms

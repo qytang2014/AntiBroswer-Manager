@@ -70,6 +70,34 @@ def license_error_detail(exc: BaseException) -> dict[str, str]:
     return detail
 
 
+def _cleanup_stale_chromium_locks(user_data_dir: Path | str) -> None:
+    """Remove stale Chromium Singleton lock files if the owning process is no longer running."""
+    udd = Path(user_data_dir)
+    lock_file = udd / "SingletonLock"
+    if lock_file.is_symlink() or lock_file.exists():
+        try:
+            target = os.readlink(lock_file)
+            parts = target.rsplit("-", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                pid = int(parts[1])
+                try:
+                    os.kill(pid, 0)
+                    # Process is still alive; do not remove locks
+                    return
+                except (ProcessLookupError, PermissionError):
+                    # Process is dead or defunct
+                    pass
+            for f_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                p = udd / f_name
+                if p.is_symlink() or p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
 # LRU Cache for proxy test results: cache_key -> (timestamp, result_dict)
 _PROXY_TEST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PROXY_TEST_LOCKS: dict[str, asyncio.Lock] = {}
@@ -938,6 +966,23 @@ class BrowserManager:
             if profile.get("restore_session", True):
                 extra_args.append("--restore-last-session")
 
+            # Coherent platform version & GPU defaults for CloakBrowser on macOS/Windows
+            if profile.get("browser_type") != "camoufox":
+                if not any(a.startswith("--fingerprint-platform-version") for a in extra_args):
+                    if self.runtime.host_os == "macos":
+                        import platform as _py_plat
+                        mac_ver = _py_plat.mac_ver()[0] or "15.7.0"
+                        extra_args.append(f"--fingerprint-platform-version={mac_ver}")
+                    else:
+                        extra_args.append("--fingerprint-platform-version=10.0.0")
+
+                if self.runtime.host_os == "macos":
+                    if not any(a.startswith("--fingerprint-gpu-renderer") for a in extra_args):
+                        extra_args.append("--fingerprint-gpu-renderer=ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)")
+                    if not any(a.startswith("--fingerprint-gpu-vendor") for a in extra_args):
+                        extra_args.append("--fingerprint-gpu-vendor=Google Inc. (Apple)")
+
+
             raw_proxy = profile.get("proxy") or None
             proxy = _normalize_proxy(raw_proxy) if raw_proxy else None
             if proxy:
@@ -959,6 +1004,8 @@ class BrowserManager:
                     extra_args.append("--test-type")
 
             extra_args.extend(net_args)
+            if profile.get("user_agent"):
+                extra_args.append(f"--user-agent={str(profile['user_agent']).strip()}")
 
             launch_options: dict[str, Any] = {
                 "user_data_dir": profile["user_data_dir"],
@@ -1028,6 +1075,29 @@ class BrowserManager:
                         if len(loc_parts) > 1:
                             cam_config["locale:region"] = loc_parts[1]
 
+                    # User-Agent coherence:
+                    # When Camoufox is started by Playwright, BrowserForge by default generates a synthetic
+                    # "Firefox/<ver>" UA which lacks Camoufox identity and causes bot detectors (e.g. fingerprint-scan.com)
+                    # to abort font detection (reporting Fonts: "NA") and penalize browser coherence (+5 medium).
+                    # If the user explicitly configured a user_agent, respect it; otherwise, enforce Camoufox's
+                    # authentic native User-Agent matching the target OS and kernel version.
+                    if profile.get("user_agent"):
+                        custom_ua = str(profile["user_agent"]).strip()
+                        cam_config["navigator.userAgent"] = custom_ua
+                        cam_config["headers.User-Agent"] = custom_ua
+                    else:
+                        eff_clean = str(effective_kernel or "152.0.4-beta.31").lstrip("vV")
+                        ff_major = eff_clean.split(".")[0]
+                        if target_os == "macos":
+                            platform_str = "Macintosh; Intel Mac OS X 10.15"
+                        elif target_os == "windows":
+                            platform_str = "Windows NT 10.0; Win64; x64"
+                        else:
+                            platform_str = "X11; Linux x86_64"
+                        native_ua = f"Mozilla/5.0 ({platform_str}; rv:{ff_major}.0) Gecko/20100101 Camoufox/{eff_clean}"
+                        cam_config["navigator.userAgent"] = native_ua
+                        cam_config["headers.User-Agent"] = native_ua
+
                     # Hardware & WebGL & Privacy configurations
                     if profile.get("cpu_cores"):
                         cam_config["navigator.hardwareConcurrency"] = int(profile["cpu_cores"])
@@ -1052,7 +1122,7 @@ class BrowserManager:
 
                     # Deterministic seeds and noise control
                     seed = int(profile.get("fingerprint_seed") or 0)
-                    if profile.get("canvas_noise", True) is False:
+                    if not profile.get("canvas_noise", False):
                         cam_config["canvas:seed"] = 0
                     elif seed:
                         cam_config["canvas:seed"] = seed
@@ -1074,12 +1144,48 @@ class BrowserManager:
                     if webrtc_ip:
                         cam_config["webrtc:ipv4"] = webrtc_ip
 
-                    # Screen dimensions for Firefox fingerprint spoofing
-                    sw = profile.get("screen_width", 1920)
-                    sh = profile.get("screen_height", 1080)
+                    # Screen & Window geometry coherence:
+                    # Provide a fully consistent set of dimensions so Camoufox doesn't merge
+                    # mismatched random secondary screen values (e.g. availWidth: 960 vs width: 1920).
+                    # Window outer dimensions must strictly fit within the available screen area
+                    # to prevent the fatal 'window.outerWidth > screen.availWidth' anomaly.
+                    sw = profile.get("screen_width")
+                    sh = profile.get("screen_height")
                     if sw and sh:
+                        sw = int(sw)
+                        sh = int(sh)
                         cam_config["screen.width"] = sw
                         cam_config["screen.height"] = sh
+                        cam_config["screen.availWidth"] = sw
+                        cam_config["screen.availLeft"] = 0
+                        if target_os == "macos":
+                            cam_config["screen.availTop"] = 25
+                            cam_config["screen.availHeight"] = max(sh - 25, 500)
+                            cam_config["screen.colorDepth"] = 30
+                            cam_config["screen.pixelDepth"] = 30
+                        elif target_os == "windows":
+                            cam_config["screen.availTop"] = 0
+                            cam_config["screen.availHeight"] = max(sh - 40, 500)
+                            cam_config["screen.colorDepth"] = 24
+                            cam_config["screen.pixelDepth"] = 24
+                        else:
+                            cam_config["screen.availTop"] = 0
+                            cam_config["screen.availHeight"] = sh
+                            cam_config["screen.colorDepth"] = 24
+                            cam_config["screen.pixelDepth"] = 24
+
+                        avail_w = cam_config["screen.availWidth"]
+                        avail_h = cam_config["screen.availHeight"]
+                        cam_config["window.outerWidth"] = min(avail_w, 1440 if avail_w >= 1440 else avail_w)
+                        cam_config["window.outerHeight"] = min(avail_h, 920 if avail_h >= 920 else avail_h)
+                        cam_config["window.screenX"] = 0
+                        cam_config["window.screenY"] = cam_config["screen.availTop"]
+
+                    # Media devices: guarantee mock devices to avoid empty device tell
+                    cam_config.setdefault("mediaDevices:enabled", True)
+                    cam_config.setdefault("mediaDevices:micros", 1)
+                    cam_config.setdefault("mediaDevices:webcams", 1)
+                    cam_config.setdefault("mediaDevices:speakers", 0)
 
                     camoufox_options: dict[str, Any] = {
                         "headless": launch_options.get("headless", False),
@@ -1091,8 +1197,37 @@ class BrowserManager:
                         # we've already resolved timezone/locale via geoip ourselves.
                         "i_know_what_im_doing": True,
                     }
-                    if webgl_vendor and webgl_renderer:
-                        camoufox_options["webgl_config"] = (str(webgl_vendor), str(webgl_renderer))
+                    cf_os = {"macos": "mac", "windows": "win", "linux": "lin"}.get(target_os, "mac")
+                    try:
+                        from camoufox.utils import sample_webgl, sample_webgl_for_screen, merge_into
+                        webgl_fp = None
+                        if webgl_vendor and webgl_renderer:
+                            try:
+                                webgl_fp = sample_webgl(cf_os, str(webgl_vendor), str(webgl_renderer))
+                                camoufox_options["webgl_config"] = (str(webgl_vendor), str(webgl_renderer))
+                            except Exception:
+                                webgl_fp = None
+                        if webgl_fp is None:
+                            webgl_fp = sample_webgl_for_screen(cf_os, sw or 1920, sh or 1080)
+
+                        webgl_fp.pop("webGl2Enabled", None)
+                        if webgl_vendor:
+                            webgl_fp["webGl:vendor"] = str(webgl_vendor)
+                        if webgl_renderer:
+                            webgl_fp["webGl:renderer"] = str(webgl_renderer)
+
+                        # Fix Camoufox mock bug: parameter 34047 (MAX_TEXTURE_MAX_ANISOTROPY_EXT) is None in database,
+                        # causing contradiction with supported EXT_texture_filter_anisotropic extension
+                        if "webGl:parameters" in webgl_fp and isinstance(webgl_fp["webGl:parameters"], dict):
+                            webgl_fp["webGl:parameters"]["34047"] = 16
+                        if "webGl2:parameters" in webgl_fp and isinstance(webgl_fp["webGl2:parameters"], dict):
+                            webgl_fp["webGl2:parameters"]["34047"] = 16
+                        merge_into(cam_config, webgl_fp)
+                        if webgl_vendor and webgl_renderer:
+                            camoufox_options["webgl_config"] = (str(webgl_vendor), str(webgl_renderer))
+                    except Exception as exc:
+                        logger.debug("Failed to pre-sample webgl config: %s", exc)
+
                     if effective_kernel:
                         # If effective_kernel is a file path, pass executable_path.
                         # If it is a version identifier (e.g. '152.0.4'), pass browser.
@@ -1118,9 +1253,13 @@ class BrowserManager:
                         camoufox_options["env"] = launch_options.get("env")
                         camoufox_options["virtual_display"] = f":{display}"
 
-                    # Explicitly include essential fonts so setFontList doesn't lock out standard monospace fonts
-                    from .camoufox_policies import get_camoufox_recommended_fonts, get_camoufox_user_prefs
-                    camoufox_options["fonts"] = get_camoufox_recommended_fonts(target_os)
+                    # Fonts: Only pass custom fonts if user explicitly configured custom fonts list.
+                    # Otherwise, DO NOT set camoufox_options["fonts"], letting Camoufox automatically
+                    # generate its rich, 200+ OS font subset (preventing Fonts: NA / 0 fonts detected).
+                    from .camoufox_policies import get_camoufox_user_prefs
+                    custom_fonts = profile.get("fonts") or profile.get("custom_fonts")
+                    if isinstance(custom_fonts, list) and custom_fonts:
+                        camoufox_options["fonts"] = custom_fonts
 
                     # User preferences for search engine, keyword search, cookies, fonts, and session restore
                     cam_user_prefs = get_camoufox_user_prefs(
@@ -1165,6 +1304,7 @@ class BrowserManager:
                         await pw.stop()
                         raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc
                 else:
+                    _cleanup_stale_chromium_locks(profile["user_data_dir"])
                     for attempt in range(1, CDP_START_ATTEMPTS + 1):
                         cdp_port = self._reserve_cdp_port()
 
@@ -1254,20 +1394,52 @@ class BrowserManager:
                     except Exception as exc:
                         logger.debug("Clipboard init failed on existing page: %s", exc)
 
-            # Inject hardware & privacy overrides for Chromium profiles
-            if profile.get("browser_type") != "camoufox":
+            # Inject hardware & privacy overrides for generic unpatched Chromium profiles.
+            # CloakBrowser natively implements these via C++ flags (--fingerprint-hardware-concurrency,
+            # --fingerprint-device-memory, --fingerprint-gpu-renderer, etc.), so avoid detectable
+            # JavaScript prototype monkey patching.
+            if profile.get("browser_type") not in ("camoufox", "cloakbrowser"):
                 init_overrides: list[str] = []
+                native_getter_helper = """
+                    const _makeNativeGetter = (val, name) => {
+                        const fn = () => val;
+                        Object.defineProperty(fn, 'name', { value: 'get ' + name, configurable: true });
+                        fn.toString = () => 'function get ' + name + '() { [native code] }';
+                        return fn;
+                    };
+                """
+                has_getter_helper = False
+
                 if profile.get("cpu_cores"):
+                    if not has_getter_helper:
+                        init_overrides.append(native_getter_helper)
+                        has_getter_helper = True
+                    cores = int(profile["cpu_cores"])
                     init_overrides.append(
-                        f"Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {{ get: () => {int(profile['cpu_cores'])}, configurable: true }});"
+                        f"Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {{ get: _makeNativeGetter({cores}, 'hardwareConcurrency'), configurable: true, enumerable: true }});"
                     )
                 if profile.get("memory_gb"):
+                    if not has_getter_helper:
+                        init_overrides.append(native_getter_helper)
+                        has_getter_helper = True
+                    mem = int(profile["memory_gb"])
                     init_overrides.append(
-                        f"Object.defineProperty(Navigator.prototype, 'deviceMemory', {{ get: () => {int(profile['memory_gb'])}, configurable: true }});"
+                        f"Object.defineProperty(Navigator.prototype, 'deviceMemory', {{ get: _makeNativeGetter({mem}, 'deviceMemory'), configurable: true, enumerable: true }});"
                     )
                 if profile.get("do_not_track"):
+                    if not has_getter_helper:
+                        init_overrides.append(native_getter_helper)
+                        has_getter_helper = True
                     init_overrides.append(
-                        "Object.defineProperty(Navigator.prototype, 'doNotTrack', { get: () => '1', configurable: true });"
+                        "Object.defineProperty(Navigator.prototype, 'doNotTrack', { get: _makeNativeGetter('1', 'doNotTrack'), configurable: true, enumerable: true });"
+                    )
+                if profile.get("user_agent"):
+                    if not has_getter_helper:
+                        init_overrides.append(native_getter_helper)
+                        has_getter_helper = True
+                    ua_val = json.dumps(str(profile["user_agent"]).strip())
+                    init_overrides.append(
+                        f"Object.defineProperty(Navigator.prototype, 'userAgent', {{ get: _makeNativeGetter({ua_val}, 'userAgent'), configurable: true, enumerable: true }});"
                     )
                 wv = profile.get("webgl_vendor")
                 wr = profile.get("webgl_renderer")
@@ -1282,8 +1454,8 @@ class BrowserManager:
                     elif any(k in r_lower for k in ("apple", "m1", "m2", "m3", "m4")):
                         wv = "Apple"
                 if wv or wr:
-                    v = json.dumps(wv or "")
-                    r = json.dumps(wr or "")
+                    v = json.dumps(wv) if wv else "null"
+                    r = json.dumps(wr) if wr else "null"
                     init_overrides.append(f"""
                         (() => {{
                             const v = {v};
@@ -1291,11 +1463,18 @@ class BrowserManager:
                             const patch = (proto) => {{
                                 if (!proto || !proto.getParameter) return;
                                 const orig = proto.getParameter;
-                                proto.getParameter = function(param) {{
+                                const patched = function getParameter(param) {{
                                     if (v && param === 37445) return v;
                                     if (r && param === 37446) return r;
+                                    if (param === 34047) {{
+                                        const res = orig.apply(this, arguments);
+                                        return (res !== null && res !== undefined) ? res : 16;
+                                    }}
                                     return orig.apply(this, arguments);
                                 }};
+                                Object.defineProperty(patched, 'name', {{ value: 'getParameter', configurable: true }});
+                                patched.toString = () => 'function getParameter() {{ [native code] }}';
+                                proto.getParameter = patched;
                             }};
                             if (typeof WebGLRenderingContext !== 'undefined') patch(WebGLRenderingContext.prototype);
                             if (typeof WebGL2RenderingContext !== 'undefined') patch(WebGL2RenderingContext.prototype);
@@ -1405,6 +1584,7 @@ class BrowserManager:
 
         self._initializing.add(profile_id)
         try:
+            _cleanup_stale_chromium_locks(user_data_dir)
             await self._setup_google_default(
                 user_data_dir,
                 name=name,
@@ -1951,6 +2131,13 @@ class BrowserManager:
         platform = "macos" if self.runtime.host_os == "macos" else "windows"
         args.append(f"--fingerprint-platform={platform}")
 
+        # Noise perturbation control:
+        # Default canvas noise perturbation triggers canvasIntegrity bot signals
+        # (pixelRoundTripChanged and textSerializationRoundTripChanged) in modern detectors.
+        # Passing --fingerprint-noise=false disables synthetic noise and produces clean canvas reads.
+        if not profile.get("canvas_noise", False):
+            args.append("--fingerprint-noise=false")
+
         # Apple GPU models are selected automatically by the seeded macOS
         # persona. Windows vendor-family overrides are incoherent on macOS.
         gpu_family = profile.get("gpu_family", "auto")
@@ -1967,6 +2154,24 @@ class BrowserManager:
                     args.append("--fingerprint-gpu-vendor=Intel")
                 elif any(k in wv_combined for k in ("amd", "radeon")):
                     args.append("--fingerprint-gpu-vendor=AMD")
+
+        # Native hardware concurrency & device memory
+        cpu_cores = profile.get("cpu_cores")
+        if cpu_cores:
+            args.append(f"--fingerprint-hardware-concurrency={int(cpu_cores)}")
+        memory_gb = profile.get("memory_gb")
+        if memory_gb:
+            args.append(f"--fingerprint-device-memory={int(memory_gb)}")
+
+        # WebGL renderer override
+        wr = profile.get("webgl_renderer")
+        if wr:
+            args.append(f"--fingerprint-gpu-renderer={str(wr).strip()}")
+
+        wv = profile.get("webgl_vendor")
+        if wv and self.runtime.host_os == "macos":
+            args.append(f"--fingerprint-gpu-vendor={str(wv).strip()}")
+
 
         if profile.get("do_not_track", False):
             args.append("--enable-do-not-track")
