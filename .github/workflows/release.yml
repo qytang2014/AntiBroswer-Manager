@@ -22,7 +22,7 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
-  REGISTRY_IMAGE: cloakhq/cloakbrowser-manager
+  REGISTRY_IMAGE: qytang2014/antibrowser-manager
 
 jobs:
   version:
@@ -142,7 +142,7 @@ jobs:
       - name: Build .dmg
         run: |
           APP="dist_native/AntiBrowser-Manager.app"
-          DMG="dist_native/CloakBrowser-Manager-${{ needs.version.outputs.version }}-universal.dmg"
+          DMG="dist_native/AntiBrowser-Manager-${{ needs.version.outputs.version }}-universal.dmg"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
           STAGE="$(mktemp -d)"
           cp -R "$APP" "$STAGE/"
@@ -587,7 +587,7 @@ jobs:
             echo
             echo "**Windows:** if SmartScreen warns, click **More info → Run anyway**."
             echo
-            echo "_The stealth Chromium engine downloads on first launch._"
+            echo "_Dual anti-detect engines: CloakBrowser (Chromium) & Camoufox (Firefox) are supported out-of-the-box._"
             echo
             echo "_Verify your download against \`SHA256SUMS\` (attached): \`shasum -a 256 -c SHA256SUMS\`._"
           } >> notes.md

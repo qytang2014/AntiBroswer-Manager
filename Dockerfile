@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Production image
 FROM python:3.12-slim
 
-# Chromium system deps
+# Chromium & Firefox (Camoufox) system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libdbus-1-3 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 \
@@ -19,11 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 libgtk-3-0 libpangocairo-1.0-0 libcairo-gobject2 \
     libgdk-pixbuf-2.0-0 libxss1 libxtst6 fonts-liberation \
     libgl1-mesa-dri libegl-mesa0 \
+    libdbus-glib-1-2 libxt6 libpci3 \
     procps wget ca-certificates xclip \
     && rm -rf /var/lib/apt/lists/*
 
-# Playwright system deps (matches test-infra)
-RUN pip install --no-cache-dir playwright && playwright install-deps chromium 2>/dev/null || true && pip uninstall -y playwright
+# Playwright system deps (chromium & firefox)
+RUN pip install --no-cache-dir playwright && playwright install-deps chromium firefox 2>/dev/null || true && pip uninstall -y playwright
 
 # Windows core fonts (Arial, Times New Roman, Verdana, etc.)
 RUN echo "deb http://deb.debian.org/debian trixie contrib" >> /etc/apt/sources.list.d/contrib.list \
