@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   Loader2,
   X,
@@ -14,7 +14,7 @@ import {
   Cloud,
 } from "lucide-react";
 import { api, type SystemStatus, type SettingsUpdate } from "../lib/api";
-import { BackupRestorePanel } from "./BackupRestorePanel";
+import { BackupRestorePanel, type BackupRestorePanelHandle } from "./BackupRestorePanel";
 import { CustomSelect, CustomSelectOption } from "./common/CustomSelect";
 
 const RELEASE_CHANNEL_OPTIONS: CustomSelectOption<"stable" | "preview">[] = [
@@ -54,31 +54,45 @@ export function SettingsPanel({
   const [channel, setChannel] = useState<"stable" | "preview">("stable");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const backupPanelRef = useRef<BackupRestorePanelHandle>(null);
+
+  const loadSettings = async () => {
+    try {
+      const s = await api.getSettings();
+      setChannel(s.release_channel === "preview" ? "preview" : "stable");
+      setLicenses(
+        s.licenses?.map((l) => ({
+          id: l.id,
+          name: l.name,
+          key: "", // Keep empty to avoid accidental overwriting; placeholder holds masked value
+          placeholder: l.key_masked,
+          is_default: l.is_default,
+        })) || []
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load settings");
+    }
+  };
 
   useEffect(() => {
-    api
-      .getSettings()
-      .then((s) => {
-        setChannel(s.release_channel === "preview" ? "preview" : "stable");
-        setLicenses(
-          s.licenses?.map((l) => ({
-            id: l.id,
-            name: l.name,
-            key: "", // Keep empty to avoid accidental overwriting; placeholder holds masked value
-            placeholder: l.key_masked,
-            is_default: l.is_default,
-          })) || []
-        );
-      })
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Failed to load settings")
-      );
+    loadSettings();
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setSuccessMessage(null);
     try {
+      if (activeTab === "backup") {
+        const ok = await backupPanelRef.current?.saveConfig();
+        if (ok) {
+          setSuccessMessage("备份设置已成功保存");
+          setTimeout(() => setSuccessMessage(null), 3000);
+        }
+        return;
+      }
+
       const payloadLicenses = licenses.map((l) => ({
         id: l.id,
         name: l.name,
@@ -93,7 +107,9 @@ export function SettingsPanel({
 
       const status = await api.updateSettings(payload);
       onSaved(status);
-      onClose();
+      await loadSettings();
+      setSuccessMessage("设置已成功保存");
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save settings");
     } finally {
@@ -505,18 +521,35 @@ export function SettingsPanel({
           )}
 
           {/* TAB 4: Backup & Restore */}
-          {activeTab === "backup" && <BackupRestorePanel />}
+          <div style={{ display: activeTab === "backup" ? "block" : "none" }}>
+            <BackupRestorePanel ref={backupPanelRef} />
+          </div>
 
           {error && <p className="text-xs text-red-400">{error}</p>}
+          {successMessage && (
+            <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 rounded-lg">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <span>{successMessage}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-border px-5 py-3.5 bg-surface-1 shrink-0">
-          <div className="text-[11px] text-gray-500">
-            {activeTab === "cloakbrowser" && "配置仅作用于 CloakBrowser 内核"}
-            {activeTab === "camoufox" && "Camoufox 引擎免授权开箱即用"}
-            {activeTab === "general" && "系统状态正常运行中"}
-            {activeTab === "backup" && "备份包受 AES-256-GCM 端到端加密保护（配置更改请在面板内点击「保存所有备份与加密配置」）"}
+          <div className="text-[11px] text-gray-500 flex items-center gap-2">
+            {successMessage ? (
+              <span className="text-emerald-400 flex items-center gap-1 font-medium">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {successMessage}
+              </span>
+            ) : (
+              <>
+                {activeTab === "cloakbrowser" && "配置仅作用于 CloakBrowser 内核"}
+                {activeTab === "camoufox" && "Camoufox 引擎免授权开箱即用"}
+                {activeTab === "general" && "系统状态正常运行中"}
+                {activeTab === "backup" && "备份包受 AES-256-GCM 端到端加密保护"}
+              </>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -525,19 +558,17 @@ export function SettingsPanel({
               disabled={saving}
               className="btn-secondary text-xs"
             >
-              {activeTab === "backup" ? "关闭窗口 (Close)" : "取消 / Close"}
+              取消 / Close
             </button>
-            {activeTab !== "backup" && (
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="btn-primary text-xs flex items-center gap-1.5"
-              >
-                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                <span>{saving ? "保存中…" : "保存设置"}</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="btn-primary text-xs flex items-center gap-1.5"
+            >
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <span>{saving ? "保存中…" : activeTab === "backup" ? "保存备份设置" : "保存设置"}</span>
+            </button>
           </div>
         </div>
       </div>

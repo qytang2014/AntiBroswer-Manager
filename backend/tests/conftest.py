@@ -109,11 +109,13 @@ def app_client(tmp_db: Path, monkeypatch: pytest.MonkeyPatch):
     from backend import main
 
     # API tests exercise the existing Linux Docker contract on every host OS.
-    monkeypatch.setattr(
-        main.browser_mgr,
-        "runtime",
-        RuntimeConfig("linux", "docker", "vnc", tmp_db),
-    )
+    dummy_runtime = RuntimeConfig("linux", "docker", "vnc", tmp_db)
+    monkeypatch.setattr(main.browser_mgr, "runtime", dummy_runtime)
+    monkeypatch.setattr("backend.runtime.resolve_runtime", lambda *a, **kw: dummy_runtime)
+    monkeypatch.setattr("backend.settings_store.resolve_runtime", lambda *a, **kw: dummy_runtime)
+    monkeypatch.setattr("backend.backup.manager.resolve_runtime", lambda *a, **kw: dummy_runtime)
+    monkeypatch.setattr("backend.backup.credentials.resolve_runtime", lambda *a, **kw: dummy_runtime)
+    monkeypatch.setattr("backend.backup.archiver.resolve_runtime", lambda *a, **kw: dummy_runtime)
     monkeypatch.setattr(main.browser_mgr.vnc, "enabled", True)
 
     # Patch lifespan-called methods to avoid host KasmVNC/process requirements.

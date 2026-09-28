@@ -61,9 +61,13 @@ class BackupManager:
             logger.debug("Failed sweeping stale backup temp dirs: %s", exc)
 
     def get_config(self) -> dict[str, Any]:
-        """Return the current backup configuration with masked/stripped credentials."""
+        """Return the current backup configuration with masked/stripped credentials and env fallbacks."""
         stored = load_settings().get("backup", {})
-        backend = stored.get("backend")
+        backend = (
+            stored.get("backend")
+            or os.environ.get("ANTIBROWSER_BACKUP_BACKEND")
+            or os.environ.get("BACKUP_BACKEND")
+        )
 
         def _check_cred(key: str) -> bool:
             try:
@@ -71,24 +75,34 @@ class BackupManager:
             except Exception:
                 return False
 
+        def _resolve(field: str, *env_keys: str, default: Any = None) -> Any:
+            val = stored.get(field)
+            if val is not None and val != "":
+                return val
+            for ek in env_keys:
+                eval_ = os.environ.get(ek)
+                if eval_ is not None and eval_ != "":
+                    return eval_
+            return default
+
         return {
             "backend": backend,
-            "webdav_url": stored.get("webdav_url"),
-            "webdav_username": stored.get("webdav_username"),
+            "webdav_url": _resolve("webdav_url", "ANTIBROWSER_BACKUP_WEBDAV_URL", "BACKUP_WEBDAV_URL"),
+            "webdav_username": _resolve("webdav_username", "ANTIBROWSER_BACKUP_WEBDAV_USERNAME", "BACKUP_WEBDAV_USERNAME"),
             "webdav_password_set": _check_cred("webdav_password"),
-            "webdav_remote_path": stored.get("webdav_remote_path", "/antibrowser_backups"),
-            "webdav_skip_ssl": bool(stored.get("webdav_skip_ssl", False)),
-            "s3_endpoint_url": stored.get("s3_endpoint_url"),
-            "s3_access_key": stored.get("s3_access_key"),
+            "webdav_remote_path": _resolve("webdav_remote_path", "ANTIBROWSER_BACKUP_WEBDAV_REMOTE_PATH", "BACKUP_WEBDAV_REMOTE_PATH", default="/antibrowser_backups"),
+            "webdav_skip_ssl": bool(_resolve("webdav_skip_ssl", "ANTIBROWSER_BACKUP_WEBDAV_SKIP_SSL", "BACKUP_WEBDAV_SKIP_SSL", default=False)),
+            "s3_endpoint_url": _resolve("s3_endpoint_url", "ANTIBROWSER_BACKUP_S3_ENDPOINT_URL", "BACKUP_S3_ENDPOINT_URL"),
+            "s3_access_key": _resolve("s3_access_key", "ANTIBROWSER_BACKUP_S3_ACCESS_KEY", "BACKUP_S3_ACCESS_KEY"),
             "s3_secret_key_set": _check_cred("s3_secret_key"),
-            "s3_bucket": stored.get("s3_bucket"),
-            "s3_prefix": stored.get("s3_prefix", "antibrowser_backups"),
-            "s3_region": stored.get("s3_region", "us-east-1"),
-            "encrypt_enabled": bool(stored.get("encrypt_enabled", False)),
+            "s3_bucket": _resolve("s3_bucket", "ANTIBROWSER_BACKUP_S3_BUCKET", "BACKUP_S3_BUCKET"),
+            "s3_prefix": _resolve("s3_prefix", "ANTIBROWSER_BACKUP_S3_PREFIX", "BACKUP_S3_PREFIX", default="antibrowser_backups"),
+            "s3_region": _resolve("s3_region", "ANTIBROWSER_BACKUP_S3_REGION", "BACKUP_S3_REGION", default="us-east-1"),
+            "encrypt_enabled": bool(_resolve("encrypt_enabled", "ANTIBROWSER_BACKUP_ENCRYPT_ENABLED", "BACKUP_ENCRYPT_ENABLED", default=False)),
             "encrypt_password_set": _check_cred("encrypt_password"),
-            "auto_backup_interval_hours": int(stored.get("auto_backup_interval_hours", 0)),
-            "retain_count": int(stored.get("retain_count", 10)),
-            "include_browser_state": bool(stored.get("include_browser_state", False)),
+            "auto_backup_interval_hours": int(_resolve("auto_backup_interval_hours", "ANTIBROWSER_BACKUP_AUTO_INTERVAL_HOURS", "BACKUP_AUTO_INTERVAL_HOURS", default=0)),
+            "retain_count": int(_resolve("retain_count", "ANTIBROWSER_BACKUP_RETAIN_COUNT", "BACKUP_RETAIN_COUNT", default=10)),
+            "include_browser_state": bool(_resolve("include_browser_state", "ANTIBROWSER_BACKUP_INCLUDE_BROWSER_STATE", "BACKUP_INCLUDE_BROWSER_STATE", default=False)),
             "last_backup_at": stored.get("last_backup_at"),
         }
 
@@ -429,6 +443,7 @@ class BackupManager:
 
                     # Step 5: Create a safety snapshot of current data before overwriting
                     progress_cb(88, "正在创建当前系统状态的安全快照...")
+                    runtime = resolve_runtime()
                     data_dir = runtime.data_dir
                     snapshot_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
                     snapshot_dir = data_dir / "snapshots" / f"pre_restore_{snapshot_time}"
@@ -445,9 +460,15 @@ class BackupManager:
                         shutil.copy2(staging_dir / "profiles.db", data_dir / "profiles.db")
 
                     if (staging_dir / "settings.json").exists():
-                        # Preserve currently active backup configuration so remote connectivity remains intact
+                        # Preserve currently active backup configuration so remote connectivity remains intact,
+                        # but if current runtime has no configured backend, retain the restored backup configuration from archive
                         restored_settings = json.loads((staging_dir / "settings.json").read_text(encoding="utf-8"))
-                        restored_settings["backup"] = cfg
+                        restored_backup = restored_settings.get("backup", {})
+                        if cfg and cfg.get("backend"):
+                            merged_backup = {**restored_backup, **cfg}
+                        else:
+                            merged_backup = restored_backup
+                        restored_settings["backup"] = merged_backup
                         save_settings(restored_settings)
 
                     if (staging_dir / "extensions").is_dir():
@@ -464,6 +485,9 @@ class BackupManager:
 
                     # Step 7: Re-initialize database connections
                     db.init_db()
+
+                    if self.browser_mgr:
+                        self.browser_mgr.resolve_binary_status()
 
                     self._publish_event(
                         task_id,

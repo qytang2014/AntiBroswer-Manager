@@ -152,8 +152,29 @@ describe("SettingsPanel Dual-Engine Tabs", () => {
         ],
       });
       expect(onSaved).toHaveBeenCalledWith(mockSystemStatus);
-      expect(onClose).toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getAllByText(/设置已成功保存/).length).toBeGreaterThan(0);
     });
+  });
+
+  it("closes panel when Cancel is clicked", async () => {
+    const onClose = vi.fn();
+
+    render(
+      <SettingsPanel
+        onClose={onClose}
+        onSaved={vi.fn()}
+        systemStatus={mockSystemStatus}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Team Pro")).toBeTruthy();
+    });
+
+    const cancelBtn = screen.getByRole("button", { name: /取消 \/ Close/ });
+    fireEvent.click(cancelBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("adds and removes licenses in CloakBrowser tab", async () => {

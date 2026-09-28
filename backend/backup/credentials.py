@@ -127,9 +127,24 @@ def _save_fallback_store(store: dict[str, str]) -> None:
 
 
 def get_credential(key: str) -> str | None:
-    """Retrieve a secret credential by key from local encrypted store."""
+    """Retrieve a secret credential by key from local encrypted store with env var and keychain fallbacks."""
     store = _load_fallback_store()
-    return store.get(key)
+    val = store.get(key)
+    if val:
+        return val
+
+    # 1. Environment variable fallback (useful for Docker, CI, container updates)
+    env_map = {
+        "webdav_password": ("ANTIBROWSER_BACKUP_WEBDAV_PASSWORD", "BACKUP_WEBDAV_PASSWORD"),
+        "s3_secret_key": ("ANTIBROWSER_BACKUP_S3_SECRET_KEY", "BACKUP_S3_SECRET_KEY"),
+        "encrypt_password": ("ANTIBROWSER_BACKUP_ENCRYPT_PASSWORD", "BACKUP_ENCRYPT_PASSWORD"),
+    }
+    for env_name in env_map.get(key, ()):
+        env_val = os.environ.get(env_name)
+        if env_val:
+            return env_val
+
+    return None
 
 
 def set_credential(key: str, value: str) -> None:

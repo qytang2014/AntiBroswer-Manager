@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import {
   Cloud,
   Lock,
@@ -38,7 +38,11 @@ const BACKUP_INTERVAL_OPTIONS: CustomSelectOption<number>[] = [
   { value: 168, label: "每周一次 (7 天)", sublabel: "周度常规存档", badge: "低频", badgeVariant: "gray" },
 ];
 
-export function BackupRestorePanel() {
+export interface BackupRestorePanelHandle {
+  saveConfig: () => Promise<boolean>;
+}
+
+export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, ref) => {
   const [loading, setLoading] = useState(false);
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
@@ -179,10 +183,10 @@ export function BackupRestorePanel() {
     }
   };
 
-  const handleSaveConfig = async () => {
+  const handleSaveConfig = async (): Promise<boolean> => {
     if (encryptEnabled && encryptPassword && encryptPassword !== encryptPasswordConfirm) {
       setActionFeedback({ type: "error", message: "两次输入的端到端加密密码不一致，请重新输入。" });
-      return;
+      return false;
     }
 
     setSaving(true);
@@ -216,10 +220,26 @@ export function BackupRestorePanel() {
       setEncryptPasswordConfirm("");
       setActionFeedback({ type: "success", message: "备份与恢复设置已成功保存！" });
       refreshBackupsList();
+      return true;
     } catch (err: any) {
       setActionFeedback({ type: "error", message: err.message || "保存设置失败" });
+      return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    saveConfig: handleSaveConfig,
+  }));
+
+  const handleSelectBackend = async (newBackend: BackupBackend) => {
+    setBackend(newBackend);
+    try {
+      await api.updateBackupConfig({ backend: newBackend });
+      setConfig((prev) => (prev ? { ...prev, backend: newBackend } : null));
+    } catch {
+      // Non-fatal background sync
     }
   };
 
@@ -634,7 +654,7 @@ export function BackupRestorePanel() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setBackend("webdav")}
+                  onClick={() => handleSelectBackend("webdav")}
                   className={`px-3 py-1.5 text-xs rounded border transition-colors ${
                     backend === "webdav"
                       ? "bg-accent/10 border-accent text-accent font-medium"
@@ -645,7 +665,7 @@ export function BackupRestorePanel() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setBackend("s3")}
+                  onClick={() => handleSelectBackend("s3")}
                   className={`px-3 py-1.5 text-xs rounded border transition-colors ${
                     backend === "s3"
                       ? "bg-accent/10 border-accent text-accent font-medium"
@@ -1289,4 +1309,6 @@ export function BackupRestorePanel() {
       )}
     </div>
   );
-}
+});
+
+BackupRestorePanel.displayName = "BackupRestorePanel";

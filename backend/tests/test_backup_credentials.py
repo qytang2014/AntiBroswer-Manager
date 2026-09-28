@@ -55,3 +55,18 @@ def test_legacy_store_migration(tmp_path: Path, monkeypatch):
     assert loaded == store
     assert (tmp_path / ".secret_key").exists()
     assert credentials.get_credential("webdav_password") == "migrated_pass"
+
+
+def test_credential_env_fallback(tmp_path: Path, monkeypatch):
+    class DummyRuntime:
+        def __init__(self, d):
+            self.data_dir = d
+
+    monkeypatch.setattr("backend.backup.credentials.resolve_runtime", lambda: DummyRuntime(tmp_path))
+    monkeypatch.setenv("ANTIBROWSER_BACKUP_WEBDAV_PASSWORD", "env_secret_pass_123")
+    monkeypatch.setenv("BACKUP_S3_SECRET_KEY", "env_s3_key_456")
+
+    assert credentials.get_credential("webdav_password") == "env_secret_pass_123"
+    assert credentials.has_credential("webdav_password")
+    assert credentials.get_credential("s3_secret_key") == "env_s3_key_456"
+    assert credentials.has_credential("s3_secret_key")

@@ -52,34 +52,54 @@ def get_storage_backend(config: dict[str, Any] | None = None) -> BackupStorage:
     from .s3 import S3Storage
     from .webdav import WebDAVStorage
 
-    cfg = config or load_settings().get("backup", {})
-    backend_type = cfg.get("backend")
+    cfg = dict(config) if config is not None else dict(load_settings().get("backup", {}))
+    backend_type = (
+        cfg.get("backend")
+        or os.environ.get("ANTIBROWSER_BACKUP_BACKEND")
+        or os.environ.get("BACKUP_BACKEND")
+    )
 
     if backend_type == "webdav":
-        url = cfg.get("webdav_url")
+        url = (
+            cfg.get("webdav_url")
+            or os.environ.get("ANTIBROWSER_BACKUP_WEBDAV_URL")
+            or os.environ.get("BACKUP_WEBDAV_URL")
+        )
         if not url:
             raise ValueError("WebDAV URL is not configured")
-        pwd = cfg.get("webdav_password") or credentials.get_credential("webdav_password") or ""
+        pwd = (
+            cfg.get("webdav_password")
+            or credentials.get_credential("webdav_password")
+            or ""
+        )
         return WebDAVStorage(
             url=url,
-            username=cfg.get("webdav_username", ""),
+            username=cfg.get("webdav_username") or os.environ.get("ANTIBROWSER_BACKUP_WEBDAV_USERNAME") or os.environ.get("BACKUP_WEBDAV_USERNAME") or "",
             password=pwd,
-            remote_path=cfg.get("webdav_remote_path", "/antibrowser_backups"),
+            remote_path=cfg.get("webdav_remote_path") or os.environ.get("ANTIBROWSER_BACKUP_WEBDAV_REMOTE_PATH") or os.environ.get("BACKUP_WEBDAV_REMOTE_PATH") or "/antibrowser_backups",
             skip_ssl_verify=bool(cfg.get("webdav_skip_ssl", False)),
         )
 
     if backend_type == "s3":
-        bucket = cfg.get("s3_bucket")
+        bucket = (
+            cfg.get("s3_bucket")
+            or os.environ.get("ANTIBROWSER_BACKUP_S3_BUCKET")
+            or os.environ.get("BACKUP_S3_BUCKET")
+        )
         if not bucket:
             raise ValueError("S3 Bucket name is not configured")
-        secret = cfg.get("s3_secret_key") or credentials.get_credential("s3_secret_key") or ""
+        secret = (
+            cfg.get("s3_secret_key")
+            or credentials.get_credential("s3_secret_key")
+            or ""
+        )
         return S3Storage(
             bucket=bucket,
-            access_key=cfg.get("s3_access_key", ""),
+            access_key=cfg.get("s3_access_key") or os.environ.get("ANTIBROWSER_BACKUP_S3_ACCESS_KEY") or os.environ.get("BACKUP_S3_ACCESS_KEY") or "",
             secret_key=secret,
-            endpoint_url=cfg.get("s3_endpoint_url"),
-            prefix=cfg.get("s3_prefix", "antibrowser_backups"),
-            region_name=cfg.get("s3_region", "us-east-1"),
+            endpoint_url=cfg.get("s3_endpoint_url") or os.environ.get("ANTIBROWSER_BACKUP_S3_ENDPOINT_URL") or os.environ.get("BACKUP_S3_ENDPOINT_URL"),
+            prefix=cfg.get("s3_prefix") or os.environ.get("ANTIBROWSER_BACKUP_S3_PREFIX") or os.environ.get("BACKUP_S3_PREFIX") or "antibrowser_backups",
+            region_name=cfg.get("s3_region") or os.environ.get("ANTIBROWSER_BACKUP_S3_REGION") or os.environ.get("BACKUP_S3_REGION") or "us-east-1",
         )
 
     raise ValueError(f"No valid backup storage backend configured (current: {backend_type!r})")

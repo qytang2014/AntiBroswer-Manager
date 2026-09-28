@@ -14,8 +14,12 @@ RuntimeMode = Literal["native", "docker"]
 ViewerMode = Literal["native-window", "vnc"]
 
 _RUNTIME_ENV = "CLOAKBROWSER_MANAGER_RUNTIME"
-_DATA_DIR_ENV = "CLOAKBROWSER_MANAGER_DATA_DIR"
-_LEGACY_DATA_DIR_ENVS = ("CLOAKBROWSER_DATA_DIR",)
+_DATA_DIR_ENVS = (
+    "ANTIBROWSER_MANAGER_DATA_DIR",
+    "ANTIBROWSER_DATA_DIR",
+    "CLOAKBROWSER_MANAGER_DATA_DIR",
+    "CLOAKBROWSER_DATA_DIR",
+)
 
 
 @dataclass(frozen=True)
@@ -64,14 +68,10 @@ def default_data_dir(
 ) -> Path:
     """Return the Manager state directory without creating it."""
     env = os.environ if environ is None else environ
-    configured = env.get(_DATA_DIR_ENV)
-    if configured:
-        return Path(configured).expanduser()
-
-    for legacy_name in _LEGACY_DATA_DIR_ENVS:
-        legacy_value = env.get(legacy_name)
-        if legacy_value:
-            return Path(legacy_value).expanduser()
+    for var_name in _DATA_DIR_ENVS:
+        configured = env.get(var_name)
+        if configured:
+            return Path(configured).expanduser()
 
     user_home = home or Path.home()
     if host_os == "windows":
@@ -81,6 +81,49 @@ def default_data_dir(
     if host_os == "macos":
         return user_home / "Library" / "Application Support" / "AntiBrowser-Manager"
     return Path("/data")
+
+
+def migrate_legacy_data_dir(target_dir: Path, host_os: HostOS, home: Path | None = None) -> None:
+    """If target_dir is empty or missing settings, automatically copy from legacy dir if found."""
+    if (target_dir / "settings.json").exists() or (target_dir / "profiles.db").exists():
+        return
+
+    user_home = home or Path.home()
+    candidates: list[Path] = []
+    if host_os == "macos":
+        app_support = user_home / "Library" / "Application Support"
+        candidates = [
+            app_support / "CloakBrowser Manager",
+            app_support / "CloakBrowser-Manager",
+        ]
+    elif host_os == "windows":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else user_home / "AppData" / "Local"
+        candidates = [
+            base / "CloakBrowser Manager",
+            base / "CloakBrowser-Manager",
+        ]
+    else:
+        candidates = [
+            user_home / ".cloakbrowser-manager",
+            user_home / ".antibrowser-manager",
+        ]
+
+    for candidate in candidates:
+        if candidate.is_dir() and ((candidate / "settings.json").exists() or (candidate / "profiles.db").exists()):
+            try:
+                import shutil
+                target_dir.mkdir(parents=True, exist_ok=True)
+                for item in candidate.iterdir():
+                    dst = target_dir / item.name
+                    if not dst.exists():
+                        if item.is_file():
+                            shutil.copy2(item, dst)
+                        elif item.is_dir():
+                            shutil.copytree(item, dst)
+                break
+            except Exception:
+                pass
 
 
 def resolve_runtime(
@@ -109,11 +152,13 @@ def resolve_runtime(
         )
 
     viewer_mode: ViewerMode = "vnc" if runtime_mode == "docker" else "native-window"
+    data_dir = default_data_dir(host_os, env, home)
+    migrate_legacy_data_dir(data_dir, host_os, home)
     cfg = RuntimeConfig(
         host_os=host_os,
         runtime_mode=runtime_mode,
         viewer_mode=viewer_mode,
-        data_dir=default_data_dir(host_os, env, home),
+        data_dir=data_dir,
     )
     patch_kernel_data_dirs(cfg.data_dir)
     return cfg
