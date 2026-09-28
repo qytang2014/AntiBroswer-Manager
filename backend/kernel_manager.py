@@ -183,56 +183,13 @@ def list_available_kernels() -> dict[str, Any]:
                 "size_mb": item["size_mb"],
             })
 
-    # 5. Add Camoufox versions (Phase 3)
+    # 5. Add Camoufox versions
     try:
-        from camoufox.pkgman import list_available_versions
-        camoufox_versions = list_available_versions(include_prerelease=False)[:5]
-        
-        from .runtime import resolve_runtime
-        camoufox_cache_dir = resolve_runtime().data_dir / "kernels" / "camoufox" / "browsers"
-        
-        if not camoufox_versions:
-            camoufox_versions = [{"version": "130.0", "display": "130.0", "asset_size": None}]
-            
-        for cv in camoufox_versions:
-            cv_ver = getattr(cv, "display", getattr(cv, "version", "Unknown"))
-            cv_pure_ver = getattr(cv.version, "full_string", str(cv.version))
-            camoufox_ready = False
-            camoufox_bin_path = None
-            
-            import glob
-            clean_cv = cv_pure_ver.lstrip("v")
-            installed_match = (
-                glob.glob(f"{camoufox_cache_dir}/*/*{clean_cv}*")
-                or glob.glob(f"{camoufox_cache_dir}/*{clean_cv}*")
-                or glob.glob(f"{camoufox_cache_dir}/*/{cv_pure_ver}*")
-            )
-            if installed_match:
-                camoufox_ready = True
-                camoufox_bin_path = installed_match[0]
-            
-            size_mb = None
-            if getattr(cv, "asset_size", None):
-                size_mb = round(cv.asset_size / (1024 * 1024), 1)
-
-            is_active_camoufox = camoufox_ready and not any(
-                k.get("browser_type") == "camoufox" and k.get("is_active") for k in kernels
-            )
-
-            kernels.append({
-                "version": cv_ver,
-                "tier": "free",
-                "browser_type": "camoufox",
-                "name": f"Camoufox {cv_ver}",
-                "description": "基于 Firefox 的指纹浏览器内核 (全平台指纹随机化)",
-                "platform": current_platform,
-                "installed": camoufox_ready,
-                "is_active": is_active_camoufox,
-                "binary_path": str(camoufox_bin_path) if camoufox_ready else None,
-                "size_mb": size_mb,
-            })
+        from .camoufox_downloader import get_camoufox_kernel_list
+        camoufox_kernels = get_camoufox_kernel_list()
+        kernels.extend(camoufox_kernels)
     except Exception as e:
-        print(f"Failed to fetch Camoufox versions: {e}")
+        logger.error("Failed to fetch Camoufox versions: %s", e)
 
     # Version sorting helper (sort numbers descending)
     def _version_sort_key(ver_str: str) -> tuple:
@@ -305,9 +262,16 @@ async def stream_download_kernel(
     candidate_urls: list[str] = []
 
     if is_pro:
+        if not license_key:
+            yield {
+                "stage": "error",
+                "message": "下载 CloakBrowser Pro 高级指纹内核需要商业授权 License。请先在『设置』中配置有效 License，或选择下载免费的官方稳定版内核。",
+                "percent": 0,
+                "browser_type": "cloakbrowser",
+            }
+            return
         download_url = f"{DOWNLOAD_BASE_URL}/api/download/{version}"
-        if license_key:
-            headers["Authorization"] = f"Bearer {license_key}"
+        headers["Authorization"] = f"Bearer {license_key}"
         headers["X-Platform"] = platform_tag
         candidate_urls.append(download_url)
     else:
@@ -545,12 +509,18 @@ async def stream_download_kernel(
 
         if not success or not part_file.exists() or part_file.stat().st_size == 0:
             logger.error("Download failed for kernel %s: %s", version, last_error)
+            err_msg = f"内核下载失败: 无法连接下载服务器，请检查代理节点配置或网络连接 ({last_error})"
+            if is_pro and "401" in str(last_error):
+                err_msg = "CloakBrowser Pro 内核下载鉴权失败 (HTTP 401)：License 密钥无效或未授权。请前往『设置』检查商业授权码，或使用免费的官方稳定版内核。"
+            elif is_pro and "403" in str(last_error):
+                err_msg = "CloakBrowser Pro 内核下载受限 (HTTP 403)：当前 License 权限不足。请前往『设置』检查商业授权码。"
             yield {
                 "stage": "error",
-                "message": f"内核下载失败: 无法连接下载服务器，请检查代理节点配置或网络连接 ({last_error})",
+                "message": err_msg,
                 "percent": 0,
                 "downloaded_bytes": downloaded_bytes,
                 "total_bytes": total_bytes,
+                "browser_type": "cloakbrowser",
             }
             return
 

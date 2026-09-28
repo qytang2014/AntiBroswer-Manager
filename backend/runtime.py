@@ -109,9 +109,86 @@ def resolve_runtime(
         )
 
     viewer_mode: ViewerMode = "vnc" if runtime_mode == "docker" else "native-window"
-    return RuntimeConfig(
+    cfg = RuntimeConfig(
         host_os=host_os,
         runtime_mode=runtime_mode,
         viewer_mode=viewer_mode,
         data_dir=default_data_dir(host_os, env, home),
     )
+    patch_kernel_data_dirs(cfg.data_dir)
+    return cfg
+
+
+def patch_kernel_data_dirs(data_dir: Path) -> None:
+    """Ensure CloakBrowser and Camoufox use data_dir/kernels instead of polluting ~/.
+
+    Redirects:
+      ~/.cloakbrowser -> data_dir/kernels/cloakbrowser
+      Camoufox cache  -> data_dir/kernels/camoufox
+    """
+    cloak_dir = data_dir / "kernels" / "cloakbrowser"
+    camou_dir = data_dir / "kernels" / "camoufox"
+    try:
+        cloak_dir.mkdir(parents=True, exist_ok=True)
+        camou_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+    os.environ["CLOAKBROWSER_CACHE_DIR"] = str(cloak_dir)
+    os.environ["CAMOUFOX_DATA_DIR"] = str(camou_dir)
+
+    # Monkey patch platformdirs for camoufox
+    try:
+        import platformdirs
+        _orig_user_cache_dir = getattr(platformdirs, "_orig_user_cache_dir", platformdirs.user_cache_dir)
+        platformdirs._orig_user_cache_dir = _orig_user_cache_dir
+        def _custom_user_cache_dir(appname=None, *args, **kwargs):
+            if appname == "camoufox":
+                return str(camou_dir)
+            return _orig_user_cache_dir(appname, *args, **kwargs)
+        platformdirs.user_cache_dir = _custom_user_cache_dir
+    except Exception:
+        pass
+
+    # Monkey patch cloakbrowser config and license
+    try:
+        import cloakbrowser.config as c_cfg
+        c_cfg.get_cache_dir = lambda: cloak_dir
+    except Exception:
+        pass
+
+    try:
+        import cloakbrowser.license as c_lic
+        import uuid
+
+        def _custom_mint_denial_file() -> str | None:
+            try:
+                denial_dir = cloak_dir / "denials"
+                denial_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                return None
+            try:
+                c_lic._sweep_stale_denials(denial_dir)
+            except Exception:
+                pass
+            return str(denial_dir / f"{uuid.uuid4().hex}.json")
+
+        c_lic.mint_denial_file = _custom_mint_denial_file
+    except Exception:
+        pass
+
+    # Clean up empty or legacy ~/.cloakbrowser
+    try:
+        home_cb = Path.home() / ".cloakbrowser"
+        if home_cb.exists() and home_cb.is_dir():
+            sub_items = list(home_cb.iterdir())
+            non_stale = [i for i in sub_items if i.name not in ("denials", "license.key") and not i.name.startswith(".")]
+            if not non_stale:
+                old_key = home_cb / "license.key"
+                if old_key.exists() and not (cloak_dir / "license.key").exists():
+                    import shutil
+                    shutil.copy2(old_key, cloak_dir / "license.key")
+                import shutil
+                shutil.rmtree(home_cb, ignore_errors=True)
+    except Exception:
+        pass

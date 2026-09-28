@@ -463,6 +463,11 @@ def _harden_std_streams() -> None:
 def main() -> int:
     _harden_std_streams()
     os.environ.setdefault("CLOAKBROWSER_MANAGER_RUNTIME", "native")
+    try:
+        from backend.runtime import resolve_runtime
+        resolve_runtime()
+    except Exception:
+        pass
 
     port, should_run = _resolve_server_port()
     if not should_run:

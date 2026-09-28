@@ -35,22 +35,10 @@ from .env_file import load_env_file
 # (database.resolve_runtime, AUTH_TOKEN, the license config below).
 load_env_file()
 
-# Redirect cloakbrowser library to our unified kernels directory
-from .runtime import resolve_runtime
+# Redirect cloakbrowser and camoufox libraries to our unified kernels directory
+from .runtime import resolve_runtime, patch_kernel_data_dirs
 _RUNTIME_CONFIG = resolve_runtime()
-os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(_RUNTIME_CONFIG.data_dir / "kernels" / "cloakbrowser"))
-
-# Monkey patch platformdirs for camoufox before importing it
-try:
-    import platformdirs
-    _orig_user_cache_dir = platformdirs.user_cache_dir
-    def _custom_user_cache_dir(appname=None, *args, **kwargs):
-        if appname == "camoufox":
-            return str(_RUNTIME_CONFIG.data_dir / "kernels" / "camoufox")
-        return _orig_user_cache_dir(appname, *args, **kwargs)
-    platformdirs.user_cache_dir = _custom_user_cache_dir
-except ImportError:
-    pass
+patch_kernel_data_dirs(_RUNTIME_CONFIG.data_dir)
 
 from . import database as db
 from cloakbrowser.license import CloakBrowserLicenseError

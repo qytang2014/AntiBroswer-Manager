@@ -40,6 +40,7 @@ export function KernelManagerModal({
   const [feedback, setFeedback] = useState<{
     type: "success" | "error" | "info";
     text: string;
+    browserType?: "cloakbrowser" | "camoufox";
   } | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -99,6 +100,7 @@ export function KernelManagerModal({
         setFeedback({
           type: "success",
           text: `内核 ${version} 安装成功！`,
+          browserType: (browserType as "cloakbrowser" | "camoufox") || "cloakbrowser",
         });
         fetchKernels(true);
         onKernelChangedRef.current?.();
@@ -107,7 +109,11 @@ export function KernelManagerModal({
       if (ac.signal.aborted) return;
       console.error("Kernel download failed:", err);
       const msg = err instanceof Error ? err.message : "内核下载失败";
-      setFeedback({ type: "error", text: msg });
+      setFeedback({
+        type: "error",
+        text: msg,
+        browserType: (browserType as "cloakbrowser" | "camoufox") || "cloakbrowser",
+      });
     }).finally(() => {
       if (!ac.signal.aborted) {
         setDownloadingVersion(null);
@@ -128,6 +134,7 @@ export function KernelManagerModal({
           setFeedback({
             type: "success",
             text: `内核 ${res.task.version || ""} 已在后台安装完成！`,
+            browserType: (res.task.browser_type as "cloakbrowser" | "camoufox") || "cloakbrowser",
           });
           fetchKernels(true);
           onKernelChangedRef.current?.();
@@ -138,6 +145,7 @@ export function KernelManagerModal({
           setFeedback({
             type: "error",
             text: res.task.message || "后台内核下载失败",
+            browserType: (res.task.browser_type as "cloakbrowser" | "camoufox") || "cloakbrowser",
           });
         }
       }
@@ -182,6 +190,19 @@ export function KernelManagerModal({
   const handleDownload = async (kernel: KernelItem) => {
     if (downloadingVersion) return;
 
+    if (
+      kernel.browser_type === "cloakbrowser" &&
+      kernel.tier === "pro" &&
+      kernelData?.current_tier !== "pro"
+    ) {
+      setFeedback({
+        type: "error",
+        text: "下载 CloakBrowser Pro 高级内核需要商业授权 License。请先在『设置』中配置有效 License，或选择下载免费的官方稳定版或 Camoufox 内核。",
+        browserType: "cloakbrowser",
+      });
+      return;
+    }
+
     setDownloadingVersion(kernel.version);
     setDownloadProgress({
       stage: "connecting",
@@ -207,13 +228,18 @@ export function KernelManagerModal({
       setFeedback({
         type: "success",
         text: res.message || `内核 ${kernel.version} 已删除`,
+        browserType: (kernel.browser_type as "cloakbrowser" | "camoufox") || "cloakbrowser",
       });
       await fetchKernels(true);
       onKernelChangedRef.current?.();
     } catch (err) {
       console.error("Failed to delete kernel:", err);
       const msg = err instanceof ApiError ? err.message : "删除内核失败";
-      setFeedback({ type: "error", text: msg });
+      setFeedback({
+        type: "error",
+        text: msg,
+        browserType: (kernel.browser_type as "cloakbrowser" | "camoufox") || "cloakbrowser",
+      });
     } finally {
       setActionLoading(false);
     }
@@ -276,24 +302,46 @@ export function KernelManagerModal({
         {/* Engine Tabs */}
         <div className="flex border-b border-gray-800 px-6 pt-3 bg-gray-900/60">
           <button
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
               activeTab === "cloakbrowser"
                 ? "border-blue-500 text-white"
                 : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
             }`}
-            onClick={() => setActiveTab("cloakbrowser")}
+            onClick={() => {
+              setActiveTab("cloakbrowser");
+              if (feedback?.browserType && feedback.browserType !== "cloakbrowser") {
+                setFeedback(null);
+              }
+            }}
           >
-            CloakBrowser (Chromium)
+            <span>CloakBrowser (Chromium)</span>
+            {downloadingVersion && (downloadProgress?.browser_type || "cloakbrowser") === "cloakbrowser" && activeTab !== "cloakbrowser" && (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+              </span>
+            )}
           </button>
           <button
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
               activeTab === "camoufox"
                 ? "border-blue-500 text-white"
                 : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700"
             }`}
-            onClick={() => setActiveTab("camoufox")}
+            onClick={() => {
+              setActiveTab("camoufox");
+              if (feedback?.browserType && feedback.browserType !== "camoufox") {
+                setFeedback(null);
+              }
+            }}
           >
-            Camoufox (Firefox)
+            <span>Camoufox (Firefox)</span>
+            {downloadingVersion && downloadProgress?.browser_type === "camoufox" && activeTab !== "camoufox" && (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+              </span>
+            )}
           </button>
         </div>
 
@@ -342,7 +390,7 @@ export function KernelManagerModal({
         )}
 
         {/* Feedback Alert */}
-        {feedback && (
+        {feedback && (!feedback.browserType || feedback.browserType === activeTab) && (
           <div
             className={`mx-6 mt-4 p-3 rounded-lg text-xs flex items-center gap-2 ${
               feedback.type === "success"
@@ -364,7 +412,7 @@ export function KernelManagerModal({
         )}
 
         {/* Active Download Progress Box */}
-        {downloadingVersion && downloadProgress && (
+        {downloadingVersion && downloadProgress && (downloadProgress.browser_type || "cloakbrowser") === activeTab && (
           <div className="mx-6 mt-4 p-4 rounded-xl bg-blue-950/20 border border-blue-800/40 flex flex-col gap-2.5">
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
@@ -460,6 +508,12 @@ export function KernelManagerModal({
                         >
                           {kernel.tier}
                         </span>
+
+                        {kernel.browser_type === "cloakbrowser" && kernel.tier === "pro" && kernelData?.current_tier !== "pro" && !kernel.installed && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/40 flex items-center gap-1">
+                            需商业授权 License
+                          </span>
+                        )}
 
                         {kernel.installed && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 flex items-center gap-1">

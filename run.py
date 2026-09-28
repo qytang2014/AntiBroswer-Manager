@@ -145,7 +145,20 @@ def main() -> int:
         print(f"[error] {exc}", file=sys.stderr, flush=True)
         return 1
 
-    env = {**os.environ, "CLOAKBROWSER_MANAGER_RUNTIME": "native"}
+    if sys.platform == "win32":
+        _base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        _data_dir = _base / "AntiBrowser-Manager"
+    elif sys.platform == "darwin":
+        _data_dir = Path.home() / "Library" / "Application Support" / "AntiBrowser-Manager"
+    else:
+        _data_dir = Path("/data")
+
+    env = {
+        **os.environ,
+        "CLOAKBROWSER_MANAGER_RUNTIME": "native",
+        "CLOAKBROWSER_CACHE_DIR": str(_data_dir / "kernels" / "cloakbrowser"),
+        "CAMOUFOX_DATA_DIR": str(_data_dir / "kernels" / "camoufox"),
+    }
     print("[start] Starting AntiBrowser-Manager...", flush=True)
     # Replace this bootstrap process with app_entry.py under the venv python.
     # os.execve hands off entirely — no lingering parent, no wrapper-of-wrapper —

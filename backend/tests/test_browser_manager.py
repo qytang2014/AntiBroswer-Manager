@@ -825,6 +825,16 @@ async def test_camoufox_launch_config_and_user_prefs(monkeypatch, tmp_path):
 
     monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
 
+    mock_version = MagicMock()
+    mock_version.version = "152.0.4"
+    mock_version.build = "beta.31"
+    mock_version.full_string = "152.0.4-beta.31"
+    mock_inst = MagicMock()
+    mock_inst.version = mock_version
+    mock_inst.path = Path("/mock/camoufox/152.0.4-beta.31")
+    mock_inst.is_active = True
+    monkeypatch.setattr("camoufox.multiversion.list_installed", lambda: [mock_inst])
+
     profile = {
         "id": "prof-cam-config",
         "user_data_dir": str(tmp_path / "p-cam-config"),
@@ -969,6 +979,16 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
             return mock_pw
 
     monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
+
+    mock_version = MagicMock()
+    mock_version.version = "152.0.4"
+    mock_version.build = "beta.31"
+    mock_version.full_string = "152.0.4-beta.31"
+    mock_inst = MagicMock()
+    mock_inst.version = mock_version
+    mock_inst.path = Path("/mock/camoufox/152.0.4-beta.31")
+    mock_inst.is_active = True
+    monkeypatch.setattr("camoufox.multiversion.list_installed", lambda: [mock_inst])
 
     profile = {
         "id": "prof-coherence",
