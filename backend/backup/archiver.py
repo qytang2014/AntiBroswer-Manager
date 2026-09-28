@@ -36,6 +36,84 @@ def _is_safe_tar_member(member: tarfile.TarInfo, target_dir: Path) -> bool:
         return False
 
 
+def _relativize_staged_database(staged_db_path: Path, host_data_dir: Path) -> None:
+    """Strip host-specific absolute data_dir prefixes from the staged database
+    before packaging, making the backup archive completely portable across machines.
+    """
+    host_str = str(host_data_dir)
+    with sqlite3.connect(str(staged_db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        # 1. Relativize profiles.user_data_dir and extension_paths
+        has_profiles = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='profiles'"
+        ).fetchone() is not None
+        if has_profiles:
+            rows = conn.execute("SELECT id, browser_type, user_data_dir, extension_paths FROM profiles").fetchall()
+            for row in rows:
+                pid = row["id"]
+                btype = row["browser_type"] or "cloakbrowser"
+                engine_subdir = "camoufox" if btype == "camoufox" else "cloakbrowser"
+                portable_udd = f"profiles/{engine_subdir}/{pid}"
+
+                ext_paths_raw = row["extension_paths"]
+                portable_ext_paths = None
+                if ext_paths_raw:
+                    try:
+                        paths = json.loads(ext_paths_raw)
+                        if isinstance(paths, list):
+                            portable_list = []
+                            for ep in paths:
+                                if isinstance(ep, str):
+                                    if ep.startswith(host_str):
+                                        rel = os.path.relpath(ep, host_str)
+                                        portable_list.append(rel.replace("\\", "/"))
+                                    elif "/extensions/" in ep or "\\extensions\\" in ep:
+                                        ep_p = Path(ep)
+                                        eng = ep_p.parent.name
+                                        eid = ep_p.name
+                                        if eng in ("firefox", "chromium"):
+                                            portable_list.append(f"extensions/{eng}/{eid}")
+                                        else:
+                                            portable_list.append(f"extensions/{eid}")
+                                    else:
+                                        portable_list.append(ep)
+                            portable_ext_paths = json.dumps(portable_list)
+                    except Exception:
+                        pass
+
+                if portable_ext_paths is not None:
+                    conn.execute(
+                        "UPDATE profiles SET user_data_dir = ?, extension_paths = ? WHERE id = ?",
+                        (portable_udd, portable_ext_paths, pid),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE profiles SET user_data_dir = ? WHERE id = ?",
+                        (portable_udd, pid),
+                    )
+
+        # 2. Relativize extensions table if present
+        has_exts = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='extensions'"
+        ).fetchone() is not None
+        if has_exts:
+            try:
+                ext_rows = conn.execute("SELECT id, path, browser_type FROM extensions").fetchall()
+                for erow in ext_rows:
+                    eid = erow["id"]
+                    btype = erow["browser_type"] or "cloakbrowser"
+                    subdir = "firefox" if btype == "camoufox" else "chromium"
+                    portable_ext_path = f"extensions/{subdir}/{eid}"
+                    conn.execute(
+                        "UPDATE extensions SET path = ? WHERE id = ?",
+                        (portable_ext_path, eid),
+                    )
+            except sqlite3.OperationalError:
+                pass
+
+        conn.commit()
+
+
 def pack(
     dest_tar_path: Path,
     include_browser_state: bool = False,
@@ -69,6 +147,9 @@ def pack(
             finally:
                 dst_conn.close()
                 src_conn.close()
+
+            # Convert hardcoded absolute host paths into portable relative paths
+            _relativize_staged_database(staged_db_path, data_dir)
 
         # 2. Settings JSON
         if progress_callback:

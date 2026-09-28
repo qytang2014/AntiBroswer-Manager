@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -407,3 +408,44 @@ def test_profile_engine_subdirs_and_migration(tmp_db: Path):
     assert updated["user_data_dir"] == str(expected_new_dir)
     assert not target_dir.exists()
     assert (expected_new_dir / "state.json").is_file()
+
+
+def test_realign_profile_paths_cross_machine(tmp_db: Path):
+    """Foreign paths from backups restored across different machines or operating systems
+    must be automatically re-anchored to the local DATA_DIR."""
+    foreign_pid = "foreign-pid-123"
+    foreign_udd = "/Users/tom/Library/Application Support/AntiBrowser-Manager/profiles/camoufox/foreign-pid-123"
+    foreign_ext_path = "/Users/tom/Library/Application Support/AntiBrowser-Manager/extensions/firefox/{ext-abc}"
+
+    with db.get_db() as conn:
+        conn.execute(
+            """INSERT INTO profiles (id, name, fingerprint_seed, browser_type, user_data_dir, extension_paths, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (foreign_pid, "Foreign Fox", 999, "camoufox", foreign_udd, json.dumps([foreign_ext_path]), "2026-01-01", "2026-01-01"),
+        )
+        conn.execute(
+            """INSERT INTO extensions (id, name, version, description, icon_url, path, source, webstore_id, browser_type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("{ext-abc}", "Bitwarden", "1.0", "desc", "icon", foreign_ext_path, "webstore", "webstore-id", "camoufox", "2026-01-01"),
+        )
+        conn.commit()
+
+    # Hydrate test before realign: dynamically re-anchored for non-existent foreign user_data_dir
+    hydrated = db.get_profile(foreign_pid)
+    expected_canonical_udd = str(tmp_db / "profiles" / "camoufox" / foreign_pid)
+    assert hydrated["user_data_dir"] == expected_canonical_udd
+
+    # Run realign
+    realigned = db.realign_profile_paths()
+    assert realigned >= 1
+
+    # Check database columns were updated persistently
+    with db.get_db() as conn:
+        row = conn.execute("SELECT user_data_dir, extension_paths FROM profiles WHERE id = ?", (foreign_pid,)).fetchone()
+        assert row["user_data_dir"] == expected_canonical_udd
+        expected_canonical_ext = str(tmp_db / "extensions" / "firefox" / "{ext-abc}")
+        assert json.loads(row["extension_paths"]) == [expected_canonical_ext]
+
+        ext_row = conn.execute("SELECT path FROM extensions WHERE id = ?", ("{ext-abc}",)).fetchone()
+        assert ext_row["path"] == expected_canonical_ext
+

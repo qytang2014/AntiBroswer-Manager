@@ -816,7 +816,25 @@ class BrowserManager:
             if self.runtime.viewer_mode == "vnc":
                 display, ws_port = await self.vnc.allocate()
 
-            user_data_dir = Path(profile["user_data_dir"])
+            from .database import user_data_dir_for
+
+            browser_type = profile.get("browser_type") or "cloakbrowser"
+            canonical_udd = Path(user_data_dir_for(profile["id"], browser_type))
+            raw_udd = profile.get("user_data_dir")
+            if not raw_udd:
+                user_data_dir = canonical_udd
+                profile["user_data_dir"] = str(canonical_udd)
+            else:
+                try:
+                    p_udd = Path(raw_udd)
+                    if not p_udd.exists() and not str(p_udd).startswith(str(self.runtime.data_dir)):
+                        user_data_dir = canonical_udd
+                        profile["user_data_dir"] = str(canonical_udd)
+                    else:
+                        user_data_dir = p_udd
+                except Exception:
+                    user_data_dir = canonical_udd
+                    profile["user_data_dir"] = str(canonical_udd)
 
             # Docker can leave stale locks after an unclean container exit. Native
             # mode must let Chromium arbitrate profile ownership itself.
@@ -826,7 +844,6 @@ class BrowserManager:
 
             _init_profile_defaults(user_data_dir)
 
-            browser_type = profile.get("browser_type") or "cloakbrowser"
             extra_launch_args = profile.get("extra_launch_args") or {}
             if isinstance(extra_launch_args, dict) and browser_type in extra_launch_args:
                 user_launch_args = extra_launch_args.get(browser_type) or []
@@ -1038,8 +1055,28 @@ class BrowserManager:
             if profile.get("user_agent"):
                 extra_args.append(f"--user-agent={str(profile['user_agent']).strip()}")
 
+            raw_ext_paths = profile.get("extension_paths") or []
+            sanitized_ext_paths = []
+            for ep in raw_ext_paths:
+                if isinstance(ep, str) and not ep.startswith(str(self.runtime.data_dir)) and ("/extensions/" in ep or "\\extensions\\" in ep):
+                    try:
+                        ep_p = Path(ep)
+                        if not ep_p.exists():
+                            eng = ep_p.parent.name
+                            eid = ep_p.name
+                            if eng in ("firefox", "chromium"):
+                                candidate = self.runtime.data_dir / "extensions" / eng / eid
+                            else:
+                                candidate = self.runtime.data_dir / "extensions" / eid
+                            if candidate.exists():
+                                sanitized_ext_paths.append(str(candidate))
+                                continue
+                    except Exception:
+                        pass
+                sanitized_ext_paths.append(ep)
+
             launch_options: dict[str, Any] = {
-                "user_data_dir": profile["user_data_dir"],
+                "user_data_dir": str(user_data_dir),
                 "headless": False,
                 "proxy": proxy,
                 "args": extra_args,
@@ -1049,7 +1086,7 @@ class BrowserManager:
                 "human_preset": profile.get("human_preset", "default"),
                 "geoip": False if proxy else bool(profile.get("geoip", False)),
                 "color_scheme": profile.get("color_scheme") or None,
-                "extension_paths": profile.get("extension_paths") or [],
+                "extension_paths": sanitized_ext_paths,
                 "license_key": effective_license_key,
                 "browser_version": effective_kernel,
                 "release_channel": self.release_channel,
@@ -1335,7 +1372,7 @@ class BrowserManager:
                         await pw.stop()
                         raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc
                 else:
-                    _cleanup_stale_chromium_locks(profile["user_data_dir"])
+                    _cleanup_stale_chromium_locks(user_data_dir)
                     for attempt in range(1, CDP_START_ATTEMPTS + 1):
                         cdp_port = self._reserve_cdp_port()
 

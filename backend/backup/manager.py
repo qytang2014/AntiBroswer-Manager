@@ -483,8 +483,9 @@ class BackupManager:
                         dest_prof.mkdir(parents=True, exist_ok=True)
                         shutil.copytree(staging_dir / "profiles", dest_prof, dirs_exist_ok=True)
 
-                    # Step 7: Re-initialize database connections
+                    # Step 7: Re-initialize database connections and realign paths
                     db.init_db()
+                    db.realign_profile_paths()
 
                     if self.browser_mgr:
                         self.browser_mgr.resolve_binary_status()

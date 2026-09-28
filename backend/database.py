@@ -240,6 +240,8 @@ def init_db():
         _create_extensions_table(conn)
         _create_proxy_tables(conn)
         conn.commit()
+    migrate_profiles_to_engine_subdirs()
+    realign_profile_paths()
 
 
 def _now() -> str:
@@ -351,8 +353,21 @@ def create_profile(
 
 def _hydrate_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     profile = dict(row)
+    btype = profile.get("browser_type") or "cloakbrowser"
+    canonical_udd = user_data_dir_for(profile["id"], btype)
+    stored_udd = profile.get("user_data_dir")
+    if not stored_udd:
+        profile["user_data_dir"] = canonical_udd
+    else:
+        try:
+            if not str(stored_udd).startswith(str(DATA_DIR)) and not Path(stored_udd).is_dir():
+                profile["user_data_dir"] = canonical_udd
+        except Exception:
+            profile["user_data_dir"] = canonical_udd
+
     profile["launch_args"] = _json_list(profile.get("launch_args"))
     profile["extension_paths"] = _json_list(profile.get("extension_paths"))
+
     profile["firefox_user_prefs"] = _json_dict(profile.get("firefox_user_prefs"))
     profile["extra_launch_args"] = _json_dict(profile.get("extra_launch_args"))
     profile["canvas_noise"] = bool(profile.get("canvas_noise", 0)) if profile.get("canvas_noise") is not None else False
@@ -499,6 +514,91 @@ def migrate_profiles_to_engine_subdirs() -> None:
 
     if moved:
         logger.info("Profile directory migration complete: %d profile(s) moved.", moved)
+
+
+def realign_profile_paths() -> int:
+    """Rebase profile user_data_dir, extension_paths, and extensions table paths
+    to the current host environment's DATA_DIR.
+
+    This ensures that database backups restored across different hosts, operating
+    systems, usernames, or Docker containers seamlessly match the current host.
+    """
+    extensions_root = DATA_DIR / "extensions"
+    realigned_count = 0
+
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, browser_type, user_data_dir, extension_paths FROM profiles").fetchall()
+        for row in rows:
+            pid = row["id"]
+            btype = row["browser_type"] or "cloakbrowser"
+            canonical_udd = user_data_dir_for(pid, btype)
+            current_udd = row["user_data_dir"]
+
+            if current_udd != canonical_udd:
+                if current_udd:
+                    try:
+                        old_p = Path(current_udd)
+                        if old_p.is_dir() and not Path(canonical_udd).exists():
+                            Path(canonical_udd).parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(old_p), canonical_udd)
+                    except Exception as exc:
+                        logger.debug("Failed moving profile dir %s -> %s: %s", current_udd, canonical_udd, exc)
+
+                conn.execute(
+                    "UPDATE profiles SET user_data_dir = ? WHERE id = ?",
+                    (canonical_udd, pid),
+                )
+                realigned_count += 1
+
+            ext_paths_raw = row["extension_paths"]
+            if ext_paths_raw:
+                try:
+                    paths = json.loads(ext_paths_raw)
+                    if isinstance(paths, list):
+                        updated_paths = []
+                        changed = False
+                        for ep in paths:
+                            if not ep.startswith(str(DATA_DIR)) and ("/extensions/" in ep or "\\extensions\\" in ep):
+                                ep_p = Path(ep)
+                                engine_name = ep_p.parent.name
+                                ext_id = ep_p.name
+                                if engine_name in ("firefox", "chromium"):
+                                    canonical_ep = str(extensions_root / engine_name / ext_id)
+                                else:
+                                    canonical_ep = str(extensions_root / ext_id)
+                                if canonical_ep != ep:
+                                    changed = True
+                                updated_paths.append(canonical_ep)
+                            else:
+                                updated_paths.append(ep)
+                        if changed:
+                            conn.execute(
+                                "UPDATE profiles SET extension_paths = ? WHERE id = ?",
+                                (json.dumps(updated_paths), pid),
+                            )
+                except Exception as exc:
+                    logger.debug("Failed to rebase extension_paths for profile %s: %s", pid, exc)
+
+        try:
+            ext_rows = conn.execute("SELECT id, path, browser_type FROM extensions").fetchall()
+            for erow in ext_rows:
+                eid = erow["id"]
+                btype = erow["browser_type"] or "cloakbrowser"
+                subdir = "firefox" if btype == "camoufox" else "chromium"
+                canonical_ext_path = str(extensions_root / subdir / eid)
+                if erow["path"] != canonical_ext_path:
+                    conn.execute(
+                        "UPDATE extensions SET path = ? WHERE id = ?",
+                        (canonical_ext_path, eid),
+                    )
+        except sqlite3.OperationalError:
+            pass
+
+        conn.commit()
+
+    if realigned_count:
+        logger.info("Realigned %d profile path(s) to current data directory %s", realigned_count, DATA_DIR)
+    return realigned_count
 
 
 def delete_profile(profile_id: str) -> bool:
