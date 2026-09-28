@@ -33,3 +33,25 @@ def test_credential_helpers(tmp_path: Path, monkeypatch):
     credentials.delete_credential("test_backup_key")
     assert not credentials.has_credential("test_backup_key")
     assert credentials.get_credential("test_backup_key") is None
+
+
+def test_legacy_store_migration(tmp_path: Path, monkeypatch):
+    class DummyRuntime:
+        def __init__(self, d):
+            self.data_dir = d
+
+    monkeypatch.setattr("backend.backup.credentials.resolve_runtime", lambda: DummyRuntime(tmp_path))
+
+    import json, os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    store = {"webdav_password": "migrated_pass"}
+    raw = json.dumps(store).encode("utf-8")
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(credentials._machine_key())
+    ct = aesgcm.encrypt(nonce, raw, b"antibrowser_secrets")
+    (tmp_path / ".backup_secrets.enc").write_bytes(nonce + ct)
+
+    loaded = credentials._load_fallback_store()
+    assert loaded == store
+    assert (tmp_path / ".secret_key").exists()
+    assert credentials.get_credential("webdav_password") == "migrated_pass"
