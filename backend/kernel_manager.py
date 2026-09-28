@@ -73,12 +73,28 @@ def is_binary_ready(version: str | None = None, pro: bool | None = None) -> bool
     return bp.exists() and _is_executable(bp)
 
 
-def list_available_kernels() -> dict[str, Any]:
+def list_available_kernels(
+    force_refresh: bool = False,
+    license_tier: str | None = None,
+    license_key: str | None = None,
+    licenses: list[dict] | None = None,
+) -> dict[str, Any]:
     """List all available Chromium stealth cores (installed, recommended, and downloadable)."""
     current_platform = get_platform_tag()
     info = binary_info()
     active_version = info.get("version")
-    current_tier = info.get("tier", "keyless")
+    installed_binary_tier = info.get("tier", "keyless")
+
+    effective_key = license_key or (
+        next((lic.get("key") for lic in licenses if lic.get("key")), None) if licenses else None
+    )
+
+    if license_tier == "pro" or (effective_key and effective_key.strip()):
+        current_tier = "pro"
+    elif license_tier and license_tier != "keyless":
+        current_tier = license_tier
+    else:
+        current_tier = installed_binary_tier
 
     cache_dir = get_cache_dir()
     installed_versions: dict[str, dict[str, Any]] = {}
@@ -129,7 +145,7 @@ def list_available_kernels() -> dict[str, Any]:
         "description": "官方预设稳定版内核 (平台原生构建，推荐默认使用)",
         "platform": current_platform,
         "installed": plat_ready,
-        "is_active": active_version == platform_ver and current_tier != "pro",
+        "is_active": bool(active_version == platform_ver and current_tier != "pro" and plat_ready),
         "binary_path": plat_installed.get("binary_path") or (str(get_binary_path(platform_ver, pro=False)) if plat_ready else None),
         "size_mb": plat_installed.get("size_mb"),
     })
@@ -159,7 +175,7 @@ def list_available_kernels() -> dict[str, Any]:
             "description": "CloakBrowser Pro 高级指纹伪装内核 (含最新反指纹特征与补丁)",
             "platform": current_platform,
             "installed": pro_ready,
-            "is_active": active_version == pro_ver and current_tier == "pro",
+            "is_active": bool(active_version == pro_ver and current_tier == "pro" and pro_ready),
             "binary_path": pro_installed.get("binary_path") or (str(get_binary_path(pro_ver, pro=True)) if pro_ready else None),
             "size_mb": pro_installed.get("size_mb"),
         })
@@ -186,7 +202,7 @@ def list_available_kernels() -> dict[str, Any]:
     # 5. Add Camoufox versions
     try:
         from .camoufox_downloader import get_camoufox_kernel_list
-        camoufox_kernels = get_camoufox_kernel_list()
+        camoufox_kernels = get_camoufox_kernel_list(force_refresh=force_refresh)
         kernels.extend(camoufox_kernels)
     except Exception as e:
         logger.error("Failed to fetch Camoufox versions: %s", e)

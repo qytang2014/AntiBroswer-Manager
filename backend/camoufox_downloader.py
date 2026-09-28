@@ -286,10 +286,10 @@ def fetch_camoufox_available_versions(force_refresh: bool = False) -> list[Avail
     return []
 
 
-def get_camoufox_kernel_list() -> list[dict[str, Any]]:
+def get_camoufox_kernel_list(force_refresh: bool = False) -> list[dict[str, Any]]:
     """Build list of Camoufox kernel descriptors (both available and locally installed)."""
     current_platform = get_current_camoufox_platform_key()
-    available_versions = fetch_camoufox_available_versions()
+    available_versions = fetch_camoufox_available_versions(force_refresh=force_refresh)
 
     # Scan locally installed versions
     installed_map: dict[str, dict[str, Any]] = {}

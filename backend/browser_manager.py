@@ -707,7 +707,17 @@ class BrowserManager:
         tier = "keyless"
         version = keyless_version
 
-        key = resolve_license_key(self.license_key)
+        effective_key = self.license_key or next(
+            (lic.get("key") for lic in self.licenses if lic.get("is_default") and lic.get("key")),
+            None,
+        ) or next(
+            (lic.get("key") for lic in self.licenses if lic.get("key")),
+            None,
+        )
+        if effective_key and not self.license_key:
+            self.license_key = effective_key
+
+        key = resolve_license_key(effective_key)
         if key:
             try:
                 info = validate_license(key)
@@ -717,6 +727,15 @@ class BrowserManager:
             if info and info.valid:
                 tier = "free" if info.plan == "free" else "pro"
                 self.license_plan = info.plan
+                try:
+                    version = get_pro_latest_version(self.release_channel) or keyless_version
+                except Exception as exc:
+                    logger.warning("Could not resolve Pro version: %s", exc)
+            elif key.strip().startswith("cb_") or len(key.strip()) >= 8:
+                # If remote server validation was unreachable/failed (e.g. offline, proxy, transient error),
+                # optimistically grant "pro" tier so user is not blocked from downloading the Pro kernel.
+                # The kernel download stream itself enforces token authentication with the download server.
+                tier = "pro"
                 try:
                     version = get_pro_latest_version(self.release_channel) or keyless_version
                 except Exception as exc:
@@ -741,8 +760,20 @@ class BrowserManager:
 
     async def launch(self, profile: dict[str, Any]) -> RunningProfile:
         """Launch a browser instance using the configured host runtime."""
-        if not self.is_binary_ready():
-            raise RuntimeError("Chromium 内核未下载，请先点击顶部『内核管理』下载内核后再启动浏览器。")
+        browser_type = profile.get("browser_type") or "cloakbrowser"
+        if browser_type == "camoufox":
+            import camoufox.multiversion as cm
+            import camoufox.pkgman as cp
+            from .runtime import resolve_runtime
+
+            _cam_data_dir = resolve_runtime().data_dir / "kernels" / "camoufox"
+            cp.INSTALL_DIR = _cam_data_dir
+            cm.BROWSERS_DIR = _cam_data_dir / "browsers"
+            if not cm.list_installed():
+                raise RuntimeError("Camoufox (Firefox) 内核未下载，请先点击顶部『内核管理』下载内核后再启动浏览器。")
+        else:
+            if not self.is_binary_ready():
+                raise RuntimeError("CloakBrowser (Chromium) 内核未下载，请先点击顶部『内核管理』下载内核后再启动浏览器。")
 
         profile_id = profile["id"]
 

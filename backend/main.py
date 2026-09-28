@@ -183,7 +183,7 @@ def _resolve_setting(env_key: str, settings_key: str) -> str | None:
 
 LICENSES: list[dict] = _STORED_SETTINGS.get("licenses", [])
 
-_default_license = next((lic for lic in LICENSES if lic.get("is_default")), None)
+_default_license = next((lic for lic in LICENSES if lic.get("is_default") and lic.get("key")), None) or next((lic for lic in LICENSES if lic.get("key")), None)
 if _default_license:
     LICENSE_KEY: str | None = _default_license.get("key")
 else:
@@ -353,8 +353,54 @@ browser_mgr = BrowserManager(
     release_channel=RELEASE_CHANNEL,
     licenses=LICENSES,
 )
-kernel_download_manager.register_on_completed(browser_mgr.resolve_binary_status)
 backup_mgr = BackupManager(browser_mgr=browser_mgr)
+kernel_download_manager.register_on_completed(browser_mgr.resolve_binary_status)
+
+
+def sync_settings_from_store() -> None:
+    """Synchronize browser_mgr license and channel state from stored settings or environment."""
+    stored = load_settings()
+    if not stored and not os.environ.get("CLOAKBROWSER_LICENSE_KEY"):
+        return
+
+    if "license_key" in stored and "licenses" not in stored:
+        _key = stored.get("license_key")
+        if _key:
+            stored["licenses"] = [{
+                "id": "default-id",
+                "name": "默认 License",
+                "key": _key,
+                "is_default": True,
+            }]
+            save_settings(stored)
+
+    licenses = stored.get("licenses")
+    default_lic = (
+        next((lic for lic in licenses if lic.get("is_default") and lic.get("key")), None)
+        or next((lic for lic in licenses if lic.get("key")), None)
+    ) if licenses is not None else None
+
+    key = os.environ.get("CLOAKBROWSER_LICENSE_KEY")
+    if not key and default_lic:
+        key = default_lic.get("key")
+    if not key and "license_key" in stored:
+        key = stored.get("license_key")
+
+    channel = os.environ.get("CLOAKBROWSER_RELEASE_CHANNEL") or stored.get("release_channel")
+
+    changed = False
+    if licenses is not None and browser_mgr.licenses != licenses:
+        browser_mgr.licenses = licenses
+        changed = True
+    if key is not None and browser_mgr.license_key != key:
+        browser_mgr.license_key = key
+        changed = True
+    if channel is not None and browser_mgr.release_channel != channel:
+        browser_mgr.release_channel = channel
+        changed = True
+
+    if changed:
+        browser_mgr.resolve_binary_status()
 
 # Frontend build directory (React production build). bundle_dir() resolves to
 # the PyInstaller extraction root when frozen, else the manager repo root.
@@ -783,9 +829,16 @@ async def get_extension_icon_endpoint(ext_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/kernels", response_model=KernelListResponse)
-async def list_kernels_endpoint():
-    """List all available and installed Chromium stealth kernels."""
-    return list_available_kernels()
+async def list_kernels_endpoint(response: Response, refresh: bool = False):
+    """List all available and installed Chromium and Camoufox stealth kernels."""
+    sync_settings_from_store()
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return list_available_kernels(
+        force_refresh=refresh,
+        license_tier=browser_mgr.license_tier,
+        license_key=browser_mgr.license_key,
+        licenses=browser_mgr.licenses,
+    )
 
 
 @app.get("/api/kernels/download-status", response_model=KernelDownloadStatusResponse)
@@ -797,13 +850,17 @@ async def get_kernel_download_status_endpoint():
 @app.get("/api/kernels/download-stream")
 async def download_kernel_stream_endpoint(version: str, tier: str = "free", browser_type: str = "cloakbrowser"):
     """Download and extract a stealth kernel with real-time SSE progress events."""
+    sync_settings_from_store()
+    effective_license_key = browser_mgr.license_key or next(
+        (lic.get("key") for lic in browser_mgr.licenses if lic.get("key")), None
+    )
     async def event_generator():
         try:
             async for event in kernel_download_manager.subscribe(
                 version=version,
                 tier=tier,
                 browser_type=browser_type,
-                license_key=browser_mgr.license_key,
+                license_key=effective_license_key,
                 release_channel=browser_mgr.release_channel,
             ):
                 event["browser_type"] = browser_type
@@ -1300,6 +1357,7 @@ def _windows_font_health() -> tuple[int | None, int | None, bool | None]:
 
 
 async def _build_system_status(request: Request | None = None) -> StatusResponse:
+    sync_settings_from_store()
     # Prefer the version/tier resolved at startup (reflects the actual Pro build
     # in use). Fall back to the keyless constant before startup resolution runs.
     binary_version = browser_mgr.binary_version
@@ -1518,6 +1576,7 @@ async def shutdown_manager(request: Request):
 
 @app.get("/api/settings", response_model=SettingsResponse)
 async def get_settings():
+    sync_settings_from_store()
     return _settings_response()
 
 
@@ -1544,8 +1603,10 @@ async def update_settings(payload: SettingsUpdate):
         browser_mgr.licenses = new_licenses
 
         # Determine new default license key for backward compatibility fields
-        default_lic = next((lic for lic in new_licenses if lic.get("is_default")), None)
+        default_lic = next((lic for lic in new_licenses if lic.get("is_default") and lic.get("key")), None) or next((lic for lic in new_licenses if lic.get("key")), None)
         if default_lic:
+            if not any(lic.get("is_default") for lic in new_licenses):
+                default_lic["is_default"] = True
             browser_mgr.license_key = default_lic.get("key")
             stored["license_key"] = default_lic.get("key")
         else:

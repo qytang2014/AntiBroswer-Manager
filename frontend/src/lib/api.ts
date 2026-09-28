@@ -553,8 +553,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // Kernel Management
-  listKernels: () => request<KernelListResponse>("/api/kernels"),
+  listKernels: (refresh: boolean = false) =>
+    request<KernelListResponse>(refresh ? "/api/kernels?refresh=true" : "/api/kernels"),
 
   getKernelDownloadStatus: () =>
     request<KernelDownloadStatusResponse>("/api/kernels/download-status"),

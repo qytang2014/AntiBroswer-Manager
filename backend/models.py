@@ -381,6 +381,7 @@ class KernelListResponse(BaseModel):
 class KernelDownloadTask(BaseModel):
     version: str
     tier: str = "free"
+    browser_type: str = "cloakbrowser"
     stage: str
     message: str = ""
     percent: int = 0

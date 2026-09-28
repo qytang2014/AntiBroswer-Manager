@@ -339,6 +339,8 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
         <KernelManagerModal
           isOpen={kernelManagerOpen}
           onClose={handleCloseKernelManager}
+          systemStatus={systemStatus}
+          onOpenSettings={() => setSettingsOpen(true)}
           onKernelChanged={() => {
             refreshSystemStatus();
             setKernelsVersion((v) => v + 1);
@@ -353,7 +355,11 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           <div className="flex items-center gap-2 min-w-0">
             <Loader2 className="h-4 w-4 text-blue-400 shrink-0 animate-spin" />
             <span className="truncate">
-              <strong>正在后台下载内核{activeDownload.version ? ` (${activeDownload.version})` : ""}:</strong>{" "}
+              <strong>
+                正在后台下载
+                {activeDownload.browser_type === "camoufox" ? " Camoufox (Firefox) " : " CloakBrowser (Chromium) "}
+                内核{activeDownload.version ? ` (${activeDownload.version})` : ""}:
+              </strong>{" "}
               {activeDownload.message || `已完成 ${activeDownload.percent}%`}
             </span>
             <div className="w-24 bg-gray-800 rounded-full h-1.5 overflow-hidden ml-2 shrink-0 hidden sm:block">
@@ -379,7 +385,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
-              <strong>未检测到 Chromium 内核</strong>：启动浏览器配置前，请先下载并安装内核。
+              <strong>未检测到可用浏览器内核</strong>：启动环境配置前，请先下载并安装 CloakBrowser (Chromium) 或 Camoufox (Firefox) 内核。
             </span>
           </div>
           <div className="flex items-center gap-3">

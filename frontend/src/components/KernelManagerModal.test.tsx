@@ -160,4 +160,99 @@ describe("KernelManagerModal", () => {
       expect(screen.getByText("Camoufox 152.0.4-beta.31")).toBeTruthy();
     });
   });
+
+  it("blocks CloakBrowser Pro download and shows settings navigation when not licensed", async () => {
+    vi.mocked(api.listKernels).mockResolvedValue({
+      current_platform: "darwin-arm64",
+      current_tier: "free",
+      active_version: "145.0.7632.109.2",
+      installed: false,
+      kernels: [
+        {
+          version: "151.0.7922.108.3",
+          tier: "pro" as const,
+          browser_type: "cloakbrowser",
+          name: "Chromium 151.0 (Pro 最新版)",
+          description: "CloakBrowser Pro 内核",
+          platform: "darwin-arm64",
+          installed: false,
+          is_active: false,
+        },
+      ],
+    });
+
+    const onOpenSettings = vi.fn();
+    render(
+      <KernelManagerModal
+        isOpen={true}
+        onClose={() => {}}
+        systemStatus={{ license_tier: "keyless" } as any}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("需商业授权 License")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("下载安装"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/下载 CloakBrowser Pro 高级内核需要商业授权 License/)
+      ).toBeTruthy();
+      expect(screen.getByText(/前往设置配置/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText(/前往设置配置/));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(api.downloadKernelStream).not.toHaveBeenCalled();
+  });
+
+  it("allows CloakBrowser Pro download when systemStatus has pro license", async () => {
+    vi.mocked(api.listKernels).mockResolvedValue({
+      current_platform: "darwin-arm64",
+      current_tier: "free", // Even if kernelData had not updated yet
+      active_version: "145.0.7632.109.2",
+      installed: false,
+      kernels: [
+        {
+          version: "151.0.7922.108.3",
+          tier: "pro" as const,
+          browser_type: "cloakbrowser",
+          name: "Chromium 151.0 (Pro 最新版)",
+          description: "CloakBrowser Pro 内核",
+          platform: "darwin-arm64",
+          installed: false,
+          is_active: false,
+        },
+      ],
+    });
+
+    vi.mocked(api.downloadKernelStream).mockResolvedValue({ ok: true } as any);
+
+    render(
+      <KernelManagerModal
+        isOpen={true}
+        onClose={() => {}}
+        systemStatus={{ license_tier: "pro" } as any}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("需商业授权 License")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByText("下载安装"));
+
+    await waitFor(() => {
+      expect(api.downloadKernelStream).toHaveBeenCalledWith(
+        "151.0.7922.108.3",
+        "pro",
+        "cloakbrowser",
+        expect.any(Function),
+        expect.any(AbortSignal)
+      );
+    });
+  });
 });

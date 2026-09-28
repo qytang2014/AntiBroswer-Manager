@@ -18,18 +18,23 @@ import {
   KernelListResponse,
   KernelDownloadProgress,
   ApiError,
+  SystemStatus,
 } from "../lib/api";
 
 interface KernelManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onKernelChanged?: () => void;
+  systemStatus?: SystemStatus | null;
+  onOpenSettings?: () => void;
 }
 
 export function KernelManagerModal({
   isOpen,
   onClose,
   onKernelChanged,
+  systemStatus,
+  onOpenSettings,
 }: KernelManagerModalProps) {
   const [loading, setLoading] = useState(false);
   const [kernelData, setKernelData] = useState<KernelListResponse | null>(null);
@@ -52,11 +57,11 @@ export function KernelManagerModal({
   const handledCompletionVersionRef = useRef<string | null>(null);
   const handledErrorRef = useRef<string | null>(null);
 
-  const fetchKernels = useCallback(async (silent = false, minDelayMs = 0) => {
+  const fetchKernels = useCallback(async (silent = false, minDelayMs = 0, forceRefresh = false) => {
     try {
       if (!silent) setLoading(true);
       const start = Date.now();
-      const data = await api.listKernels();
+      const data = await api.listKernels(forceRefresh);
       if (minDelayMs > 0) {
         const remaining = minDelayMs - (Date.now() - start);
         if (remaining > 0) {
@@ -125,9 +130,11 @@ export function KernelManagerModal({
     try {
       const res = await api.getKernelDownloadStatus();
       if (res.active && res.task) {
+        const bType = (res.task.browser_type as "cloakbrowser" | "camoufox") || "cloakbrowser";
+        setActiveTab(bType);
         setDownloadingVersion(res.task.version || "downloading");
         setDownloadProgress(res.task);
-        attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free", res.task.browser_type || "cloakbrowser");
+        attachStream(res.task.version || "", (res.task.tier as "pro" | "free") || "free", bType);
       } else if (res.task && res.task.stage === "completed") {
         if (handledCompletionVersionRef.current !== res.task.version) {
           handledCompletionVersionRef.current = res.task.version || "";
@@ -167,7 +174,7 @@ export function KernelManagerModal({
   // Modal lifecycle effect
   useEffect(() => {
     if (isOpen) {
-      fetchKernels();
+      fetchKernels(false, 0, true);
       checkActiveDownload();
       setFeedback(null);
     } else {
@@ -187,13 +194,17 @@ export function KernelManagerModal({
     };
   }, [isOpen, fetchKernels, checkActiveDownload]);
 
+  const isProAuthorized =
+    kernelData?.current_tier === "pro" ||
+    systemStatus?.license_tier === "pro";
+
   const handleDownload = async (kernel: KernelItem) => {
     if (downloadingVersion) return;
 
     if (
       kernel.browser_type === "cloakbrowser" &&
       kernel.tier === "pro" &&
-      kernelData?.current_tier !== "pro"
+      !isProAuthorized
     ) {
       setFeedback({
         type: "error",
@@ -283,7 +294,7 @@ export function KernelManagerModal({
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => fetchKernels(false, 400)}
+              onClick={() => fetchKernels(false, 400, true)}
               disabled={loading || !!downloadingVersion}
               className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-gray-800 transition disabled:opacity-50"
               title="刷新内核列表"
@@ -357,12 +368,12 @@ export function KernelManagerModal({
                   当前授权:{" "}
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                      kernelData.current_tier === "pro"
+                      isProAuthorized
                         ? "bg-purple-950/60 text-purple-300 border border-purple-800/50"
                         : "bg-blue-950/60 text-blue-300 border border-blue-800/50"
                     }`}
                   >
-                    {kernelData.current_tier}
+                    {isProAuthorized ? "pro" : (kernelData.current_tier || "free")}
                   </span>
                 </span>
               ) : (
@@ -392,7 +403,7 @@ export function KernelManagerModal({
         {/* Feedback Alert */}
         {feedback && (!feedback.browserType || feedback.browserType === activeTab) && (
           <div
-            className={`mx-6 mt-4 p-3 rounded-lg text-xs flex items-center gap-2 ${
+            className={`mx-6 mt-4 p-3 rounded-lg text-xs flex items-center justify-between gap-2 ${
               feedback.type === "success"
                 ? "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40"
                 : feedback.type === "info"
@@ -400,14 +411,28 @@ export function KernelManagerModal({
                 : "bg-red-950/40 text-red-300 border border-red-800/40"
             }`}
           >
-            {feedback.type === "success" ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            ) : feedback.type === "info" ? (
-              <AlertCircle className="h-4 w-4 shrink-0 text-blue-400" />
-            ) : (
-              <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              {feedback.type === "success" ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+              ) : feedback.type === "info" ? (
+                <AlertCircle className="h-4 w-4 shrink-0 text-blue-400" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+              )}
+              <span className="flex-1">{feedback.text}</span>
+            </div>
+            {feedback.type === "error" && feedback.text.includes("商业授权 License") && onOpenSettings && (
+              <button
+                type="button"
+                onClick={() => {
+                  onCloseRef.current();
+                  onOpenSettings();
+                }}
+                className="px-2.5 py-1 rounded bg-purple-900/60 hover:bg-purple-800/80 text-purple-200 border border-purple-700/60 text-xs font-medium transition shrink-0 ml-2 shadow-sm"
+              >
+                前往设置配置 &rarr;
+              </button>
             )}
-            <span className="flex-1">{feedback.text}</span>
           </div>
         )}
 
@@ -509,7 +534,7 @@ export function KernelManagerModal({
                           {kernel.tier}
                         </span>
 
-                        {kernel.browser_type === "cloakbrowser" && kernel.tier === "pro" && kernelData?.current_tier !== "pro" && !kernel.installed && (
+                        {kernel.browser_type === "cloakbrowser" && kernel.tier === "pro" && !isProAuthorized && !kernel.installed && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/40 flex items-center gap-1">
                             需商业授权 License
                           </span>
