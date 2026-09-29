@@ -1143,6 +1143,13 @@ class BrowserManager:
                 if profile.get("extension_paths"):
                     if "--disable-extensions" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
                         cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--disable-extensions")
+                # On native macOS/Windows, OS provides standard application sandbox;
+                # suppressing launcher's forced --no-sandbox eliminates unsupported-flags infobar
+                # and prevents initial CDP handshake stalls on unpatched kernels.
+                if self.runtime.is_native and self.runtime.host_os in ("macos", "windows"):
+                    has_explicit_no_sandbox = any(a.strip() == "--no-sandbox" for a in user_launch_args)
+                    if not has_explicit_no_sandbox and "--no-sandbox" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+                        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--no-sandbox")
             except Exception:
                 pass
 
@@ -1184,12 +1191,9 @@ class BrowserManager:
             resolved_tz, resolved_locale, net_args = await asyncio.to_thread(
                 _resolve_profile_network_fingerprint_sync, proxy, profile
             )
-            # The Free kernel is an unpatched Chromium build, so it will show an unsupported
-            # flag infobar for "--no-sandbox" (which is injected by the launcher).
-            # We suppress all infobars with --test-type.
-            if not is_pro_binary:
-                if "--test-type" not in extra_args:
-                    extra_args.append("--test-type")
+            # Avoid --test-type: Chromium's platform_util (ShowItemInFolder, OpenItem)
+            # deliberately suppresses Finder/Explorer interaction when --test-type is present.
+            # Infobars are cleanly avoided via native sandbox preservation and --disable-infobars.
 
             extra_args.extend(net_args)
             if profile.get("user_agent"):

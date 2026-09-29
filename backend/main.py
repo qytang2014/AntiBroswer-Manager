@@ -87,6 +87,7 @@ from .models import (
     BackupFile,
     BackupRequest,
     BackupTestConnectionResponse,
+    BackupStatusResponse,
     RestoreRequest,
 )
 from .backup.manager import BackupManager
@@ -2141,6 +2142,12 @@ async def trigger_backup_now(payload: BackupRequest | None = None):
         return {"task_id": task_id}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/backup/status", response_model=BackupStatusResponse)
+async def get_backup_status_endpoint():
+    """Get the current background backup task status."""
+    return backup_mgr.get_status()
 
 
 @app.get("/api/backup/progress/{task_id}")

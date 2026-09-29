@@ -469,3 +469,19 @@ class BackupTestConnectionResponse(BaseModel):
     error: str | None = None
 
 
+class BackupProgressEvent(BaseModel):
+    task_id: str
+    type: Literal["backup", "restore"]
+    stage: str
+    percent: int
+    message: str
+    status: Literal["running", "completed", "error"]
+    filename: str | None = None
+    error: str | None = None
+
+
+class BackupStatusResponse(BaseModel):
+    active: bool
+    task: BackupProgressEvent | None = None
+
+

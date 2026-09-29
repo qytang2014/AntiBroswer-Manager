@@ -33,6 +33,8 @@ class BackupManager:
         self.last_backup_time: datetime.datetime | None = None
         self.last_backup_error: str | None = None
         self.last_backup_error_time: datetime.datetime | None = None
+        self._last_completed_task: dict[str, Any] | None = None
+        self._last_completed_at: float | None = None
         self.cleanup_stale_temp_dirs()
 
     @property
@@ -163,9 +165,28 @@ class BackupManager:
             return False, str(exc)
 
     def _publish_event(self, task_id: str, data: dict[str, Any]) -> None:
+        import time
         self._tasks[task_id] = data
+        if data.get("status") in ("completed", "error"):
+            self._last_completed_task = data
+            self._last_completed_at = time.time()
         for q in self._task_listeners.get(task_id, []):
             q.put_nowait(data)
+
+    def get_status(self) -> dict[str, Any]:
+        """Return the current active backup/restore task or recently completed/failed task."""
+        import time
+        # 1. Look for active running task
+        for task in reversed(list(self._tasks.values())):
+            if task.get("status") == "running":
+                return {"active": True, "task": task}
+
+        # 2. Check if a task completed or errored within the last 8 seconds
+        if self._last_completed_task and self._last_completed_at:
+            if time.time() - self._last_completed_at <= 8.0:
+                return {"active": False, "task": self._last_completed_task}
+
+        return {"active": False, "task": None}
 
     async def subscribe_progress(self, task_id: str) -> AsyncGenerator[str, None]:
         """Yield Server-Sent Events (SSE) formatted progress updates for a task."""

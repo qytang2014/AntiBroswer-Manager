@@ -34,11 +34,15 @@ const RELEASE_CHANNEL_OPTIONS: CustomSelectOption<"stable" | "preview">[] = [
   },
 ];
 
+export type SettingsTab = "cloakbrowser" | "camoufox" | "general" | "backup";
+
 interface SettingsPanelProps {
   onClose: () => void;
   onSaved: (status: SystemStatus) => void;
   onOpenKernelManager?: () => void;
   systemStatus?: SystemStatus | null;
+  initialTab?: SettingsTab;
+  onActiveTabChange?: (tab: SettingsTab) => void;
 }
 
 export function SettingsPanel({
@@ -46,8 +50,20 @@ export function SettingsPanel({
   onSaved,
   onOpenKernelManager,
   systemStatus,
+  initialTab,
+  onActiveTabChange,
 }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<"cloakbrowser" | "camoufox" | "general" | "backup">("cloakbrowser");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || "cloakbrowser");
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange]);
   const [licenses, setLicenses] = useState<
     { id: string; name: string; key: string; placeholder?: string; is_default: boolean }[]
   >([]);

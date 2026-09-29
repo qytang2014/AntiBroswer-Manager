@@ -142,6 +142,28 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
   useEffect(() => {
     loadData();
     refreshBackupsList();
+
+    // Check if there is an active backup or restore task running in background
+    api.getBackupStatus().then((res) => {
+      if (res.active && res.task) {
+        setActiveBackupTask(res.task);
+        if (res.task.type === "backup" && res.task.task_id) {
+          const abortCtrl = new AbortController();
+          backupAbortRef.current = abortCtrl;
+          api.subscribeBackupProgress(
+            res.task.task_id,
+            (ev) => {
+              setActiveBackupTask(ev);
+            },
+            abortCtrl.signal
+          ).then(() => {
+            refreshBackupsList();
+            loadData();
+            setTimeout(() => setActiveBackupTask(null), 5000);
+          }).catch(() => {});
+        }
+      }
+    }).catch(() => {});
   }, [loadData, refreshBackupsList]);
 
   // Clean up SSE aborts on unmount

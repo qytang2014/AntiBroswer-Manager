@@ -227,3 +227,35 @@ async def test_restore_preserves_archive_backup_when_active_empty(tmp_path: Path
     assert "backup" in restored
     assert restored["backup"].get("backend") == "webdav"
     assert restored["backup"].get("webdav_url") == "https://archived-dav.com/dav"
+
+
+def test_backup_status_endpoint(app_client, monkeypatch):
+    """Verify GET /api/backup/status returns active task or idle state correctly."""
+    # When no task is running
+    res = app_client.get("/api/backup/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["active"] is False
+    assert data["task"] is None
+
+    # Simulate an active task
+    main.backup_mgr._tasks["test-active-1"] = {
+        "task_id": "test-active-1",
+        "type": "backup",
+        "stage": "archiving",
+        "percent": 50,
+        "message": "Archiving...",
+        "status": "running",
+        "error": None,
+    }
+
+    res_active = app_client.get("/api/backup/status")
+    assert res_active.status_code == 200
+    data_active = res_active.json()
+    assert data_active["active"] is True
+    assert data_active["task"]["task_id"] == "test-active-1"
+    assert data_active["task"]["percent"] == 50
+
+    # Cleanup test task
+    main.backup_mgr._tasks.pop("test-active-1", None)
+

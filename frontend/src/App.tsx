@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X, Loader2, Globe, Plus } from "lucide-react";
+import { Lock, PanelLeftClose, PanelLeft, Settings, Power, Network, Puzzle, Cpu, AlertTriangle, X, Loader2, Globe, Plus, CheckCircle2, AlertCircle } from "lucide-react";
 import { useProfiles } from "./hooks/useProfiles";
-import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial, type KernelDownloadProgress } from "./lib/api";
+import { api, ApiError, setOnUnauthorized, type ProfileCreateData, type SystemStatus, type UpdateInfo, type LaunchDenial, type KernelDownloadProgress, type BackupProgressEvent } from "./lib/api";
 import { ProfileList } from "./components/ProfileList";
 import { ProfileForm, setCachedInstalledKernels } from "./components/ProfileForm";
 import { ProfileViewer } from "./components/ProfileViewer";
@@ -11,7 +11,7 @@ import { StatusIndicator } from "./components/StatusIndicator";
 import { SystemStatusBadge } from "./components/SystemStatusBadge";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { LaunchErrorBanner } from "./components/LaunchErrorBanner";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel, type SettingsTab } from "./components/SettingsPanel";
 import { LoginPage } from "./components/LoginPage";
 import { ProxyManagerModal } from "./components/ProxyManagerModal";
 import { ExtensionManagerModal } from "./components/ExtensionManagerModal";
@@ -114,6 +114,9 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   const [settingsVersion, setSettingsVersion] = useState(0);
   const [kernelBannerDismissed, setKernelBannerDismissed] = useState(false);
   const [activeDownload, setActiveDownload] = useState<KernelDownloadProgress | null>(null);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("cloakbrowser");
+  const [settingsCurrentTab, setSettingsCurrentTab] = useState<SettingsTab>("cloakbrowser");
+  const [activeBackup, setActiveBackup] = useState<BackupProgressEvent | null>(null);
   const [stopped, setStopped] = useState(false);
 
   const refreshSystemStatus = useCallback(() => {
@@ -179,6 +182,45 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
       clearTimeout(timer);
     };
   }, [refreshSystemStatus]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let isSubscribed = true;
+
+    const checkBackupStatus = async () => {
+      try {
+        const res = await api.getBackupStatus();
+        if (!isSubscribed) return;
+        if (res.active && res.task) {
+          setActiveBackup(res.task);
+          timer = setTimeout(checkBackupStatus, 1500);
+        } else if (res.task && (res.task.status === "completed" || res.task.status === "error")) {
+          // Task recently finished: keep activeBackup visible for 5 seconds, then clear
+          setActiveBackup(res.task);
+          timer = setTimeout(() => {
+            if (isSubscribed) {
+              setActiveBackup(null);
+              timer = setTimeout(checkBackupStatus, 4000);
+            }
+          }, 5000);
+        } else {
+          setActiveBackup(null);
+          timer = setTimeout(checkBackupStatus, 4000);
+        }
+      } catch {
+        if (isSubscribed) {
+          timer = setTimeout(checkBackupStatus, 6000);
+        }
+      }
+    };
+
+    checkBackupStatus();
+
+    return () => {
+      isSubscribed = false;
+      clearTimeout(timer);
+    };
+  }, []);
 
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
 
@@ -317,6 +359,8 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
             setKernelManagerOpen(true);
           }}
           systemStatus={systemStatus}
+          initialTab={settingsTab}
+          onActiveTabChange={(t) => setSettingsCurrentTab(t)}
         />
       )}
       {proxyManagerOpen && (
@@ -374,6 +418,69 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
             <button
               onClick={() => setKernelManagerOpen(true)}
               className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition"
+            >
+              查看详情
+            </button>
+          </div>
+        </div>
+      )}
+      {activeBackup && !(settingsOpen && settingsCurrentTab === "backup") && (
+        <div
+          className={`border-b px-4 py-2 text-xs flex items-center justify-between transition-colors duration-300 ${
+            activeBackup.status === "completed"
+              ? "bg-emerald-950/80 border-emerald-800/60 text-emerald-200"
+              : activeBackup.status === "error"
+              ? "bg-red-950/80 border-red-800/60 text-red-200"
+              : "bg-purple-950/80 border-purple-800/60 text-purple-200"
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {activeBackup.status === "completed" ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+            ) : activeBackup.status === "error" ? (
+              <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+            ) : (
+              <Loader2 className="h-4 w-4 text-purple-400 shrink-0 animate-spin" />
+            )}
+            <span className="truncate">
+              <strong>
+                {activeBackup.status === "completed"
+                  ? "数据备份已成功完成！"
+                  : activeBackup.status === "error"
+                  ? "数据备份异常中断:"
+                  : "正在后台执行数据备份:"}
+              </strong>{" "}
+              {activeBackup.status === "completed"
+                ? activeBackup.filename ? `文件包: ${activeBackup.filename}` : "已安全同步至云端存储"
+                : activeBackup.status === "error"
+                ? activeBackup.message || activeBackup.error || "备份失败"
+                : activeBackup.message || `已完成 ${activeBackup.percent}%`}
+            </span>
+            {activeBackup.status === "running" && (
+              <>
+                <div className="w-24 bg-gray-800 rounded-full h-1.5 overflow-hidden ml-2 shrink-0 hidden sm:block">
+                  <div
+                    className="bg-purple-500 h-1.5 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(Math.max(activeBackup.percent || 0, 0), 100)}%` }}
+                  />
+                </div>
+                <span className="font-mono text-[11px] text-purple-300 shrink-0">{activeBackup.percent}%</span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-3 shrink-0 ml-3">
+            <button
+              onClick={() => {
+                setSettingsTab("backup");
+                setSettingsOpen(true);
+              }}
+              className={`px-2.5 py-1 rounded text-white font-medium text-xs transition ${
+                activeBackup.status === "completed"
+                  ? "bg-emerald-600 hover:bg-emerald-500"
+                  : activeBackup.status === "error"
+                  ? "bg-red-600 hover:bg-red-500"
+                  : "bg-purple-600 hover:bg-purple-500"
+              }`}
             >
               查看详情
             </button>

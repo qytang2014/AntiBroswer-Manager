@@ -628,6 +628,8 @@ export const api = {
       body: JSON.stringify(payload || {}),
     }),
 
+  getBackupStatus: () => request<BackupStatusResponse>("/api/backup/status"),
+
   triggerBackupNow: (include_browser_state?: boolean) =>
     request<{ task_id: string }>("/api/backup/now", {
       method: "POST",
@@ -803,5 +805,10 @@ export interface BackupProgressEvent {
   status: "running" | "completed" | "error";
   error?: string | null;
   filename?: string | null;
+}
+
+export interface BackupStatusResponse {
+  active: boolean;
+  task: BackupProgressEvent | null;
 }
 
