@@ -135,3 +135,46 @@ def test_pack_relativizes_profile_and_extension_paths(tmp_path: Path, monkeypatc
     assert e_row["path"] == "extensions/firefox/ext-1"
     chk_conn.close()
 
+
+def test_relativize_staged_database_closes_connection(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    staged_db = tmp_path / "staged.db"
+
+    conn = sqlite3.connect(str(staged_db))
+    conn.execute("CREATE TABLE profiles (id TEXT, browser_type TEXT, user_data_dir TEXT, extension_paths TEXT)")
+    conn.execute("INSERT INTO profiles VALUES ('p1', 'camoufox', ?, '[]')", (str(data_dir / "profiles" / "camoufox" / "p1"),))
+    conn.commit()
+    conn.close()
+
+    real_connect = sqlite3.connect
+    tracked_connections: list[object] = []
+
+    class _ConnProxy:
+        def __init__(self, wrapped: sqlite3.Connection):
+            object.__setattr__(self, "_wrapped", wrapped)
+            object.__setattr__(self, "closed", False)
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+        def __setattr__(self, name, value):
+            if name in {"_wrapped", "closed"}:
+                object.__setattr__(self, name, value)
+                return
+            setattr(self._wrapped, name, value)
+
+        def close(self):
+            self.closed = True
+            return self._wrapped.close()
+
+    def tracked_connect(*args, **kwargs):
+        proxy = _ConnProxy(real_connect(*args, **kwargs))
+        tracked_connections.append(proxy)
+        return proxy
+
+    monkeypatch.setattr(archiver.sqlite3, "connect", tracked_connect)
+    archiver._relativize_staged_database(staged_db, data_dir)
+
+    assert tracked_connections
+    assert tracked_connections[0].closed is True

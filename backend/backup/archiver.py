@@ -41,7 +41,8 @@ def _relativize_staged_database(staged_db_path: Path, host_data_dir: Path) -> No
     before packaging, making the backup archive completely portable across machines.
     """
     host_str = str(host_data_dir)
-    with sqlite3.connect(str(staged_db_path)) as conn:
+    conn = sqlite3.connect(str(staged_db_path))
+    try:
         conn.row_factory = sqlite3.Row
         # 1. Relativize profiles.user_data_dir and extension_paths
         has_profiles = conn.execute(
@@ -112,6 +113,8 @@ def _relativize_staged_database(staged_db_path: Path, host_data_dir: Path) -> No
                 pass
 
         conn.commit()
+    finally:
+        conn.close()
 
 
 def pack(
