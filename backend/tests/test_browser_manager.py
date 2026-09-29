@@ -1070,6 +1070,93 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
     await manager.stop("prof-custom-ua")
 
 
+@pytest.mark.asyncio
+async def test_native_downloads_and_playwright_patch(monkeypatch, tmp_path):
+    """Verify accept_downloads is set to internal-browser-default and download prefs are properly configured."""
+    from backend.browser_manager import _ensure_playwright_internal_download_patch
+    # Verify driver patch function runs safely
+    _ensure_playwright_internal_download_patch()
+
+    manager = BrowserManager(NATIVE_RUNTIME)
+    monkeypatch.setattr(manager, "is_binary_ready", lambda: True)
+    monkeypatch.setattr(manager, "_ensure_camoufox_search_engine", AsyncMock())
+
+    captured_options = {}
+
+    async def mock_camoufox_browser(pw, **kwargs):
+        captured_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("camoufox.async_api.AsyncNewBrowser", mock_camoufox_browser)
+
+    mock_pw = MagicMock()
+    mock_pw.stop = AsyncMock()
+
+    class MockAsyncPlaywright:
+        async def start(self):
+            return mock_pw
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: MockAsyncPlaywright())
+
+    mock_version = MagicMock()
+    mock_version.version = "152.0.4"
+    mock_version.build = "beta.31"
+    mock_version.full_string = "152.0.4-beta.31"
+    mock_inst = MagicMock()
+    mock_inst.version = mock_version
+    mock_inst.path = Path("/mock/camoufox/152.0.4-beta.31")
+    mock_inst.is_active = True
+    monkeypatch.setattr("camoufox.multiversion.list_installed", lambda: [mock_inst])
+
+    profile = {
+        "id": "prof-cam-dl",
+        "user_data_dir": str(tmp_path / "p-cam-dl"),
+        "browser_type": "camoufox",
+        "browser_version": "152.0.4",
+    }
+    Path(profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    await manager.launch(profile)
+    assert captured_options["accept_downloads"] == "internal-browser-default"
+    prefs = captured_options["firefox_user_prefs"]
+    assert prefs["browser.download.folderList"] == 2
+    assert prefs["browser.download.useDownloadDir"] is True
+    assert prefs["browser.download.panel.shown"] is True
+    assert prefs["browser.download.alwaysOpenPanel"] is True
+    assert prefs["browser.download.autohideButton"] is False
+    assert prefs["browser.download.forbid_open_with"] is False
+    assert prefs["browser.download.dir"] != ""
+    await manager.stop("prof-cam-dl")
+
+    # Verify CloakBrowser launch options accept_downloads
+    captured_cloak_options = {}
+
+    async def mock_launch_persistent(**kwargs):
+        captured_cloak_options.update(kwargs)
+        mock_ctx = MagicMock()
+        mock_ctx.pages = []
+        return mock_ctx
+
+    monkeypatch.setattr("backend.browser_manager.launch_persistent_context_async", mock_launch_persistent)
+    monkeypatch.setattr(manager, "_wait_for_cdp", AsyncMock())
+    monkeypatch.setattr(manager, "_reset_cdp_download_behavior", AsyncMock())
+
+    cloak_profile = {
+        "id": "prof-cloak-dl",
+        "user_data_dir": str(tmp_path / "p-cloak-dl"),
+        "browser_type": "cloakbrowser",
+        "browser_version": "145",
+    }
+    Path(cloak_profile["user_data_dir"]).mkdir(parents=True, exist_ok=True)
+
+    await manager.launch(cloak_profile)
+    assert captured_cloak_options["accept_downloads"] == "internal-browser-default"
+    await manager.stop("prof-cloak-dl")
+
+
+
 
 
 

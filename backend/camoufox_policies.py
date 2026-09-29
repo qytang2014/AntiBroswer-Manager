@@ -208,9 +208,11 @@ def get_camoufox_user_prefs(
     target_os: str = "macos",
     timezone: str | None = None,
     locale: str | None = None,
+    downloads_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     """Build Firefox user preferences for search, compatibility, fonts, and network fingerprint."""
     engine_name = profile.get("search_engine_name") or SEARCH_ENGINE_NAME
+    resolved_dl = str(downloads_dir or (Path.home() / "Downloads"))
 
     prefs: dict[str, Any] = {
         # Enable address bar search using the configured default search engine
@@ -220,6 +222,41 @@ def get_camoufox_user_prefs(
         "browser.urlbar.maxRichResults": 10,
         "browser.search.defaultenginename": engine_name,
         "browser.urlbar.placeholderName": engine_name,
+        # Native download settings: ensure Firefox downloads trigger directly and save to Downloads
+        "browser.download.folderList": 2,
+        "browser.download.dir": resolved_dl,
+        "browser.download.downloadDir": resolved_dl,
+        "browser.download.defaultFolder": resolved_dl,
+        "browser.download.useDownloadDir": True,
+        "browser.download.manager.showWhenStarting": False,
+        "browser.download.panel.shown": True,
+        "browser.download.alwaysOpenPanel": True,
+        "browser.download.autohideButton": False,
+        "browser.download.forbid_open_with": False,
+        "browser.download.improvements_to_download_panel": True,
+        "browser.download.manager.addToRecentDocs": True,
+        "browser.helperApps.alwaysAsk.force": False,
+        "browser.helperApps.neverAsk.saveToDisk": (
+            "application/octet-stream,application/zip,application/x-zip-compressed,"
+            "application/x-tar,application/gzip,application/x-gzip,application/x-bzip2,"
+            "application/x-7z-compressed,application/x-rar-compressed,application/pdf,"
+            "application/x-download,application/vnd.android.package-archive,"
+            "application/x-apple-diskimage,application/x-msdownload,application/exe,"
+            "application/x-exe,application/dos-exe,application/x-winexe,"
+            "text/plain,text/csv,image/png,image/jpeg,image/gif,image/webp,"
+            "video/mp4,audio/mpeg,application/json,application/xml"
+        ),
+        "browser.helperApps.neverAsk.openFile": (
+            "application/octet-stream,application/zip,application/x-zip-compressed,"
+            "application/x-tar,application/gzip,application/x-gzip,application/x-bzip2,"
+            "application/x-7z-compressed,application/x-rar-compressed,application/pdf,"
+            "application/x-download,application/vnd.android.package-archive,"
+            "application/x-apple-diskimage,application/x-msdownload,application/exe,"
+            "application/x-exe,application/dos-exe,application/x-winexe,"
+            "text/plain,text/csv,image/png,image/jpeg,image/gif,image/webp,"
+            "video/mp4,audio/mpeg,application/json,application/xml"
+        ),
+        "pdfjs.disabled": True,
         # Web compatibility: restore standard HTML5 features
         "dom.iframe_lazy_loading.enabled": True,
         # Media devices & WebRTC probe smoothness: avoid hanging on permission dialogs during tests

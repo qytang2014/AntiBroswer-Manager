@@ -115,6 +115,7 @@ async def test_run_restore_success(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr("backend.backup.manager.resolve_runtime", lambda: DummyRuntime(data_dir))
     monkeypatch.setattr("backend.backup.archiver.resolve_runtime", lambda: DummyRuntime(data_dir))
+    monkeypatch.setattr("backend.settings_store.resolve_runtime", lambda: DummyRuntime(data_dir))
     monkeypatch.setattr("backend.database.DB_PATH", data_dir / "profiles.db")
 
     # Create a valid backup tarball

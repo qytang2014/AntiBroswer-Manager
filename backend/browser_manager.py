@@ -37,6 +37,73 @@ try:
 except Exception:
     pass
 
+# Preserve acceptDownloads="internal-browser-default" in Playwright's protocol layer
+# so Playwright does not intercept downloads with Juggler (Firefox) or CDP allowAndName (Chromium),
+# allowing native browser download UI, download panel, and about:downloads history to function.
+def _ensure_playwright_internal_download_patch() -> None:
+    """Ensure Playwright driver coreBundle.js preserves 'internal-browser-default'."""
+    candidate_bundles: list[Path] = []
+    try:
+        import inspect
+        import playwright
+        driver_dir = Path(inspect.getfile(playwright)).parent / "driver"
+        candidate_bundles.append(driver_dir / "package" / "lib" / "coreBundle.js")
+    except Exception:
+        pass
+
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidate_bundles.append(Path(meipass) / "playwright" / "driver" / "package" / "lib" / "coreBundle.js")
+
+    workspace = Path(__file__).resolve().parent.parent
+    for sub in ("dist_native", ".venv-build"):
+        cb = workspace / sub / "AntiBrowser-Manager" / "_internal" / "playwright" / "driver" / "package" / "lib" / "coreBundle.js"
+        if cb.exists():
+            candidate_bundles.append(cb)
+        cb2 = workspace / sub / "lib" / "python3.10" / "site-packages" / "playwright" / "driver" / "package" / "lib" / "coreBundle.js"
+        if cb2.exists():
+            candidate_bundles.append(cb2)
+
+    for core_bundle in candidate_bundles:
+        try:
+            if not core_bundle.exists():
+                continue
+            content = core_bundle.read_text(encoding="utf-8")
+            if 'if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";' in content or \
+               'if (acceptDownloads === "internal-browser-default") return "internal-browser-default";' in content:
+                continue
+
+            target = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads)\n    return "accept";'
+            replacement = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";\n  if (acceptDownloads)\n    return "accept";'
+            if target in content:
+                core_bundle.write_text(content.replace(target, replacement, 1), encoding="utf-8")
+                logger.info("Applied internal-browser-default patch to %s", core_bundle)
+            else:
+                pattern = re.compile(r'(function\s+toAcceptDownloadsProtocol\s*\(\s*acceptDownloads\s*\)\s*\{\s*if\s*\(\s*acceptDownloads\s*===\s*void 0\s*\)\s*return void 0;)')
+                if pattern.search(content):
+                    patched = pattern.sub(r'\1\n  if (acceptDownloads === "internal-browser-default") return "internal-browser-default";', content, count=1)
+                    core_bundle.write_text(patched, encoding="utf-8")
+                    logger.info("Applied regex internal-browser-default patch to %s", core_bundle)
+        except Exception as exc:
+            logger.debug("Failed to apply Playwright internal download patch to %s: %s", core_bundle, exc)
+
+_ensure_playwright_internal_download_patch()
+
+try:
+    from playwright._impl import _browser_type as _pw_bt
+    _orig_prepare_ctx_params = _pw_bt.BrowserType._prepare_browser_context_params
+
+    async def _patched_prepare_ctx_params(self: Any, params: dict[str, Any]) -> None:
+        raw_accept = params.get("acceptDownloads")
+        await _orig_prepare_ctx_params(self, params)
+        if raw_accept == "internal-browser-default":
+            params["acceptDownloads"] = "internal-browser-default"
+
+    _pw_bt.BrowserType._prepare_browser_context_params = _patched_prepare_ctx_params
+except Exception as _patch_exc:
+    logger.debug("Could not patch playwright acceptDownloads: %s", _patch_exc)
+
 
 UPGRADE_URL = "https://cloakbrowser.dev/#pricing"
 
@@ -96,6 +163,42 @@ def _cleanup_stale_chromium_locks(user_data_dir: Path | str) -> None:
                         pass
         except Exception:
             pass
+
+
+def _resolve_downloads_dir(runtime: RuntimeConfig) -> Path:
+    """Resolve standard user Downloads directory with safe fallback."""
+    candidate = Path.home() / "Downloads"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except OSError:
+        fb = runtime.data_dir / "downloads"
+        fb.mkdir(parents=True, exist_ok=True)
+        return fb
+
+
+def _configure_chromium_download_prefs(user_data_dir: Path | str, downloads_dir: Path) -> None:
+    """Preconfigure Chromium Preferences so downloads go directly to Downloads folder without prompting."""
+    try:
+        pref_file = Path(user_data_dir) / "Default" / "Preferences"
+        data: dict[str, Any] = {}
+        if pref_file.exists():
+            try:
+                data = json.loads(pref_file.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        dl_str = str(downloads_dir)
+        download_dict = data.setdefault("download", {})
+        download_dict["default_directory"] = dl_str
+        download_dict["directory_upgrade"] = True
+        download_dict["prompt_for_download"] = False
+        data.setdefault("savefile", {})["default_directory"] = dl_str
+        bubble_dict = data.setdefault("download_bubble", {})
+        bubble_dict["partial_view_enabled"] = True
+        pref_file.parent.mkdir(parents=True, exist_ok=True)
+        pref_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Failed to preconfigure Chromium download preferences: %s", exc)
 
 
 # LRU Cache for proxy test results: cache_key -> (timestamp, result_dict)
@@ -883,37 +986,74 @@ class BrowserManager:
                 import camoufox.pkgman as cp
                 import camoufox.multiversion as cm
                 from .runtime import resolve_runtime
+                from .camoufox_downloader import scan_all_installed_camoufox_kernels
 
                 _cam_data_dir = resolve_runtime().data_dir / "kernels" / "camoufox"
                 cp.INSTALL_DIR = _cam_data_dir
                 cm.BROWSERS_DIR = _cam_data_dir / "browsers"
 
-                installed_camoufox = cm.list_installed()
-                if not installed_camoufox:
+                scanned_map = scan_all_installed_camoufox_kernels()
+                installed_camoufox = []
+                try:
+                    installed_camoufox = cm.list_installed()
+                except Exception:
+                    pass
+
+                if not scanned_map and not installed_camoufox:
                     raise RuntimeError("本地未安装任何 Camoufox 内核，请先前往『内核管理』下载 Camoufox 内核。")
 
+                matched_binary = None
                 matched_version = None
                 if requested_kernel:
                     clean_req = requested_kernel.lstrip("vV").strip()
-                    for inst in installed_camoufox:
-                        v_obj = inst.version
-                        full_str = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
-                        if clean_req in (str(v_obj.version), str(v_obj.build), full_str, inst.path.name) or clean_req.startswith(str(v_obj.version)):
-                            matched_version = full_str
-                            break
+                    if clean_req in scanned_map:
+                        matched_binary = scanned_map[clean_req]["binary_path"]
+                        matched_version = scanned_map[clean_req].get("folder_name") or clean_req
+                    else:
+                        for inst in installed_camoufox:
+                            v_obj = inst.version
+                            full_str = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
+                            if clean_req in (str(v_obj.version), str(v_obj.build), full_str, inst.path.name) or clean_req.startswith(str(v_obj.version)):
+                                matched_version = full_str
+                                try:
+                                    matched_binary = str(cp.launch_path(inst.path))
+                                except Exception:
+                                    pass
+                                break
 
-                if matched_version:
+                if matched_binary:
+                    effective_kernel = matched_binary
+                elif matched_version:
                     effective_kernel = matched_version
                 else:
-                    active_inst = next((inst for inst in installed_camoufox if inst.is_active), installed_camoufox[0])
-                    v_obj = active_inst.version
-                    fallback_kernel = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
+                    active_item = None
+                    for item in scanned_map.values():
+                        if item.get("is_active"):
+                            active_item = item
+                            break
+                    if not active_item and scanned_map:
+                        active_item = next(iter(scanned_map.values()))
+
+                    if active_item:
+                        fallback_kernel = active_item["binary_path"]
+                        fallback_name = active_item.get("folder_name") or active_item.get("version", "unknown")
+                    elif installed_camoufox:
+                        active_inst = next((inst for inst in installed_camoufox if inst.is_active), installed_camoufox[0])
+                        v_obj = active_inst.version
+                        fallback_name = getattr(v_obj, "full_string", f"{v_obj.version}-{v_obj.build}")
+                        try:
+                            fallback_kernel = str(cp.launch_path(active_inst.path))
+                        except Exception:
+                            fallback_kernel = fallback_name
+                    else:
+                        raise RuntimeError("本地未安装任何 Camoufox 内核，请先前往『内核管理』下载 Camoufox 内核。")
+
                     if requested_kernel:
                         logger.warning(
                             "Profile %s 绑定的 Camoufox 内核 %s 未在本地安装，已自动回退到系统可用内核 %s",
                             profile_id,
                             requested_kernel,
-                            fallback_kernel,
+                            fallback_name,
                         )
                         is_fallback = True
                     effective_kernel = fallback_kernel
@@ -1075,9 +1215,11 @@ class BrowserManager:
                         pass
                 sanitized_ext_paths.append(ep)
 
+            downloads_dir = _resolve_downloads_dir(self.runtime)
             launch_options: dict[str, Any] = {
                 "user_data_dir": str(user_data_dir),
                 "headless": False,
+                "accept_downloads": "internal-browser-default",
                 "proxy": proxy,
                 "args": extra_args,
                 "timezone": resolved_tz,
@@ -1259,6 +1401,7 @@ class BrowserManager:
                         "headless": launch_options.get("headless", False),
                         "persistent_context": True,
                         "user_data_dir": launch_options["user_data_dir"],
+                        "accept_downloads": "internal-browser-default",
                         "enable_cache": True,
                         "os": target_os,
                         # Suppress the noisy "proxy without geoip" LeakWarning because
@@ -1302,6 +1445,19 @@ class BrowserManager:
                         eff_str = str(effective_kernel)
                         if "/" in eff_str or "\\" in eff_str:
                             camoufox_options["executable_path"] = eff_str
+                            # Fix Camoufox bug where explicitly passing executable_path on macOS
+                            # causes it to look for properties.json beside the executable instead of in Resources
+                            if target_os == "macos" and "Camoufox.app/Contents/MacOS" in eff_str:
+                                macos_dir = Path(eff_str).parent
+                                res_dir = macos_dir.parent / "Resources"
+                                mac_prop = macos_dir / "properties.json"
+                                res_prop = res_dir / "properties.json"
+                                if res_prop.exists() and not mac_prop.exists():
+                                    try:
+                                        import shutil
+                                        shutil.copy2(res_prop, mac_prop)
+                                    except Exception as e:
+                                        logger.warning("Failed to copy properties.json for Camoufox: %s", e)
                         else:
                             camoufox_options["browser"] = eff_str.lstrip("vV")
                     if cam_proxy is not None:
@@ -1335,6 +1491,7 @@ class BrowserManager:
                         target_os=target_os,
                         timezone=resolved_tz,
                         locale=resolved_locale,
+                        downloads_dir=downloads_dir,
                     )
                     if webrtc_ip:
                         cam_user_prefs["network.dns.disableIPv6"] = True
@@ -1373,6 +1530,7 @@ class BrowserManager:
                         raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc
                 else:
                     _cleanup_stale_chromium_locks(user_data_dir)
+                    _configure_chromium_download_prefs(user_data_dir, downloads_dir)
                     for attempt in range(1, CDP_START_ATTEMPTS + 1):
                         cdp_port = self._reserve_cdp_port()
 
@@ -2173,6 +2331,7 @@ class BrowserManager:
                     raise RuntimeError(
                         f"CDP endpoint returned an unexpected debugger URL: {websocket_url!r}"
                     )
+                await self._reset_cdp_download_behavior(port)
                 return
             except CloakBrowserLicenseError:
                 raise
@@ -2184,6 +2343,66 @@ class BrowserManager:
         if lic is not None:
             raise lic
         raise TimeoutError(f"CDP endpoint on 127.0.0.1:{port} was not ready") from last_error
+
+    async def _reset_cdp_download_behavior(self, port: int, download_dir: Path | None = None) -> None:
+        """Reset Chromium CDP download behavior to default native behavior without DevTools event hijacking."""
+        dl_path = str(download_dir or _resolve_downloads_dir(self.runtime))
+        try:
+            import websockets
+            version = await self._fetch_cdp_version(port)
+            ws_url = str(version.get("webSocketDebuggerUrl") or "")
+            if not ws_url:
+                return
+            async with websockets.connect(ws_url, close_timeout=1.5) as ws:
+                await ws.send(json.dumps({
+                    "id": 9991,
+                    "method": "Browser.setDownloadBehavior",
+                    "params": {
+                        "behavior": "default",
+                        "downloadPath": dl_path,
+                        "eventsEnabled": False,
+                    },
+                }))
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=1.5)
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug("Failed to set CDP download behavior for port %d: %s", port, exc)
+
+    def _attach_download_handler(self, context: Any, download_dir: Path | None = None) -> None:
+        """Listen for download events on context/pages and guarantee files are persisted to Downloads."""
+        target_dir = download_dir or _resolve_downloads_dir(self.runtime)
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        async def _handle_download(download: Any) -> None:
+            try:
+                filename = getattr(download, "suggested_filename", None) or "download"
+                target = target_dir / filename
+                if target.exists() and target.stat().st_size > 0:
+                    logger.info("File %s already exists with size %d; skipping duplicate save", target, target.stat().st_size)
+                    return
+                if target.exists():
+                    stem = target.stem
+                    suffix = target.suffix
+                    c = 1
+                    while (target_dir / f"{stem} ({c}){suffix}").exists():
+                        c += 1
+                    target = target_dir / f"{stem} ({c}){suffix}"
+                await download.save_as(str(target))
+                logger.info("Saved downloaded file %s to %s", filename, target)
+            except Exception as exc:
+                logger.debug("Download save handler completed or skipped: %s", exc)
+
+        try:
+            context.on("page", lambda p: p.on("download", lambda dl: asyncio.ensure_future(_handle_download(dl))))
+            for p in getattr(context, "pages", []):
+                p.on("download", lambda dl: asyncio.ensure_future(_handle_download(dl)))
+        except Exception as exc:
+            logger.debug("Failed to attach download listener to context: %s", exc)
 
     def _build_fingerprint_args(self, profile: dict[str, Any]) -> list[str]:
         """Build extra Chromium args from profile fingerprint settings."""

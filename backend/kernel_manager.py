@@ -260,6 +260,21 @@ async def stream_download_kernel(
     dest_dir = get_binary_dir(version, pro=is_pro)
     binary_path = get_binary_path(version, pro=is_pro)
 
+    # If kernel binary already exists locally, directly reuse it without downloading again
+    if binary_path.exists() and _is_executable(binary_path):
+        logger.info("Chromium 内核 %s (%s) 已存在于本地目录 %s，直接复用，无需重复下载", version, tier, binary_path)
+        yield {
+            "stage": "completed",
+            "message": f"Chromium {version} 内核已存在于本地目录，直接复用！",
+            "percent": 100,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "speed_mb": None,
+            "binary_path": str(binary_path),
+            "browser_type": "cloakbrowser",
+        }
+        return
+
     downloads_dir = get_kernel_downloads_dir()
     part_file = downloads_dir / f"chromium-{version}-{'pro' if is_pro else 'free'}-{tarball_name}.part"
 

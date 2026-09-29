@@ -206,30 +206,75 @@ import contextlib
 from collections.abc import AsyncIterator
 
 
+def _get_sorted_candidate_nodes() -> list[dict[str, Any]]:
+    """Return imported proxy nodes sorted by reliability and latency.
+
+    Prioritizes reliable TCP stream protocols (VLESS, VMESS, ANYTLS, TROJAN, SS)
+    over experimental UDP-only protocols that may be blocked locally or experience resets.
+    """
+    try:
+        from .database import list_proxy_nodes
+        nodes = list_proxy_nodes()
+    except Exception:
+        nodes = []
+    if not nodes:
+        return []
+
+    def _sort_key(node: dict[str, Any]) -> tuple[int, int]:
+        proto = (node.get("protocol") or "").lower()
+        # 0: proven reliable TCP stream protocols, 1: UDP-based or unknown
+        rel = 0 if proto in ("anytls", "vless", "vmess", "trojan", "ss", "shadowsocks") else 1
+        lat = node.get("last_latency_ms") or 9999
+        if lat <= 0:
+            lat = 9999
+        return (rel, lat)
+
+    return sorted(nodes, key=_sort_key)
+
+
 @contextlib.asynccontextmanager
-async def get_imported_proxy_url() -> AsyncIterator[str | None]:
+async def get_imported_proxy_url(node: dict[str, Any] | None = None) -> AsyncIterator[str | None]:
     """Provide a proxy URL from AntiBrowser-Manager's imported nodes if available.
 
-    - Selects the best node (lowest positive latency, or first available).
-    - If sing-box node (vless, vmess, trojan, etc.), spawns a temporary fast_singbox_proxy instance.
-    - Yields the local HTTP proxy URL.
-    - If no proxy nodes are imported, yields None.
+    If node is not specified, selects the most reliable low-latency candidate.
+    Falls back to environment variables or active local desktop proxies if no nodes are imported.
     """
     from .database import list_proxy_nodes
 
-    nodes = list_proxy_nodes()
-    if not nodes:
+    if node is None:
+        candidates = _get_sorted_candidate_nodes()
+        node = candidates[0] if candidates else None
+
+    if not node:
+        # Fallback to system environment proxy or active local desktop proxy if available
+        env_proxy = (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("http_proxy")
+            or os.environ.get("ALL_PROXY")
+            or os.environ.get("all_proxy")
+        )
+        if env_proxy:
+            yield env_proxy
+            return
+
+        import socket
+        for port in (7890, 7897, 10808, 1080, 2080):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.15):
+                    yield f"http://127.0.0.1:{port}"
+                    return
+            except OSError:
+                pass
+
         yield None
         return
 
-    # Select best node: lowest positive latency, or first available
-    valid_nodes = [n for n in nodes if (n.get("last_latency_ms") or -1) > 0]
-    valid_nodes.sort(key=lambda n: n["last_latency_ms"])
-    chosen_node = valid_nodes[0] if valid_nodes else nodes[0]
-
-    protocol = (chosen_node.get("protocol") or "").lower()
-    raw_uri = chosen_node.get("raw_uri") or ""
-    parsed_config = chosen_node.get("parsed_config")
+    node_name = node.get("name") or node.get("id") or "默认节点"
+    protocol = (node.get("protocol") or "").lower()
+    raw_uri = node.get("raw_uri") or ""
+    parsed_config = node.get("parsed_config")
 
     if protocol in ("vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria", "hysteria2", "hy2", "tuic", "anytls"):
         from .singbox_runner import fast_singbox_proxy
@@ -247,7 +292,7 @@ async def get_imported_proxy_url() -> AsyncIterator[str | None]:
             with fast_singbox_proxy(proxy_payload) as proxy_url:
                 yield proxy_url
         except Exception as exc:
-            logger.warning("Failed to start fast sing-box proxy for Web Store: %s", exc)
+            logger.warning("Failed to start fast sing-box proxy for Web Store (%s): %s", node_name, exc)
             yield None
     else:
         yield raw_uri or None
@@ -589,6 +634,44 @@ async def install_extension_from_bytes(
     )
 
 
+def _build_chrome_crx_urls(webstore_id: str) -> list[str]:
+    """Construct Chrome Web Store CRX download URLs with platform & MV3 compatibility."""
+    import platform
+    sys_name = platform.system().lower()
+    os_param = "mac" if "darwin" in sys_name else ("win" if "windows" in sys_name else "linux")
+    arch_param = "arm64" if "arm" in platform.machine().lower() or "aarch64" in platform.machine().lower() else "x86-64"
+
+    return [
+        # 1. Modern Omaha endpoint with high prodversion for MV3 extensions (e.g. Bitwarden)
+        (
+            f"https://clients2.google.com/service/update2/crx?response=redirect"
+            f"&os={os_param}&arch={arch_param}&prod=chromecrx&prodchannel=unknown"
+            f"&prodversion=9999.0.9999.0&acceptformat=crx2,crx3&x=id%3D{webstore_id}%26uc"
+        ),
+        # 2. Modern Omaha endpoint with Chrome 131 version and platform tags
+        (
+            f"https://clients2.google.com/service/update2/crx?response=redirect"
+            f"&os={os_param}&arch={arch_param}&prod=chromecrx&prodchannel="
+            f"&prodversion=131.0.6778.86&acceptformat=crx2,crx3&x=id%3D{webstore_id}%26uc"
+        ),
+        # 3. Standard fallback with 131
+        (
+            f"https://clients2.google.com/service/update2/crx"
+            f"?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3&x=id%3D{webstore_id}%26uc"
+        ),
+        # 4. Google UserContent direct
+        (
+            f"https://clients2.googleusercontent.com/service/update2/crx"
+            f"?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3&x=id%3D{webstore_id}%26uc"
+        ),
+        # 5. Legacy 128.0 fallback
+        (
+            f"https://clients2.google.com/service/update2/crx"
+            f"?response=redirect&prodversion=128.0&acceptformat=crx2,crx3&x=id%3D{webstore_id}%26uc"
+        ),
+    ]
+
+
 async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloakbrowser") -> AsyncIterator[dict[str, Any]]:
     """Download and install a Chrome extension with live progress events."""
     is_firefox = (browser_type == "camoufox")
@@ -602,23 +685,7 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
             crx_urls = [f"https://addons.mozilla.org/firefox/downloads/latest/{id_or_url}/addon-latest.xpi"]
     else:
         webstore_id = extract_webstore_id(id_or_url)
-        crx_urls = [
-            (
-                "https://clients2.google.com/service/update2/crx"
-                "?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3"
-                f"&x=id%3D{webstore_id}%26uc"
-            ),
-            (
-                "https://clients2.googleusercontent.com/service/update2/crx"
-                "?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3"
-                f"&x=id%3D{webstore_id}%26uc"
-            ),
-            (
-                "https://clients2.google.com/service/update2/crx"
-                "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
-                f"&x=id%3D{webstore_id}%26uc"
-            ),
-        ]
+        crx_urls = _build_chrome_crx_urls(webstore_id) if webstore_id else []
 
     if not webstore_id:
         yield {
@@ -656,33 +723,54 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
     }
 
     try:
-        # Loop through connection modes: first direct local network, then imported proxy if needed
-        modes = ["local", "proxy"]
+        # Fast local network probe: if local network can reach Web Store within 2.0s, prioritize direct mode
+        can_direct = False
+        if crx_urls:
+            probe_url = crx_urls[0]
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=2.0, trust_env=True) as probe_client:
+                    probe_resp = await probe_client.head(probe_url, headers=headers)
+                    if probe_resp.status_code in (200, 302, 204):
+                        can_direct = True
+            except Exception:
+                can_direct = False
 
-        for mode in modes:
+        # Build list of connection attempts: local first if reachable, otherwise imported proxy candidates first
+        candidate_nodes = _get_sorted_candidate_nodes()
+        proxy_nodes_to_try = candidate_nodes[:4] if candidate_nodes else [None]
+
+        modes: list[tuple[str, Any]] = []
+        if can_direct:
+            modes.append(("local", None))
+            for n in proxy_nodes_to_try:
+                modes.append(("proxy", n))
+        else:
+            for n in proxy_nodes_to_try:
+                modes.append(("proxy", n))
+            modes.append(("local", None))
+
+        for mode, node in modes:
             if success:
                 break
 
-            proxy_context = get_imported_proxy_url() if mode == "proxy" else None
-            if mode == "proxy" and not proxy_context:
-                continue
+            node_name = (node.get("name") or node.get("id")) if node else "系统代理"
 
-            # In proxy mode, resolve proxy_url from context manager; in local mode, use None
             if mode == "proxy":
+                proxy_context = get_imported_proxy_url(node)
                 async with proxy_context as proxy_url:
                     if not proxy_url:
                         continue
 
                     yield {
                         "stage": "downloading",
-                        "message": "本地连接受阻，正在切换至已导入代理节点尝试断点续传...",
+                        "message": f"正在通过已导入代理节点 [{node_name}] 下载...",
                         "percent": round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0,
                         "downloaded_bytes": downloaded_bytes,
                         "total_bytes": total_bytes,
                     }
 
-                    timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=10.0)
-                    max_retries = 3
+                    timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+                    max_retries = 2
                     for attempt in range(max_retries):
                         if success:
                             break
@@ -698,12 +786,12 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                             pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
                             yield {
                                 "stage": "downloading",
-                                "message": f"网络波动，代理断点重连中 ({attempt + 1}/{max_retries})... 已下载: {dl_mb} MB{tot_mb}",
+                                "message": f"代理断点续传中 ({attempt + 1}/{max_retries})... [{node_name}] 已下载: {dl_mb} MB{tot_mb}",
                                 "percent": pct,
                                 "downloaded_bytes": downloaded_bytes,
                                 "total_bytes": total_bytes,
                             }
-                            await asyncio.sleep(min(1.0 * attempt, 3.0))
+                            await asyncio.sleep(min(1.0 * attempt, 2.0))
 
                         try:
                             async with httpx.AsyncClient(
@@ -728,13 +816,12 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                                                         total_bytes = int(total_str)
                                                 open_mode = "ab"
                                             elif resp.status_code == 200:
-                                                # Server returned full file
                                                 tot_header = resp.headers.get("content-length")
                                                 total_bytes = int(tot_header) if tot_header and tot_header.isdigit() else 0
                                                 downloaded_bytes = 0
                                                 open_mode = "wb"
                                             elif resp.status_code == 416:
-                                                # Range Not Satisfiable: check if part file is already valid complete package
+                                                # Range Not Satisfiable: check if part file is already complete
                                                 if part_file.exists() and part_file.stat().st_size > 0:
                                                     try:
                                                         _find_zip_offset(part_file.read_bytes())
@@ -762,7 +849,7 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                                                         tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
                                                         yield {
                                                             "stage": "downloading",
-                                                            "message": f"正在通过代理下载: {dl_mb} MB{tot_mb}",
+                                                            "message": f"正在通过代理 [{node_name}] 下载: {dl_mb} MB{tot_mb}",
                                                             "percent": pct,
                                                             "downloaded_bytes": downloaded_bytes,
                                                             "total_bytes": total_bytes,
@@ -773,16 +860,16 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                                                 break
                                     except Exception as exc:
                                         last_error = exc
-                                        logger.warning("Stream via proxy interrupted (attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
+                                        logger.warning("Stream via proxy node %s interrupted for %s: %s", node_name, webstore_id, exc)
                                     if success:
                                         break
                         except Exception as exc:
                             last_error = exc
-                            logger.warning("Proxy client error (attempt %d) for %s: %s", attempt + 1, webstore_id, exc)
+                            logger.warning("Proxy client error for node %s (%s): %s", node_name, webstore_id, exc)
             else:
-                # Local network mode
-                timeout = httpx.Timeout(connect=6.0, read=30.0, write=15.0, pool=10.0)
-                max_retries = 3
+                # Direct local network mode
+                timeout = httpx.Timeout(connect=3.0, read=30.0, write=15.0, pool=10.0)
+                max_retries = 2
                 for attempt in range(max_retries):
                     if success:
                         break
@@ -803,7 +890,7 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                             "downloaded_bytes": downloaded_bytes,
                             "total_bytes": total_bytes,
                         }
-                        await asyncio.sleep(min(1.0 * attempt, 3.0))
+                        await asyncio.sleep(min(1.0 * attempt, 2.0))
 
                     try:
                         async with httpx.AsyncClient(
@@ -861,7 +948,7 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
                                                     tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
                                                     yield {
                                                         "stage": "downloading",
-                                                        "message": f"正在下载: {dl_mb} MB{tot_mb}",
+                                                        "message": f"正在直连下载: {dl_mb} MB{tot_mb}",
                                                         "percent": pct,
                                                         "downloaded_bytes": downloaded_bytes,
                                                         "total_bytes": total_bytes,
@@ -1005,7 +1092,7 @@ async def check_extensions_updates() -> dict[str, Any]:
     # Construct Omaha query params: x=id%3D{ext_id}%26v%3D{current_version}%26uc
     params = [f"x=id%3D{wid}%26v%3D{ver}%26uc" for _, wid, ver in query_items]
     query_str = "&".join(params)
-    url = f"https://clients2.google.com/service/update2/crx?{query_str}&acceptformat=crx2,crx3&prodversion=128.0"
+    url = f"https://clients2.google.com/service/update2/crx?{query_str}&acceptformat=crx2,crx3&prodversion=9999.0.9999.0"
 
     headers = {
         "User-Agent": (

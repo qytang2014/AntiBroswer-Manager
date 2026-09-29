@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# Ensure tests on Linux outside Docker never default to root /data if unmocked
+_test_data_dir = Path(tempfile.gettempdir()) / "antibrowser_test_data"
+_test_data_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("ANTIBROWSER_MANAGER_DATA_DIR", str(_test_data_dir))
 
 # ---------------------------------------------------------------------------
 # Mock cloakbrowser BEFORE any backend module is imported.
@@ -93,6 +100,10 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db_file = tmp_path / "profiles.db"
     monkeypatch.setattr(db, "DB_PATH", db_file)
     monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    from backend import extension_manager
+    fake_ext_dir = tmp_path / "extensions"
+    fake_ext_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(extension_manager, "EXTENSIONS_DIR", fake_ext_dir)
     db.init_db()
     return tmp_path
 

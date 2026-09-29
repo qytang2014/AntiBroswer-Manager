@@ -1,14 +1,18 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import platform
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import AsyncIterator, Any
+import httpx
 import requests
 
 from camoufox.pkgman import (
@@ -292,66 +296,177 @@ def fetch_camoufox_available_versions(force_refresh: bool = False) -> list[Avail
     return []
 
 
+def scan_all_installed_camoufox_kernels() -> dict[str, dict[str, Any]]:
+    """Scan locally installed Camoufox browser kernels under the managed data directory:
+    <data_dir>/kernels/camoufox/browsers.
+
+    If kernels already exist there, directly reuse them without re-downloading.
+    """
+    browsers_root = _camoufox_data_dir / "browsers"
+    if not browsers_root.exists():
+        return {}
+
+    seen_dirs: set[Path] = set()
+    result: dict[str, dict[str, Any]] = {}
+    active_rel = None
+    try:
+        active_rel = cm.load_config().get("active_version")
+    except Exception:
+        pass
+
+    for repo_dir in browsers_root.iterdir():
+        if not repo_dir.is_dir() or repo_dir.name.startswith("."):
+            continue
+
+        # Check subdirectories (e.g. official/152.0.4-beta.31-7b8d12d6) or direct version folders
+        sub_dirs = [d for d in repo_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        has_sub_versions = any(
+            (d / "Camoufox.app").exists()
+            or (d / "camoufox").exists()
+            or (d / "camoufox.exe").exists()
+            or (d / "version.json").exists()
+            for d in sub_dirs
+        )
+        version_dirs = sub_dirs if has_sub_versions else [repo_dir]
+
+        for vdir in version_dirs:
+            try:
+                resolved_vdir = vdir.resolve()
+            except Exception:
+                resolved_vdir = vdir
+            if resolved_vdir in seen_dirs:
+                continue
+            seen_dirs.add(resolved_vdir)
+
+            # Locate executable binary
+            bin_path = None
+            for cand in [
+                vdir / "Camoufox.app" / "Contents" / "MacOS" / "camoufox",
+                vdir / "camoufox",
+                vdir / "camoufox.exe",
+            ]:
+                if cand.exists():
+                    bin_path = cand
+                    break
+
+            if not bin_path:
+                try:
+                    bp = cp.launch_path(vdir)
+                    if bp and bp.exists():
+                        bin_path = bp
+                except Exception:
+                    pass
+
+            if not bin_path or not bin_path.exists():
+                continue
+
+            # Ensure executable bit on Unix
+            try:
+                st = bin_path.stat()
+                if not (st.st_mode & 0o111):
+                    bin_path.chmod(st.st_mode | 0o755)
+            except Exception:
+                pass
+
+            # Read version info
+            vjson_path = vdir / "version.json"
+            v_data: dict[str, Any] = {}
+            if vjson_path.exists():
+                try:
+                    v_data = json.loads(vjson_path.read_text(encoding="utf-8"))
+                except Exception:
+                    v_data = {}
+
+            v_str = str(v_data.get("version") or "").strip()
+            b_str = str(v_data.get("build") or "").strip()
+            if not v_str:
+                parts = vdir.name.split("-")
+                v_str = parts[0].strip()
+                if len(parts) > 1:
+                    b_str = parts[1].strip()
+
+            # Compute size
+            try:
+                tot_bytes = sum(f.stat().st_size for f in vdir.rglob("*") if f.is_file())
+                size_mb = round(tot_bytes / (1024 * 1024), 1)
+            except Exception:
+                size_mb = 0.0
+
+            is_active = False
+            if active_rel:
+                is_active = (active_rel in str(vdir) or vdir.name in active_rel)
+
+            entry = {
+                "install_dir": vdir,
+                "binary_path": str(bin_path),
+                "version": v_str,
+                "build": b_str,
+                "size_mb": size_mb,
+                "is_active": is_active,
+                "folder_name": vdir.name,
+            }
+
+            aliases = [
+                vdir.name,
+                vdir.name.lstrip("vV"),
+            ]
+            if v_str and b_str:
+                aliases.extend([
+                    f"{v_str}-{b_str}",
+                    f"v{v_str}-{b_str}",
+                    f"{v_str}_{b_str}",
+                ])
+
+            for alias in aliases:
+                if alias and alias not in result:
+                    result[alias] = entry
+
+    return result
+
+
 def get_camoufox_kernel_list(force_refresh: bool = False) -> list[dict[str, Any]]:
     """Build list of Camoufox kernel descriptors (both available and locally installed)."""
     current_platform = get_current_camoufox_platform_key()
     available_versions = fetch_camoufox_available_versions(force_refresh=force_refresh)
-
-    # Scan locally installed versions
-    installed_map: dict[str, dict[str, Any]] = {}
-    try:
-        installed_list = cm.list_installed()
-        for iv in installed_list:
-            v_full = iv.version.full_string.lstrip("v")
-            v_disp = f"v{v_full}"
-            size_mb = 0.0
-            if iv.path.exists():
-                try:
-                    tot_bytes = sum(f.stat().st_size for f in iv.path.rglob("*") if f.is_file())
-                    size_mb = round(tot_bytes / (1024 * 1024), 1)
-                except Exception:
-                    size_mb = 0.0
-
-            bin_path = None
-            try:
-                bin_path = str(cp.launch_path(iv.path))
-            except Exception:
-                # Fallback search for executable in version folder
-                for cand in [
-                    iv.path / "Camoufox.app" / "Contents" / "MacOS" / "camoufox",
-                    iv.path / "camoufox",
-                    iv.path / "camoufox.exe",
-                ]:
-                    if cand.exists():
-                        bin_path = str(cand)
-                        break
-
-            installed_map[v_full] = {
-                "installed": True,
-                "binary_path": bin_path,
-                "size_mb": size_mb,
-                "is_active": iv.is_active,
-            }
-    except Exception as exc:
-        logger.debug("Error listing installed Camoufox browsers: %s", exc)
+    installed_map = scan_all_installed_camoufox_kernels()
 
     kernels: list[dict[str, Any]] = []
-    seen_versions: set[str] = set()
+    seen_keys: set[str] = set()
 
     # 1. Process available versions
     for cv in available_versions:
         cv_disp = getattr(cv, "display", None) or f"v{cv.version.full_string}"
         cv_ver_str = str(getattr(getattr(cv, "version", None), "full_string", cv_disp)).lstrip("v")
         clean_key = cv_ver_str.lstrip("v")
+        v_ver = getattr(getattr(cv, "version", None), "version", "")
+        v_build = getattr(getattr(cv, "version", None), "build", "")
 
-        inst_info = installed_map.get(clean_key)
+        lookup_keys = [
+            clean_key,
+            cv_ver_str,
+            f"{v_ver}-{v_build}" if v_build else v_ver,
+            f"v{v_ver}-{v_build}" if v_build else f"v{v_ver}",
+            cv_disp,
+            cv_disp.lstrip("v"),
+        ]
+        lookup_keys = [lk for lk in lookup_keys if lk and lk != "-"]
+        inst_info = None
+        for lk in lookup_keys:
+            if lk and lk in installed_map:
+                inst_info = installed_map[lk]
+                break
+
         is_installed = inst_info is not None
         binary_path = inst_info.get("binary_path") if inst_info else None
         size_mb = inst_info.get("size_mb") if inst_info else None
         if not size_mb and getattr(cv, "asset_size", None):
             size_mb = round(cv.asset_size / (1024 * 1024), 1)
 
-        seen_versions.add(clean_key)
+        seen_keys.add(clean_key)
+        if inst_info:
+            seen_keys.add(inst_info["folder_name"])
+            seen_keys.add(f"{inst_info['version']}-{inst_info['build']}")
+
         kernels.append({
             "version": cv_ver_str,
             "tier": "free",
@@ -366,21 +481,29 @@ def get_camoufox_kernel_list(force_refresh: bool = False) -> list[dict[str, Any]
         })
 
     # 2. Add any locally installed versions not in available catalog
-    for v_full, inst_info in installed_map.items():
-        if v_full not in seen_versions:
-            seen_versions.add(v_full)
-            kernels.append({
-                "version": v_full,
-                "tier": "free",
-                "browser_type": "camoufox",
-                "name": f"Camoufox {v_full} (本地安装)",
-                "description": "已安装在本地目录的 Camoufox (Firefox) 内核",
-                "platform": current_platform,
-                "installed": True,
-                "is_active": inst_info.get("is_active", False),
-                "binary_path": inst_info.get("binary_path"),
-                "size_mb": inst_info.get("size_mb"),
-            })
+    processed_paths: set[str] = set()
+    for key, inst_info in installed_map.items():
+        install_path_str = inst_info["binary_path"]
+        if install_path_str in processed_paths:
+            continue
+        v_tag = f"{inst_info['version']}-{inst_info['build']}" if inst_info.get("build") else inst_info["version"]
+        if v_tag in seen_keys or inst_info["folder_name"] in seen_keys:
+            continue
+
+        processed_paths.add(install_path_str)
+        seen_keys.add(v_tag)
+        kernels.append({
+            "version": v_tag,
+            "tier": "free",
+            "browser_type": "camoufox",
+            "name": f"Camoufox {v_tag} (本地安装)",
+            "description": "已安装在本地目录的 Camoufox (Firefox) 内核",
+            "platform": current_platform,
+            "installed": True,
+            "is_active": inst_info.get("is_active", False),
+            "binary_path": inst_info.get("binary_path"),
+            "size_mb": inst_info.get("size_mb"),
+        })
 
     return kernels
 
@@ -429,6 +552,15 @@ class CustomCamoufoxFetcher(CamoufoxFetcher):
 
 
 async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]]:
+    """Resumable, atomic download & install pipeline for Camoufox kernels.
+
+    Key safeguards:
+    1. Downloads to a .part file with HTTP Range resumption and mirror fallback.
+    2. Verifies SHA-256 integrity before unpacking.
+    3. Extracts to a temporary folder and verifies executable validity.
+    4. NEVER deletes an existing installation before the new one is downloaded and ready.
+    5. Atomically replaces destination directory using backup-restore pattern.
+    """
     yield {
         "browser_type": "camoufox",
         "stage": "connecting",
@@ -439,9 +571,42 @@ async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]
         "speed_mb": None,
     }
 
-    # 1. find version object
-    versions = fetch_camoufox_available_versions()
+    # 0. Check if already installed locally; if so, directly reuse it without downloading
+    installed_map = scan_all_installed_camoufox_kernels()
+    clean_req_version = version.lstrip("vV").strip()
+    existing_inst = None
+    for k in [clean_req_version, version, f"v{clean_req_version}"]:
+        if k in installed_map:
+            existing_inst = installed_map[k]
+            break
+    if not existing_inst:
+        for k, inst in installed_map.items():
+            if clean_req_version in (
+                inst.get("version"),
+                inst.get("folder_name"),
+                f"{inst.get('version')}-{inst.get('build')}",
+            ):
+                existing_inst = inst
+                break
 
+    if existing_inst and existing_inst.get("binary_path"):
+        bp = Path(existing_inst["binary_path"])
+        if bp.exists():
+            logger.info("Camoufox 内核 %s 已存在于本地目录 %s，直接复用，无需重复下载", version, bp)
+            yield {
+                "browser_type": "camoufox",
+                "stage": "completed",
+                "message": f"Camoufox {version} 本地已存在，直接复用！",
+                "percent": 100,
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "speed_mb": None,
+                "binary_path": str(bp),
+            }
+            return
+
+    # 1. Resolve version object
+    versions = fetch_camoufox_available_versions()
     clean_req_version = version.lstrip("v")
     target_v = None
     for v in versions:
@@ -452,7 +617,6 @@ async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]
             target_v = v
             break
 
-    # If not found in fetched versions, check platform catalog directly
     if not target_v:
         plat_key = get_current_camoufox_platform_key()
         for cat in BUILTIN_CAMOUFOX_CATALOG.get(plat_key, []):
@@ -469,7 +633,14 @@ async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]
         }
         return
 
-    # Check imported proxy if direct is blocked
+    # 2. Build candidate URLs (direct GitHub + mirror accelerators)
+    primary_url = target_v.url
+    candidate_urls = [primary_url]
+    if "github.com" in primary_url:
+        candidate_urls.append(f"https://ghfast.top/{primary_url}")
+        candidate_urls.append(f"https://ghproxy.net/{primary_url}")
+
+    # Check imported proxy
     from .extension_manager import get_imported_proxy_url
     fallback_proxy: str | None = None
     try:
@@ -479,93 +650,312 @@ async def stream_download_camoufox(version: str) -> AsyncIterator[dict[str, Any]
     except Exception:
         pass
 
-    CustomCamoufoxFetcher.fallback_proxy_url = fallback_proxy
-    fetcher = CustomCamoufoxFetcher(selected_version=target_v)
+    # 3. Setup download cache path
+    dl_dir = _camoufox_data_dir / ".downloads"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    plat_key = get_current_camoufox_platform_key()
+    safe_name = f"{target_v.version.version}_{target_v.version.build}_{plat_key}"
+    part_file = dl_dir / f"camoufox_{safe_name}.zip.part"
 
-    # 2. queue to get progress from thread
-    queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
+    total_bytes = getattr(target_v, "asset_size", 0) or 0
+    downloaded_bytes = 0
+    if part_file.exists():
+        downloaded_bytes = part_file.stat().st_size
 
-    def progress_callback(downloaded: int, total_size: int):
-        loop.call_soon_threadsafe(queue.put_nowait, ("PROGRESS", downloaded, total_size))
+    download_success = False
+    if total_bytes > 0 and downloaded_bytes == total_bytes:
+        download_success = True
 
-    CustomCamoufoxFetcher.progress_callback = progress_callback
+    # 4. Resumable streaming download loop
+    if not download_success:
+        last_error = None
+        max_attempts = 6
+        timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=15.0)
 
-    def download_thread():
-        try:
-            # We wrap installation: download_file -> verify -> unzip
-            fetcher.install(replace=True)
-            try:
-                from .camoufox_policies import sanitize_all_installed_camoufox_kernels
-                sanitize_all_installed_camoufox_kernels()
-            except Exception:
-                pass
-            loop.call_soon_threadsafe(queue.put_nowait, ("DONE", None, None))
-        except Exception as e:
-            loop.call_soon_threadsafe(queue.put_nowait, ("ERROR", e, None))
+        for attempt in range(max_attempts):
+            url = candidate_urls[attempt % len(candidate_urls)]
+            # Try proxy on early attempts if available
+            proxy_for_attempt = fallback_proxy if (fallback_proxy and attempt < 2) else None
 
-    t = threading.Thread(target=download_thread, daemon=True)
-    t.start()
-
-    last_bytes = 0
-    last_yield_time = time.monotonic()
-    total_bytes_expected = getattr(target_v, "asset_size", 0)
-
-    while True:
-        action, arg1, arg2 = await queue.get()
-        now = time.monotonic()
-
-        if action == "DONE":
-            yield {
-                "browser_type": "camoufox",
-                "stage": "completed",
-                "message": f"Camoufox {version} 安装完成，已就绪！",
-                "percent": 100,
-                "downloaded_bytes": total_bytes_expected,
-                "total_bytes": total_bytes_expected,
-                "speed_mb": None,
+            headers: dict[str, str] = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             }
-            break
-        elif action == "ERROR":
-            err_msg = str(arg1)
+            if GITHUB_TOKEN and "api.github" in url:
+                headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+            if downloaded_bytes > 0:
+                headers["Range"] = f"bytes={downloaded_bytes}-"
+
+            try:
+                client_kwargs: dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
+                if proxy_for_attempt:
+                    client_kwargs["proxy"] = proxy_for_attempt
+
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    async with client.stream("GET", url, headers=headers) as resp:
+                        if resp.status_code == 206:
+                            open_mode = "ab"
+                            content_range = resp.headers.get("content-range", "")
+                            if "/" in content_range:
+                                try:
+                                    total_bytes = int(content_range.rsplit("/", 1)[-1])
+                                except ValueError:
+                                    pass
+                        elif resp.status_code == 200:
+                            open_mode = "wb"
+                            downloaded_bytes = 0
+                            if resp.headers.get("content-length"):
+                                total_bytes = int(resp.headers["content-length"])
+                        elif resp.status_code == 416:
+                            # Range satisfied or invalid
+                            if total_bytes and downloaded_bytes >= total_bytes:
+                                download_success = True
+                                break
+                            else:
+                                part_file.write_bytes(b"")
+                                downloaded_bytes = 0
+                                continue
+                        else:
+                            last_error = RuntimeError(f"HTTP {resp.status_code} from {url}")
+                            continue
+
+                        last_bytes = downloaded_bytes
+                        last_yield_time = time.monotonic()
+
+                        with open(part_file, open_mode) as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=131072):
+                                if not chunk:
+                                    continue
+                                f.write(chunk)
+                                downloaded_bytes += len(chunk)
+                                now = time.monotonic()
+                                elapsed = now - last_yield_time
+
+                                if elapsed >= 0.25 or (total_bytes > 0 and downloaded_bytes >= total_bytes):
+                                    speed_mb = round(((downloaded_bytes - last_bytes) / (1024 * 1024)) / max(elapsed, 0.001), 1)
+                                    last_bytes = downloaded_bytes
+                                    last_yield_time = now
+
+                                    pct = round((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+                                    dl_mb = round(downloaded_bytes / (1024 * 1024), 1)
+                                    tot_mb = f" / {round(total_bytes / (1024 * 1024), 1)} MB" if total_bytes > 0 else ""
+
+                                    yield {
+                                        "browser_type": "camoufox",
+                                        "stage": "downloading",
+                                        "message": f"正在下载 Camoufox {version}: {dl_mb} MB{tot_mb} ({speed_mb} MB/s)",
+                                        "percent": pct,
+                                        "downloaded_bytes": downloaded_bytes,
+                                        "total_bytes": total_bytes,
+                                        "speed_mb": speed_mb,
+                                    }
+
+                        if downloaded_bytes > 0 and (total_bytes == 0 or downloaded_bytes >= total_bytes):
+                            download_success = True
+                            break
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Camoufox download interrupted (attempt %d/%d) from %s: %s",
+                    attempt + 1,
+                    max_attempts,
+                    url,
+                    exc,
+                )
+                await asyncio.sleep(1.0)
+
+            if download_success:
+                break
+
+    if not download_success or not part_file.exists() or part_file.stat().st_size == 0:
+        yield {
+            "browser_type": "camoufox",
+            "stage": "error",
+            "message": f"Camoufox 下载失败: 无法连接下载源或连接中断 ({last_error})，请检查网络或配置代理节点后重试。",
+            "percent": 0,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+        }
+        return
+
+    # 5. Integrity verification stage
+    expected_sha = getattr(target_v, "sha256", None)
+    if expected_sha:
+        yield {
+            "browser_type": "camoufox",
+            "stage": "verifying",
+            "message": f"下载完成，正在校验完整性 (SHA-256)...",
+            "percent": 100,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+        }
+        hasher = hashlib.sha256()
+        with open(part_file, "rb") as f:
+            while chunk := f.read(1048576):
+                hasher.update(chunk)
+        calc_sha = hasher.hexdigest().lower()
+        if calc_sha != expected_sha.lower():
+            logger.error("SHA256 mismatch for %s: expected %s, got %s", part_file, expected_sha, calc_sha)
+            part_file.unlink(missing_ok=True)
             yield {
                 "browser_type": "camoufox",
                 "stage": "error",
-                "message": f"Camoufox 下载安装失败: {err_msg}",
+                "message": f"Camoufox 压缩包 SHA-256 校验失败 (预期 {expected_sha[:8]}..., 实际 {calc_sha[:8]}...)，损坏文件已清理，请重试。",
                 "percent": 0,
             }
-            break
-        elif action == "PROGRESS":
-            downloaded = arg1
-            total = arg2 or total_bytes_expected
-            elapsed = now - last_yield_time
+            return
 
-            if elapsed >= 0.2 or downloaded >= total:
-                speed_mb = round(((downloaded - last_bytes) / (1024 * 1024)) / max(elapsed, 0.001), 1)
-                last_bytes = downloaded
-                last_yield_time = now
+    # 6. Extraction to isolated temporary directory
+    yield {
+        "browser_type": "camoufox",
+        "stage": "extracting",
+        "message": f"下载校验完成，正在解压并部署 Camoufox {version}...",
+        "percent": 100,
+        "downloaded_bytes": downloaded_bytes,
+        "total_bytes": total_bytes,
+    }
 
-                pct = round((downloaded / total) * 100) if total > 0 else 0
-                dl_mb = round(downloaded / (1024 * 1024), 1)
-                tot_mb = f" / {round(total / (1024 * 1024), 1)} MB" if total > 0 else ""
+    extract_tmp = _camoufox_data_dir / f".tmp_extract_{int(time.time())}_{os.getpid()}"
+    try:
+        extract_tmp.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(part_file, "r") as zf:
+            for member in zf.infolist():
+                target_path = (extract_tmp / member.filename).resolve()
+                if not str(target_path).startswith(str(extract_tmp.resolve())):
+                    raise RuntimeError(f"Zip 压缩包包含非法路径穿透: {member.filename}")
+                zf.extract(member, extract_tmp)
+                # Restore unix executable permissions
+                perm = member.external_attr >> 16
+                if perm:
+                    try:
+                        target_path.chmod(perm)
+                    except Exception:
+                        pass
 
-                if downloaded >= total and total > 0:
-                    yield {
-                        "browser_type": "camoufox",
-                        "stage": "extracting",
-                        "message": f"下载完成，正在解压并部署 Camoufox {version}...",
-                        "percent": 100,
-                        "downloaded_bytes": downloaded,
-                        "total_bytes": total,
-                        "speed_mb": speed_mb,
-                    }
-                else:
-                    yield {
-                        "browser_type": "camoufox",
-                        "stage": "downloading",
-                        "message": f"正在下载 Camoufox {version}: {dl_mb} MB{tot_mb} ({speed_mb} MB/s)",
-                        "percent": pct,
-                        "downloaded_bytes": downloaded,
-                        "total_bytes": total,
-                        "speed_mb": speed_mb,
-                    }
+        # Flatten single root folder if zip wrapped all files into an extra directory
+        sub_items = [p for p in extract_tmp.iterdir() if not p.name.startswith(".")]
+        if len(sub_items) == 1 and sub_items[0].is_dir() and sub_items[0].suffix != ".app":
+            inner_dir = sub_items[0]
+            for child in inner_dir.iterdir():
+                shutil.move(str(child), str(extract_tmp / child.name))
+            inner_dir.rmdir()
+
+        # On macOS, remove Gatekeeper quarantine xattrs
+        if platform.system() == "Darwin":
+            try:
+                subprocess.run(
+                    ["xattr", "-rd", "com.apple.quarantine", str(extract_tmp)],
+                    capture_output=True,
+                    timeout=10.0,
+                )
+            except Exception:
+                pass
+
+        # Ensure executable permissions on all binaries and shell scripts
+        for item in extract_tmp.rglob("*"):
+            if item.is_file() and (
+                item.name == "camoufox"
+                or item.name == "camoufox.exe"
+                or item.suffix in (".sh", ".bin")
+                or "/MacOS/" in str(item)
+            ):
+                try:
+                    item.chmod(item.stat().st_mode | 0o755)
+                except Exception:
+                    pass
+
+        # Locate binary in extracted tree
+        bin_path = None
+        for cand in [
+            extract_tmp / "Camoufox.app" / "Contents" / "MacOS" / "camoufox",
+            extract_tmp / "camoufox",
+            extract_tmp / "camoufox.exe",
+        ]:
+            if cand.exists():
+                bin_path = cand
+                break
+
+        if not bin_path or not bin_path.exists():
+            raise RuntimeError(f"解压完成但未在预期结构中找到可执行文件: {extract_tmp}")
+
+        # Write version.json metadata
+        v_meta = {
+            "version": target_v.version.version,
+            "build": target_v.version.build,
+            "prerelease": target_v.is_prerelease,
+            "sha256": getattr(target_v, "sha256", None),
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        (extract_tmp / "version.json").write_text(json.dumps(v_meta, indent=2), encoding="utf-8")
+
+        # 7. Safe atomic swap to destination directory
+        repo_name = "official"
+        sha8 = getattr(target_v, "sha8", "") or (target_v.sha256[:8] if target_v.sha256 else "")
+        v_folder_name = cm.version_folder_name(target_v.version.version, target_v.version.build, sha8)
+        dest_dir = cm.BROWSERS_DIR / repo_name / v_folder_name
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        if dest_dir.exists():
+            backup_dir = dest_dir.parent / f"{dest_dir.name}.bak_{int(time.time())}"
+            dest_dir.rename(backup_dir)
+            try:
+                extract_tmp.rename(dest_dir)
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            except Exception as swap_err:
+                if backup_dir.exists() and not dest_dir.exists():
+                    backup_dir.rename(dest_dir)
+                raise swap_err
+        else:
+            extract_tmp.rename(dest_dir)
+
+        # 8. Post-install registration & sanitization
+        try:
+            cm.set_active(f"browsers/{repo_name}/{v_folder_name}")
+            cm.COMPAT_FLAG.touch()
+        except Exception as reg_err:
+            logger.debug("Camoufox active flag update notice: %s", reg_err)
+
+        try:
+            from .camoufox_policies import sanitize_all_installed_camoufox_kernels
+            sanitize_all_installed_camoufox_kernels()
+        except Exception as san_err:
+            logger.debug("Camoufox policies sanitization notice: %s", san_err)
+
+        # Cleanup .part file
+        part_file.unlink(missing_ok=True)
+
+        # Find final binary path in dest_dir
+        final_bin = None
+        for cand in [
+            dest_dir / "Camoufox.app" / "Contents" / "MacOS" / "camoufox",
+            dest_dir / "camoufox",
+            dest_dir / "camoufox.exe",
+        ]:
+            if cand.exists():
+                final_bin = cand
+                break
+
+        yield {
+            "browser_type": "camoufox",
+            "stage": "completed",
+            "message": f"Camoufox {version} 安装完成，已就绪！",
+            "percent": 100,
+            "downloaded_bytes": total_bytes,
+            "total_bytes": total_bytes,
+            "speed_mb": None,
+            "binary_path": str(final_bin) if final_bin else None,
+        }
+
+    except Exception as exc:
+        logger.error("Failed during Camoufox extract/deploy: %s", exc, exc_info=True)
+        yield {
+            "browser_type": "camoufox",
+            "stage": "error",
+            "message": f"Camoufox 解压安装失败: {exc}",
+            "percent": 0,
+        }
+    finally:
+        if extract_tmp.exists():
+            shutil.rmtree(extract_tmp, ignore_errors=True)
+

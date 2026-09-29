@@ -67,19 +67,51 @@ export function ExtensionManagerModal({
     cloakbrowser: [],
     camoufox: [],
   });
+  type BrowserEngine = "cloakbrowser" | "camoufox";
+  interface EngineInstallState {
+    installingId: string | null;
+    installingName: string | null;
+    downloadProgress: DownloadProgress | null;
+    actionLoading: boolean;
+  }
+
+  const [installStateMap, setInstallStateMap] = useState<Record<BrowserEngine, EngineInstallState>>({
+    cloakbrowser: { installingId: null, installingName: null, downloadProgress: null, actionLoading: false },
+    camoufox: { installingId: null, installingName: null, downloadProgress: null, actionLoading: false },
+  });
+  const [searchingMap, setSearchingMap] = useState<Record<BrowserEngine, boolean>>({
+    cloakbrowser: false,
+    camoufox: false,
+  });
+  const [feedbackMap, setFeedbackMap] = useState<Record<BrowserEngine, { type: "success" | "error"; text: string } | null>>({
+    cloakbrowser: null,
+    camoufox: null,
+  });
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [installingId, setInstallingId] = useState<string | null>(null);
-  const [installingName, setInstallingName] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
-  const [webstoreInputMap, setWebstoreInputMap] = useState<Record<"cloakbrowser" | "camoufox", string>>({
+  const [webstoreInputMap, setWebstoreInputMap] = useState<Record<BrowserEngine, string>>({
     cloakbrowser: "",
     camoufox: "",
   });
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateMap, setUpdateMap] = useState<Record<string, ExtensionUpdateInfo>>({});
+
+  const currentInstallState = installStateMap[browserType];
+  const { installingId, installingName, downloadProgress, actionLoading } = currentInstallState;
+  const searching = searchingMap[browserType];
+  const feedback = feedbackMap[browserType];
+
+  const setFeedback = (fb: { type: "success" | "error"; text: string } | null, targetEngine: BrowserEngine = browserType) => {
+    setFeedbackMap((prev) => ({ ...prev, [targetEngine]: fb }));
+  };
+  const setSearching = (isSearching: boolean, targetEngine: BrowserEngine = browserType) => {
+    setSearchingMap((prev) => ({ ...prev, [targetEngine]: isSearching }));
+  };
+  const setInstallState = (update: Partial<EngineInstallState>, targetEngine: BrowserEngine = browserType) => {
+    setInstallStateMap((prev) => ({
+      ...prev,
+      [targetEngine]: { ...prev[targetEngine], ...update },
+    }));
+  };
 
   const searchResults = searchResultsMap[browserType];
   const setSearchResults = (results: WebStoreSearchResult[]) => {
@@ -116,60 +148,68 @@ export function ExtensionManagerModal({
     if (isOpen) {
       fetchExtensions();
       fetchPopular();
-      setFeedback(null);
     }
   }, [isOpen, browserType]);
 
   if (!isOpen) return null;
 
   const handleInstallFromWebStore = async (idOrUrl?: string, extName?: string) => {
-    const target = (idOrUrl || webstoreInput).trim();
+    const targetEngine = browserType;
+    const target = (idOrUrl || webstoreInputMap[targetEngine]).trim();
     if (!target) return;
 
     let displayName = extName;
     if (!displayName) {
       const foundPop = popular.find((p) => p.id === target || target.includes(p.id));
       if (foundPop) displayName = foundPop.name;
-      const foundSearch = searchResults.find((s) => s.id === target || target.includes(s.id));
+      const currentSearch = searchResultsMap[targetEngine];
+      const foundSearch = currentSearch.find((s) => s.id === target || target.includes(s.id));
       if (foundSearch) displayName = foundSearch.name;
     }
 
-    setActionLoading(true);
-    setInstallingId(target);
-    setInstallingName(displayName || null);
-    setFeedback(null);
-    setDownloadProgress({
-      stage: "connecting",
-      message: browserType === "camoufox" ? "正在连接 Firefox 附加组件..." : "正在连接 Chrome 应用商店...",
-      percent: 0,
-    });
+    setInstallState({
+      actionLoading: true,
+      installingId: target,
+      installingName: displayName || null,
+      downloadProgress: {
+        stage: "connecting",
+        message: targetEngine === "camoufox" ? "正在连接 Firefox 附加组件..." : "正在连接 Chrome 应用商店...",
+        percent: 0,
+      },
+    }, targetEngine);
+    setFeedback(null, targetEngine);
 
     try {
       const installed = await api.installFromWebStoreStream(target, (progress) => {
-        setDownloadProgress(progress);
-      }, browserType);
-      setFeedback({ type: "success", text: `成功安装扩展 "${installed.name}"！` });
-      if (!idOrUrl) setWebstoreInput("");
+        setInstallState({ downloadProgress: progress }, targetEngine);
+      }, targetEngine);
+      setFeedback({ type: "success", text: `成功安装扩展 "${installed.name}"！` }, targetEngine);
+      if (!idOrUrl) {
+        setWebstoreInputMap((prev) => ({ ...prev, [targetEngine]: "" }));
+      }
       await fetchExtensions();
       onExtensionsChanged?.();
     } catch (err: any) {
       const msg = err?.message || (err instanceof ApiError ? err.message : "安装应用商店扩展失败");
-      setFeedback({ type: "error", text: msg });
+      setFeedback({ type: "error", text: msg }, targetEngine);
     } finally {
-      setActionLoading(false);
-      setInstallingId(null);
-      setInstallingName(null);
-      setDownloadProgress(null);
+      setInstallState({
+        actionLoading: false,
+        installingId: null,
+        installingName: null,
+        downloadProgress: null,
+      }, targetEngine);
     }
   };
 
   const handleSearchOrInstall = async () => {
-    const target = webstoreInput.trim();
+    const targetEngine = browserType;
+    const target = webstoreInputMap[targetEngine].trim();
     if (!target) return;
 
     // Check if it looks like a direct 32-char ID or Web Store URL
-    const isDirectId = browserType === "cloakbrowser" && /^[a-p]{32}$/i.test(target);
-    const isUrl = target.includes("chromewebstore.google.com") || (browserType === "camoufox" && (target.includes("addons.mozilla.org") || target.endsWith(".xpi")));
+    const isDirectId = targetEngine === "cloakbrowser" && /^[a-p]{32}$/i.test(target);
+    const isUrl = target.includes("chromewebstore.google.com") || (targetEngine === "camoufox" && (target.includes("addons.mozilla.org") || target.endsWith(".xpi")));
 
     if (isDirectId || isUrl) {
       handleInstallFromWebStore(target);
@@ -177,24 +217,24 @@ export function ExtensionManagerModal({
     }
 
     // Keyword search
-    setSearching(true);
-    setFeedback(null);
+    setSearching(true, targetEngine);
+    setFeedback(null, targetEngine);
     try {
-      const results = await api.searchWebStore(target, browserType);
-      setSearchResults(results);
+      const results = await api.searchWebStore(target, targetEngine);
+      setSearchResultsMap((prev) => ({ ...prev, [targetEngine]: results }));
       if (results.length === 0) {
         setFeedback({
           type: "error",
-          text: browserType === "cloakbrowser"
+          text: targetEngine === "cloakbrowser"
             ? `Chrome 应用商店未找到关于 "${target}" 的插件。请尝试其他关键词或直接粘贴 32 位扩展 ID / 商店链接。`
             : `Firefox 附加组件未找到关于 "${target}" 的插件。请尝试其他关键词或直接粘贴插件 ID / 链接。`,
-        });
+        }, targetEngine);
       }
     } catch (err: any) {
-      const msg = err?.message || (err instanceof ApiError ? err.message : (browserType === "camoufox" ? "搜索 Firefox 附加组件失败" : "搜索 Chrome 应用商店失败"));
-      setFeedback({ type: "error", text: msg });
+      const msg = err?.message || (err instanceof ApiError ? err.message : (targetEngine === "camoufox" ? "搜索 Firefox 附加组件失败" : "搜索 Chrome 应用商店失败"));
+      setFeedback({ type: "error", text: msg }, targetEngine);
     } finally {
-      setSearching(false);
+      setSearching(false, targetEngine);
     }
   };
 
@@ -202,37 +242,39 @@ export function ExtensionManagerModal({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setActionLoading(true);
-    setFeedback(null);
+    const targetEngine = browserType;
+    setInstallState({ actionLoading: true }, targetEngine);
+    setFeedback(null, targetEngine);
     try {
-      const installed = await api.uploadExtension(file, browserType);
-      setFeedback({ type: "success", text: `Successfully installed "${installed.name}"!` });
+      const installed = await api.uploadExtension(file, targetEngine);
+      setFeedback({ type: "success", text: `Successfully installed "${installed.name}"!` }, targetEngine);
       e.target.value = "";
       await fetchExtensions();
       onExtensionsChanged?.();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to upload extension";
-      setFeedback({ type: "error", text: msg });
+      setFeedback({ type: "error", text: msg }, targetEngine);
     } finally {
-      setActionLoading(false);
+      setInstallState({ actionLoading: false }, targetEngine);
     }
   };
 
   const handleDelete = async (extId: string, name: string) => {
     if (!confirm(`Are you sure you want to remove extension "${name}"?`)) return;
 
-    setActionLoading(true);
-    setFeedback(null);
+    const targetEngine = browserType;
+    setInstallState({ actionLoading: true }, targetEngine);
+    setFeedback(null, targetEngine);
     try {
       await api.deleteExtension(extId);
-      setFeedback({ type: "success", text: `Removed "${name}".` });
+      setFeedback({ type: "success", text: `Removed "${name}".` }, targetEngine);
       await fetchExtensions();
       onExtensionsChanged?.();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to delete extension";
-      setFeedback({ type: "error", text: msg });
+      setFeedback({ type: "error", text: msg }, targetEngine);
     } finally {
-      setActionLoading(false);
+      setInstallState({ actionLoading: false }, targetEngine);
     }
   };
 

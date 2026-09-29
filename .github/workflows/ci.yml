@@ -19,6 +19,8 @@ jobs:
           version: "latest"
           enable-cache: true
       - run: uv run --group test pytest backend/tests -q
+        env:
+          ANTIBROWSER_MANAGER_DATA_DIR: /tmp/antibrowser-test-data
 
   frontend:
     runs-on: ubuntu-latest
