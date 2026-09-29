@@ -12,6 +12,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      ANTIBROWSER_MANAGER_DATA_DIR: ${{ runner.temp }}/antibrowser-manager-data
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
