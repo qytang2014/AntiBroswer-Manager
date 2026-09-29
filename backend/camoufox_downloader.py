@@ -26,10 +26,16 @@ logger = logging.getLogger("cloakbrowser.manager.camoufox")
 
 # Ensure camoufox pkgman installs into our managed data directory
 _camoufox_data_dir = resolve_runtime().data_dir / "kernels" / "camoufox"
-_camoufox_data_dir.mkdir(parents=True, exist_ok=True)
+try:
+    _camoufox_data_dir.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 cp.INSTALL_DIR = _camoufox_data_dir
 cm.BROWSERS_DIR = _camoufox_data_dir / "browsers"
-cm.BROWSERS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    cm.BROWSERS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 try:
     import platformdirs

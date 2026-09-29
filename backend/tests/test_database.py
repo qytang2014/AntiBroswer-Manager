@@ -374,7 +374,7 @@ def test_profile_engine_subdirs_and_migration(tmp_db: Path):
 
     # 2. Duplicate profile keeps engine subdirectory
     clone_fox = db.duplicate_profile(p_fox["id"])
-    assert "profiles/camoufox" in clone_fox["user_data_dir"]
+    assert "profiles/camoufox" in clone_fox["user_data_dir"].replace("\\", "/")
 
     # 3. Legacy profile layout migration
     legacy_pid = db.new_profile_id()

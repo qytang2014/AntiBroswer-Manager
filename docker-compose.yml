@@ -3,12 +3,13 @@ services:
     build: .
     image: qytang2014/antibrowser-manager:latest
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${PORT:-52341}:${PORT:-52341}"
     volumes:
       # Persistent storage for dual engine profiles (cloakbrowser/camoufox) and kernels
       - ~/.antibrowser-manager:/data
     environment:
       # Values come from the manager-root .env (compose reads it automatically).
+      - PORT=${PORT:-52341}
       - AUTH_TOKEN=${AUTH_TOKEN:-}
       # CloakBrowser Pro license (Camoufox is open-source and license-free)
       - CLOAKBROWSER_LICENSE_KEY=${CLOAKBROWSER_LICENSE_KEY:-}

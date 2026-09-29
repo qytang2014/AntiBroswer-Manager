@@ -27,7 +27,9 @@ rm -f /tmp/.X1*-lock 2>/dev/null || true
 
 # Start FastAPI (serves built React + API)
 cd /app
+PORT="${PORT:-52341}"
 echo ""
-echo "  AntiBrowser-Manager running at http://localhost:8080"
+echo "  AntiBrowser-Manager running at http://localhost:${PORT}"
 echo ""
-exec uvicorn backend.main:app --host 0.0.0.0 --port 8080 --log-level warning
+exec uvicorn backend.main:app --host 0.0.0.0 --port "${PORT}" --log-level warning
+

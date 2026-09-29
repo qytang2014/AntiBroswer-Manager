@@ -63,17 +63,33 @@ export function ExtensionManagerModal({
   const [activeTab, setActiveTab] = useState<"webstore" | "popular" | "upload">("webstore");
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [popular, setPopular] = useState<PopularExtension[]>([]);
-  const [searchResults, setSearchResults] = useState<WebStoreSearchResult[]>([]);
+  const [searchResultsMap, setSearchResultsMap] = useState<Record<"cloakbrowser" | "camoufox", WebStoreSearchResult[]>>({
+    cloakbrowser: [],
+    camoufox: [],
+  });
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installingName, setInstallingName] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
-  const [webstoreInput, setWebstoreInput] = useState("");
+  const [webstoreInputMap, setWebstoreInputMap] = useState<Record<"cloakbrowser" | "camoufox", string>>({
+    cloakbrowser: "",
+    camoufox: "",
+  });
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateMap, setUpdateMap] = useState<Record<string, ExtensionUpdateInfo>>({});
+
+  const searchResults = searchResultsMap[browserType];
+  const setSearchResults = (results: WebStoreSearchResult[]) => {
+    setSearchResultsMap((prev) => ({ ...prev, [browserType]: results }));
+  };
+
+  const webstoreInput = webstoreInputMap[browserType];
+  const setWebstoreInput = (value: string) => {
+    setWebstoreInputMap((prev) => ({ ...prev, [browserType]: value }));
+  };
 
   const fetchExtensions = async () => {
     try {
@@ -124,7 +140,7 @@ export function ExtensionManagerModal({
     setFeedback(null);
     setDownloadProgress({
       stage: "connecting",
-      message: "正在连接 Chrome 应用商店...",
+      message: browserType === "camoufox" ? "正在连接 Firefox 附加组件..." : "正在连接 Chrome 应用商店...",
       percent: 0,
     });
 
@@ -137,7 +153,7 @@ export function ExtensionManagerModal({
       await fetchExtensions();
       onExtensionsChanged?.();
     } catch (err: any) {
-      const msg = err?.message || (err instanceof ApiError ? err.message : "Failed to install from Web Store");
+      const msg = err?.message || (err instanceof ApiError ? err.message : "安装应用商店扩展失败");
       setFeedback({ type: "error", text: msg });
     } finally {
       setActionLoading(false);
@@ -152,8 +168,8 @@ export function ExtensionManagerModal({
     if (!target) return;
 
     // Check if it looks like a direct 32-char ID or Web Store URL
-    const isDirectId = /^[a-p]{32}$/i.test(target);
-    const isUrl = target.includes("chromewebstore.google.com");
+    const isDirectId = browserType === "cloakbrowser" && /^[a-p]{32}$/i.test(target);
+    const isUrl = target.includes("chromewebstore.google.com") || (browserType === "camoufox" && (target.includes("addons.mozilla.org") || target.endsWith(".xpi")));
 
     if (isDirectId || isUrl) {
       handleInstallFromWebStore(target);
@@ -169,11 +185,13 @@ export function ExtensionManagerModal({
       if (results.length === 0) {
         setFeedback({
           type: "error",
-          text: `No extensions found for "${target}". Try another keyword or paste direct ID/URL.`,
+          text: browserType === "cloakbrowser"
+            ? `Chrome 应用商店未找到关于 "${target}" 的插件。请尝试其他关键词或直接粘贴 32 位扩展 ID / 商店链接。`
+            : `Firefox 附加组件未找到关于 "${target}" 的插件。请尝试其他关键词或直接粘贴插件 ID / 链接。`,
         });
       }
     } catch (err: any) {
-      const msg = err?.message || (err instanceof ApiError ? err.message : "Failed to search Chrome Web Store");
+      const msg = err?.message || (err instanceof ApiError ? err.message : (browserType === "camoufox" ? "搜索 Firefox 附加组件失败" : "搜索 Chrome 应用商店失败"));
       setFeedback({ type: "error", text: msg });
     } finally {
       setSearching(false);

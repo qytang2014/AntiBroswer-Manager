@@ -119,7 +119,7 @@ npm run dev
 ```bash
 docker compose up --build -d
 ```
-服务将在容器中启动并通过 Web 端口（默认 8080）提供控制面板与 VNC 视图。
+服务将在容器中启动并通过 Web 端口（默认 52341）提供控制面板与 VNC 视图。
 
 ## 浏览器引擎说明
 

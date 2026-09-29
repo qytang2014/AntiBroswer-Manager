@@ -451,7 +451,9 @@ def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: Path) -> None:
 
     for member in zf.infolist():
         target_path = (target_dir / member.filename).resolve()
-        if not target_path.is_relative_to(resolved_target):
+        try:
+            target_path.relative_to(resolved_target)
+        except ValueError:
             raise ValueError(f"Malicious extension path detected: {member.filename}")
         if member.is_dir():
             target_path.mkdir(parents=True, exist_ok=True)
@@ -603,11 +605,16 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
         crx_urls = [
             (
                 "https://clients2.google.com/service/update2/crx"
-                "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
+                "?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3"
                 f"&x=id%3D{webstore_id}%26uc"
             ),
             (
                 "https://clients2.googleusercontent.com/service/update2/crx"
+                "?response=redirect&prodversion=131.0.6778.86&acceptformat=crx2,crx3"
+                f"&x=id%3D{webstore_id}%26uc"
+            ),
+            (
+                "https://clients2.google.com/service/update2/crx"
                 "?response=redirect&prodversion=128.0&acceptformat=crx2,crx3"
                 f"&x=id%3D{webstore_id}%26uc"
             ),
@@ -874,9 +881,20 @@ async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloa
 
         if not success or not part_file.exists() or part_file.stat().st_size == 0:
             logger.error("Download failed for extension %s: %s", webstore_id, last_error)
+            err_str = str(last_error or "")
+            if "HTTP 204" in err_str:
+                err_msg = "Chrome 应用商店未提供该扩展安装包 (HTTP 204)。该扩展可能已被 Google 下架、已废弃或不支持当前平台，建议使用本地 .crx / .zip 上传安装。"
+            elif is_firefox and "HTTP 404" in err_str:
+                err_msg = "Firefox 附加组件未找到该扩展 (HTTP 404)。"
+            else:
+                err_msg = (
+                    "网络错误: 无法连接到 Firefox 附加组件，请检查代理节点配置或网络连接"
+                    if is_firefox
+                    else "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接"
+                )
             yield {
                 "stage": "error",
-                "message": "网络错误: 无法连接到 Chrome 应用商店，请检查代理节点配置或网络连接",
+                "message": err_msg,
                 "percent": 0,
                 "downloaded_bytes": downloaded_bytes,
                 "total_bytes": total_bytes,

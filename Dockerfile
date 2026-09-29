@@ -62,10 +62,11 @@ COPY --from=frontend-builder /build/dist /app/frontend/dist
 # Pre-download CloakBrowser binary
 RUN python -c "from cloakbrowser.download import ensure_binary; ensure_binary()"
 
-EXPOSE 8080
+EXPOSE 52341
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')" || exit 1
+  CMD python -c "import os, urllib.request; port = os.environ.get('PORT', '52341'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
+
 
 VOLUME /data
 
