@@ -18,6 +18,16 @@ in the data dir (see backend/main.py logging setup).
 
 from __future__ import annotations
 
+import sys
+if "-c" in sys.argv:
+    idx = sys.argv.index("-c")
+    if idx + 1 < len(sys.argv):
+        code = sys.argv[idx + 1]
+        if "multiprocessing" in code:
+            exec(code)
+            sys.exit(0)
+
+
 import json
 import os
 import socket
@@ -135,6 +145,16 @@ def _resolve_server_port() -> tuple[int, bool]:
           and was focused; caller should exit cleanly with 0.
         - If should_run is True, port is allocated and ready to bind.
     """
+    import sys
+    import os
+
+    # If launched with browser/child-process arguments (e.g. from Playwright inheriting sys.executable),
+    # silently exit to prevent showing the "Already running" notification for spurious child processes.
+    if any(arg in ("-no-remote", "--type=renderer", "--type=gpu-process", "--headless") for arg in sys.argv):
+        return DEFAULT_PORT, False
+    if "PW_LANG_NAME" in os.environ or "PLAYWRIGHT_BROWSERS_PATH" in os.environ:
+        return DEFAULT_PORT, False
+
     env_port = os.environ.get("PORT")
     preferred_port = int(env_port) if env_port and env_port.isdigit() else DEFAULT_PORT
 

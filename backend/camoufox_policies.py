@@ -25,7 +25,7 @@ from .runtime import resolve_runtime
 logger = logging.getLogger("cloakbrowser.manager.camoufox_policies")
 
 SEARCH_ENGINE_NAME = "Google"
-SEARCH_ENGINE_URL = "https://www.google.com/search?q=%s"
+SEARCH_ENGINE_URL = "https://www.google.com/search?ie={inputEncoding}&q=%s"
 
 
 def resolve_camoufox_distribution_dir(exe_path: Path) -> Path:

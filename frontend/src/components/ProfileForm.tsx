@@ -261,7 +261,7 @@ export function ProfileForm({
     set_google_default: profile?.set_google_default ?? true,
     search_engine_name: "Google",
     search_engine_keyword: "google.com",
-    search_engine_url: "https://www.google.com/search?q=%s",
+    search_engine_url: "https://www.google.com/search?ie={inputEncoding}&q=%s",
     capture_preview: true,
     restore_session: true,
     extension_paths: profile?.extension_paths ?? [],
@@ -585,7 +585,7 @@ export function ProfileForm({
           set_google_default: profile.set_google_default,
           search_engine_name: profile.search_engine_name ?? "Google",
           search_engine_keyword: profile.search_engine_keyword ?? "google.com",
-          search_engine_url: profile.search_engine_url ?? "https://www.google.com/search?q=%s",
+          search_engine_url: profile.search_engine_url ?? "https://www.google.com/search?ie={inputEncoding}&q=%s",
           capture_preview: profile.capture_preview,
           restore_session: profile.restore_session,
           launch_args: profile.launch_args ?? [],
@@ -638,7 +638,7 @@ export function ProfileForm({
           set_google_default: true,
           search_engine_name: "Google",
           search_engine_keyword: "google.com",
-          search_engine_url: "https://www.google.com/search?q=%s",
+          search_engine_url: "https://www.google.com/search?ie={inputEncoding}&q=%s",
           capture_preview: true,
           restore_session: true,
           extension_paths: installedExtensions.map((e) => e.path),
@@ -2664,13 +2664,13 @@ export function ProfileForm({
                   <label className="text-[11px] font-medium text-gray-400 block mb-1.5">预设搜索引擎（点击快速填充）：</label>
                   <div className="flex flex-wrap gap-1.5">
                     {[
-                      { label: "Google", name: "Google", keyword: "google.com", url: "https://www.google.com/search?q=%s" },
-                      { label: "Bing", name: "Bing", keyword: "bing.com", url: "https://www.bing.com/search?q=%s" },
-                      { label: "百度 (Baidu)", name: "百度", keyword: "baidu.com", url: "https://www.baidu.com/s?wd=%s" },
-                      { label: "DuckDuckGo", name: "DuckDuckGo", keyword: "duckduckgo.com", url: "https://duckduckgo.com/?q=%s" },
+                      { label: "Google", name: "Google", keyword: "google.com", url: "https://www.google.com/search?ie={inputEncoding}&q=%s" },
+                      { label: "Bing", name: "Bing", keyword: "bing.com", url: "https://www.bing.com/search?ie={inputEncoding}&q=%s" },
+                      { label: "百度 (Baidu)", name: "百度", keyword: "baidu.com", url: "https://www.baidu.com/s?ie={inputEncoding}&wd=%s" },
+                      { label: "DuckDuckGo", name: "DuckDuckGo", keyword: "duckduckgo.com", url: "https://duckduckgo.com/?ie={inputEncoding}&q=%s" },
                     ].map((preset) => {
                       const currentName = form.search_engine_name || "Google";
-                      const currentUrl = form.search_engine_url || "https://www.google.com/search?q=%s";
+                      const currentUrl = form.search_engine_url || "https://www.google.com/search?ie={inputEncoding}&q=%s";
                       const isSelected = currentName === preset.name && currentUrl === preset.url;
                       return (
                         <button
@@ -2724,9 +2724,9 @@ export function ProfileForm({
                     <input
                       type="text"
                       className="input text-xs w-full py-1.5 font-mono"
-                      value={form.search_engine_url ?? "https://www.google.com/search?q=%s"}
+                      value={form.search_engine_url ?? "https://www.google.com/search?ie={inputEncoding}&q=%s"}
                       onChange={(e) => set("search_engine_url", e.target.value)}
-                      placeholder="https://www.google.com/search?q=%s"
+                      placeholder="https://www.google.com/search?ie={inputEncoding}&q=%s"
                     />
                   </div>
                 </div>

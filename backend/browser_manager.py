@@ -648,7 +648,7 @@ SEARCH_ENGINE_MARKER = ".cloak_search_engine"
 SEARCH_ENGINE_MAX_ATTEMPTS = 3
 SEARCH_ENGINE_NAME = "Google"
 SEARCH_ENGINE_KEYWORD = "google.com"
-SEARCH_ENGINE_URL = "https://www.google.com/search?q=%s"
+SEARCH_ENGINE_URL = "https://www.google.com/search?ie={inputEncoding}&q=%s"
 
 # Read the live default search engine straight from the settings WebUI backend.
 _ACTIVE_DEFAULT_JS = """async () => {
@@ -1931,14 +1931,23 @@ class BrowserManager:
                 fn(el);
               }});
               walk(document, el => {{
-                const label = ((el.getAttribute && el.getAttribute('aria-label')) || '').trim();
-                if (el.tagName === 'CR-ICON-BUTTON' && (label.includes('{name}') || label.includes('{keyword}')) && !label.includes('AI')) el.click();
+                if (el.tagName === 'CR-ICON-BUTTON') {{
+                  const label = ((el.getAttribute && el.getAttribute('aria-label')) || '').trim();
+                  let row = el;
+                  while (row && row.tagName !== 'SETTINGS-SEARCH-ENGINE-ENTRY' && row.tagName !== 'TR') {{
+                    row = row.parentNode || row.host;
+                  }}
+                  const text = row ? (row.textContent || '') : label;
+                  if ((text.includes('{name}') || text.includes('{keyword}') || label.includes('{name}') || label.includes('{keyword}')) && !label.includes('AI')) {{
+                    el.click();
+                  }}
+                }}
               }});
               return new Promise(resolve => setTimeout(() => {{
                 let clicked = false;
                 walk(document, el => {{
                   const text = (el.textContent || '').trim();
-                  if ((el.id === 'makeDefault' || (el.tagName === 'BUTTON' && (/^Make default$/i.test(text) || text === '设为默认选项')))
+                  if ((el.id === 'makeDefault' || (el.tagName === 'BUTTON' && (/^Make default$/i.test(text) || text === '设为默认选项' || text.includes('默认'))))
                       && !el.disabled) {{ el.click(); clicked = true; }}
                 }});
                 resolve(clicked);
