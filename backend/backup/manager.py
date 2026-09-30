@@ -512,6 +512,14 @@ class BackupManager:
                     if self.browser_mgr:
                         self.browser_mgr.resolve_binary_status()
 
+                    # Step 8: Rebuild missing webstore extensions
+                    progress_cb(99, "正在检查并后台重建缺失的商店插件...")
+                    try:
+                        from backend.extension_manager import rebuild_missing_extensions
+                        asyncio.create_task(rebuild_missing_extensions())
+                    except Exception as e:
+                        logger.error("Failed to start extension rebuild task: %s", e)
+
                     self._publish_event(
                         task_id,
                         {

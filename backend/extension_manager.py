@@ -1193,3 +1193,44 @@ async def check_extensions_updates() -> dict[str, Any]:
             }
 
     return {"updates": results, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+async def rebuild_missing_extensions() -> None:
+    """Silently download and reinstall WebStore extensions whose physical files are missing (e.g., after backup restore)."""
+    try:
+        from .database import list_extensions
+        installed = list_extensions()
+    except Exception as exc:
+        logger.error("Failed to query extensions for rebuild: %s", exc)
+        return
+
+    to_rebuild = []
+    for ext in installed:
+        if ext.get("source") != "webstore_id" or not ext.get("webstore_id"):
+            continue
+        p = Path(ext.get("path") or "")
+        if not p.is_dir() or not any(p.iterdir()):
+            to_rebuild.append(ext)
+
+    if not to_rebuild:
+        return
+
+    logger.info("Starting silent rebuild for %d missing webstore extension(s)...", len(to_rebuild))
+
+    for ext in to_rebuild:
+        wid = ext["webstore_id"]
+        btype = ext.get("browser_type") or "cloakbrowser"
+        name = ext.get("name", wid)
+        logger.info("Rebuilding missing extension: %s (ID: %s, Browser: %s)", name, wid, btype)
+        try:
+            success = False
+            async for progress in stream_install_from_webstore(wid, browser_type=btype):
+                if progress.get("stage") == "installed":
+                    success = True
+                    break
+                elif progress.get("stage") == "error":
+                    logger.warning("Rebuild failed for %s: %s", name, progress.get("message"))
+                    break
+            if success:
+                logger.info("Successfully rebuilt extension %s", name)
+        except Exception as exc:
+            logger.warning("Error while rebuilding extension %s: %s", name, exc)
