@@ -303,7 +303,7 @@ async def search_firefox_addons(query: str) -> list[dict[str, Any]]:
     query = query.strip()
     if not query:
         return []
-        
+
     url = f"https://addons.mozilla.org/api/v5/addons/search/?q={urllib.parse.quote(query)}&type=extension"
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=10.0, trust_env=True) as client:
@@ -313,30 +313,30 @@ async def search_firefox_addons(query: str) -> list[dict[str, Any]]:
             data = resp.json()
     except Exception as exc:
         raise RuntimeError(f"Failed to fetch Firefox addons: {exc}") from exc
-        
+
     results = []
     for item in data.get("results", [])[:10]:
         name_obj = item.get("name", {})
         name = name_obj.get("en-US", name_obj.get(list(name_obj.keys())[0])) if name_obj else "Unknown"
         summary_obj = item.get("summary", {})
         summary = summary_obj.get("en-US", summary_obj.get(list(summary_obj.keys())[0])) if summary_obj else ""
-        
+
         current_version = item.get("current_version", {})
         version = current_version.get("version", "Latest")
-        
+
         icon_url = item.get("icon_url")
         if icon_url and "?" in icon_url:
             icon_url = icon_url.split("?")[0]
-            
+
         ratings = item.get("ratings", {})
         rating = round(ratings.get("average", 0), 1)
-        
+
         # We need the XPI download URL for direct installation
         files = current_version.get("files", [])
         download_url = files[0].get("url") if files else None
-        
+
         guid = item.get("guid") or str(item.get("id"))
-        
+
         results.append({
             "id": download_url or guid,
             "name": name,
@@ -675,7 +675,7 @@ def _build_chrome_crx_urls(webstore_id: str) -> list[str]:
 async def stream_install_from_webstore(id_or_url: str, browser_type: str = "cloakbrowser") -> AsyncIterator[dict[str, Any]]:
     """Download and install a Chrome extension with live progress events."""
     is_firefox = (browser_type == "camoufox")
-    
+
     if is_firefox:
         if id_or_url.startswith("http"):
             webstore_id = id_or_url.split("/")[-1].replace(".xpi", "")

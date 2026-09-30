@@ -64,6 +64,13 @@ UV_PROJECT_ENVIRONMENT="$BUILD_VENV" uv sync --group build --frozen
 uv pip install --python "$BUILD_VENV/bin/python" -q \
   --reinstall --no-deps --only-binary=:all: 'cryptography>=44,<49'
 
+# 2b. Patch playwright coreBundle.js to support native downloads BEFORE freezing.
+# PyInstaller collects playwright from the venv. Patching it here ensures the
+# frozen app has native downloads working without needing runtime modifications
+# (which would violate macOS Code Signing and Gatekeeper).
+echo "[build] patching playwright coreBundle.js for native downloads"
+"$BUILD_VENV/bin/python" -c "from backend.browser_manager import _ensure_playwright_internal_download_patch; _ensure_playwright_internal_download_patch()"
+
 # 3. Freeze.
 echo "[build] pyinstaller"
 rm -rf "$DIST" "$BUILD" 2>/dev/null || rm -rf "$DIST"/* "$BUILD"/* 2>/dev/null || true

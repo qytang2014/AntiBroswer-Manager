@@ -54,7 +54,10 @@ def _ensure_playwright_internal_download_patch() -> None:
     import sys
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
+        # Standard one-file/one-dir Windows/Linux
         candidate_bundles.append(Path(meipass) / "playwright" / "driver" / "package" / "lib" / "coreBundle.js")
+        # macOS BUNDLE (.app) places data files in Contents/Resources
+        candidate_bundles.append(Path(meipass).parent / "Resources" / "playwright" / "driver" / "package" / "lib" / "coreBundle.js")
 
     workspace = Path(__file__).resolve().parent.parent
     for sub in ("dist_native", ".venv-build"):

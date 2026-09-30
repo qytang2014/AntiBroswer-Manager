@@ -35,6 +35,69 @@ from .env_file import load_env_file
 # (database.resolve_runtime, AUTH_TOKEN, the license config below).
 load_env_file()
 
+# --- SUBPROCESS ENVIRONMENT SANITIZATION ---
+# PyInstaller pollutes os.environ with DYLD_LIBRARY_PATH pointing to its bundled
+# C-extensions (like libc++). Modifying os.environ globally breaks delayed imports 
+# (e.g. uvicorn, ssl). Instead, we intercept ALL subprocesses spawned by Python 
+# (like Playwright Node, Chromium, sing-box) and sanitize their environment dictionary.
+import sys
+import subprocess
+import os
+
+if getattr(sys, "frozen", False):
+    _orig_popen = subprocess.Popen
+
+    class _SanitizedPopen(_orig_popen):
+        def __init__(self, *args, **kwargs):
+            env = kwargs.get("env")
+            if env is None:
+                env = os.environ.copy()
+            else:
+                env = env.copy()
+            
+            for k in list(env.keys()):
+                if k.startswith("ORIG_"):
+                    orig_k = k[5:]
+                    env[orig_k] = env[k]
+            for var in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"):
+                if f"ORIG_{var}" not in env and var in env:
+                    del env[var]
+            
+            kwargs["env"] = env
+            super().__init__(*args, **kwargs)
+
+    subprocess.Popen = _SanitizedPopen
+
+    import asyncio
+    _orig_create_subprocess_exec = asyncio.create_subprocess_exec
+    _orig_create_subprocess_shell = asyncio.create_subprocess_shell
+
+    def _sanitize_env_kwargs(kwargs):
+        env = kwargs.get("env")
+        if env is None:
+            env = os.environ.copy()
+        else:
+            env = env.copy()
+        for k in list(env.keys()):
+            if k.startswith("ORIG_"):
+                orig_k = k[5:]
+                env[orig_k] = env[k]
+        for var in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"):
+            if f"ORIG_{var}" not in env and var in env:
+                del env[var]
+        kwargs["env"] = env
+        return kwargs
+
+    def _sanitized_create_subprocess_exec(program, *args, **kwargs):
+        return _orig_create_subprocess_exec(program, *args, **_sanitize_env_kwargs(kwargs))
+        
+    def _sanitized_create_subprocess_shell(cmd, **kwargs):
+        return _orig_create_subprocess_shell(cmd, **_sanitize_env_kwargs(kwargs))
+
+    asyncio.create_subprocess_exec = _sanitized_create_subprocess_exec
+    asyncio.create_subprocess_shell = _sanitized_create_subprocess_shell
+# -------------------------------------------
+
 # Redirect cloakbrowser and camoufox libraries to our unified kernels directory
 from .runtime import resolve_runtime, patch_kernel_data_dirs
 _RUNTIME_CONFIG = resolve_runtime()

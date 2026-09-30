@@ -121,5 +121,7 @@ if IS_MAC:
             # instead of spawning a second process (which would hit the busy
             # port and open a stray browser tab).
             "LSMultipleInstancesProhibited": True,
+            # Required for Chromium's native "Show in folder" to invoke Finder
+            "NSAppleEventsUsageDescription": "此应用需要调用 Finder 以在文件夹中显示下载的文件。",
         },
     )

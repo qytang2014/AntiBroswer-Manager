@@ -166,7 +166,7 @@ def sanitize_camoufox_profile_search_cache(
 
 def get_camoufox_recommended_fonts(target_os: str = "macos") -> list[str]:
     """Return essential system fonts that must remain accessible to the browser.
-    
+
     This prevents Camoufox's setFontList mechanism from locking out standard system
     fonts (especially monospace fonts used by code/hashes), which would otherwise cause
     fallback to decorative/symbol fonts and render text as gibberish glyphs.

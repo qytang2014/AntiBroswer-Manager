@@ -57,6 +57,10 @@ $env:UV_PROJECT_ENVIRONMENT = $BuildVenv
 & uv sync --group build --frozen
 $VenvPy = Join-Path $BuildVenv "Scripts\python.exe"
 
+# 2b. Patch playwright coreBundle.js to support native downloads BEFORE freezing.
+Write-Host "[build] patching playwright coreBundle.js for native downloads"
+& $VenvPy -c "from backend.browser_manager import _ensure_playwright_internal_download_patch; _ensure_playwright_internal_download_patch()"
+
 # 3. Freeze.
 Write-Host "[build] pyinstaller"
 if (Test-Path $Dist) { Remove-Item -Recurse -Force $Dist }

@@ -201,6 +201,96 @@ def _build_popen_kwargs() -> dict:
 
     return kwargs
 
+def _wrap_macos_cmd(cmd: list[str]) -> tuple[list[str], dict]:
+    """Wrap command with a python watcher on macOS to terminate child when parent dies."""
+    if platform.system() != "Darwin":
+        return cmd, {}
+
+    # Watcher reads sys.stdin. When parent dies, pipe closes, read() unblocks, and watcher kills the child.
+    script = (
+        "import sys, subprocess;"
+        "p = subprocess.Popen(sys.argv[1:]);"
+        "sys.stdin.read();"
+        "p.terminate();"
+        "p.wait(timeout=3);"
+        "p.kill()"
+    )
+    # Using the system-provided python3 available on macOS 10.15+
+    wrapped = ["/usr/bin/python3", "-c", script] + cmd
+    return wrapped, {"stdin": subprocess.PIPE}
+
+def _assign_to_windows_job(proc: subprocess.Popen) -> None:
+    """Assign process to a Windows Job Object configured to kill on close."""
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+        JobObjectExtendedLimitInformation = 9
+
+        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.wintypes.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", ctypes.wintypes.LARGE_INTEGER),
+                ("LimitFlags", ctypes.wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", ctypes.wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", ctypes.wintypes.DWORD),
+                ("SchedulingClass", ctypes.wintypes.DWORD),
+            ]
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        job = ctypes.windll.kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+
+        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+        res = ctypes.windll.kernel32.SetInformationJobObject(
+            job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
+        )
+        if not res:
+            ctypes.windll.kernel32.CloseHandle(job)
+            return
+
+        PROCESS_SET_QUOTA = 0x0100
+        PROCESS_TERMINATE = 0x0001
+        # 0x1F0FFF = PROCESS_ALL_ACCESS
+        handle = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, proc.pid)
+        if handle:
+            ctypes.windll.kernel32.AssignProcessToJobObject(job, handle)
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+        # Retain job handle so it stays open for the lifetime of this Python process
+        proc._win_job_handle = job
+    except Exception as exc:
+        logger.debug("Failed to assign sing-box to Windows Job Object: %s", exc)
+
+
 
 # ---------------------------------------------------------------------------
 # Temp config file management
@@ -290,7 +380,11 @@ def start_singbox(binary: Path, config: dict) -> SingboxProcess:
     )
 
     try:
-        proc = subprocess.Popen(cmd, **_build_popen_kwargs())
+        cmd, extra_kwargs = _wrap_macos_cmd(cmd)
+        kwargs = _build_popen_kwargs()
+        kwargs.update(extra_kwargs)
+        proc = subprocess.Popen(cmd, **kwargs)
+        _assign_to_windows_job(proc)
     except Exception as exc:
         config_file.unlink(missing_ok=True)
         raise RuntimeError(f"Failed to start sing-box: {exc}") from exc
