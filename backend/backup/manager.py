@@ -343,9 +343,10 @@ class BackupManager:
                         },
                     )
                 except Exception as exc:
-                    self.last_backup_error = str(exc)
+                    exc_str = str(exc) or repr(exc)
+                    self.last_backup_error = exc_str
                     self.last_backup_error_time = datetime.datetime.now(datetime.timezone.utc)
-                    logger.error("Backup failed for task %s: %s", task_id, exc, exc_info=True)
+                    logger.error("Backup failed for task %s: %s", task_id, exc_str, exc_info=True)
                     self._publish_event(
                         task_id,
                         {
@@ -353,9 +354,9 @@ class BackupManager:
                             "type": "backup",
                             "stage": "error",
                             "percent": 100,
-                            "message": f"Backup failed: {exc}",
+                            "message": f"Backup failed: {exc_str}",
                             "status": "error",
-                            "error": str(exc),
+                            "error": exc_str,
                         },
                     )
                 finally:
@@ -524,7 +525,8 @@ class BackupManager:
                         },
                     )
                 except Exception as exc:
-                    logger.error("Restore failed for task %s: %s", task_id, exc, exc_info=True)
+                    exc_str = str(exc) or repr(exc)
+                    logger.error("Restore failed for task %s: %s", task_id, exc_str, exc_info=True)
                     self._publish_event(
                         task_id,
                         {
@@ -532,9 +534,9 @@ class BackupManager:
                             "type": "restore",
                             "stage": "error",
                             "percent": 100,
-                            "message": f"Restoration failed: {exc}",
+                            "message": f"Restoration failed: {exc_str}",
                             "status": "error",
-                            "error": str(exc),
+                            "error": exc_str,
                         },
                     )
                 finally:

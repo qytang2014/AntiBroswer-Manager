@@ -301,6 +301,7 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
             prev ? { ...prev, status: "error", message: err.message || "备份过程中断" } : null
           );
           setActionFeedback({ type: "error", message: err.message || "备份过程中断" });
+          setTimeout(() => setActiveBackupTask(null), 5000);
         });
     } catch (err: any) {
       setActionFeedback({ type: "error", message: err.message || "启动备份失败" });
@@ -360,6 +361,7 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
           setRestoreTask((prev) =>
             prev ? { ...prev, status: "error", message: err.message || "恢复操作异常中断" } : null
           );
+          setTimeout(() => setRestoreTask(null), 5000);
         });
     } catch (err: any) {
       setRestoring(false);
@@ -371,6 +373,7 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
         message: err.message || "启动恢复任务失败",
         status: "error",
       });
+      setTimeout(() => setRestoreTask(null), 5000);
     }
   };
 

@@ -114,7 +114,7 @@ class WebDAVStorage(BackupStorage):
         if not local_path.is_file():
             raise FileNotFoundError(f"Local file not found: {local_path}")
 
-        async with self._client(timeout=120.0) as client:
+        async with self._client(timeout=None) as client:
             await self._ensure_remote_dir(client)
             dest_url = self._file_url(remote_filename)
             file_size = local_path.stat().st_size
@@ -141,8 +141,8 @@ class WebDAVStorage(BackupStorage):
         local_path.parent.mkdir(parents=True, exist_ok=True)
         target_url = self._file_url(remote_filename)
 
-        # For small sidecars (.sha256), use a shorter 15s timeout; archives get 300s
-        timeout = 15.0 if remote_filename.endswith(".sha256") else 300.0
+        # For small sidecars (.sha256), use a shorter 15s timeout; archives get None
+        timeout = 15.0 if remote_filename.endswith(".sha256") else None
 
         async with self._client(timeout=timeout) as client:
             if progress_callback:
