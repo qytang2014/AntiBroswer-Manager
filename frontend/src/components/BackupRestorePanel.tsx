@@ -47,6 +47,7 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
+  const [deletingFilename, setDeletingFilename] = useState<string | null>(null);
 
   // Settings fold state (auto-expanded if not configured)
   const [settingsExpanded, setSettingsExpanded] = useState<boolean>(false);
@@ -380,10 +381,14 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
   const handleDeleteBackup = async (filename: string) => {
     if (!confirm(`确定要从远端存储永久删除备份包「${filename}」吗？`)) return;
     try {
+      setDeletingFilename(filename);
       await api.deleteBackup(filename);
-      refreshBackupsList();
+      await refreshBackupsList();
+      setActionFeedback({ type: "success", message: `成功删除备份：${filename}` });
     } catch (err: any) {
       setActionFeedback({ type: "error", message: err.message || "删除备份失败" });
+    } finally {
+      setDeletingFilename(null);
     }
   };
 
@@ -628,10 +633,15 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
                   <button
                     type="button"
                     onClick={() => handleDeleteBackup(bk.name)}
-                    className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-red-500/10"
+                    disabled={deletingFilename === bk.name}
+                    className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="从远端永久删除"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {deletingFilename === bk.name ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
