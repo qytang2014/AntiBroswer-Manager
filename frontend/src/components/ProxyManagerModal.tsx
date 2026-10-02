@@ -23,7 +23,7 @@ export function ProxyManagerModal({
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [nodes, setNodes] = useState<ProxyNode[]>([]);
   const [loading, setLoading] = useState(false);
-  const [testingBatch, setTestingBatch] = useState(false);
+  const [testingBatchTab, setTestingBatchTab] = useState<string | null>(null);
   const [testingNodeId, setTestingNodeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
@@ -273,7 +273,7 @@ export function ProxyManagerModal({
   // Batch test nodes in current tab
   const handleBatchTest = async () => {
     if (displayedNodes.length === 0) return;
-    setTestingBatch(true);
+    setTestingBatchTab(activeTab);
     try {
       const nodeIds = displayedNodes.map((n) => n.id);
       const results = await api.batchTestProxyNodes({ node_ids: nodeIds });
@@ -294,7 +294,7 @@ export function ProxyManagerModal({
       const msg = err instanceof ApiError ? err.message : "一键测速失败";
       setFeedback({ type: "error", text: msg });
     } finally {
-      setTestingBatch(false);
+      setTestingBatchTab(null);
     }
   };
 
@@ -402,10 +402,10 @@ export function ProxyManagerModal({
             {/* ⚡ 一键测速 */}
             <button
               onClick={handleBatchTest}
-              disabled={testingBatch || displayedNodes.length === 0}
+              disabled={testingBatchTab === activeTab || displayedNodes.length === 0}
               className="bg-[#1b233a] hover:bg-[#232f4e] text-amber-300 border border-amber-500/30 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {testingBatch ? (
+              {testingBatchTab === activeTab ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
               ) : (
                 <Zap className="h-3.5 w-3.5" />
@@ -523,7 +523,7 @@ export function ProxyManagerModal({
                       {/* Test single node */}
                       <button
                         onClick={() => handleTestNode(node.id)}
-                        disabled={isTestingThis || testingBatch}
+                        disabled={isTestingThis || testingBatchTab === activeTab}
                         className="px-3 py-1 text-xs rounded bg-[#1c2236] text-gray-300 hover:text-white border border-gray-700/80 transition disabled:opacity-50"
                       >
                         测试
