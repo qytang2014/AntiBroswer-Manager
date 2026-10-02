@@ -541,6 +541,12 @@ export const api = {
       body: JSON.stringify({ text, subscription_id }),
     }),
 
+  updateProxyNode: (id: string, data: { name?: string; raw_uri?: string }) =>
+    request<ProxyNode>(`/api/proxies/nodes/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
   deleteProxyNode: (id: string) =>
     request<{ ok: boolean }>(`/api/proxies/nodes/${id}`, { method: "DELETE" }),
 

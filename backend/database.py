@@ -930,6 +930,46 @@ def batch_create_proxy_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]
         return [dict(row) for row in rows]
 
 
+def update_proxy_node(
+    node_id: str,
+    name: str | None = None,
+    protocol: str | None = None,
+    raw_uri: str | None = None,
+    parsed_config: str | None = None,
+) -> dict[str, Any] | None:
+    updates: list[str] = []
+    params: list[Any] = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if protocol is not None:
+        updates.append("protocol = ?")
+        params.append(protocol)
+    if raw_uri is not None:
+        updates.append("raw_uri = ?")
+        params.append(raw_uri)
+    if parsed_config is not None:
+        updates.append("parsed_config = ?")
+        params.append(parsed_config)
+
+    if not updates:
+        return get_proxy_node(node_id)
+
+    updates.append("updated_at = ?")
+    params.append(_now())
+    params.append(node_id)
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"UPDATE proxy_nodes SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+    return get_proxy_node(node_id)
+
+
 def update_proxy_node_latency(node_id: str, latency_ms: int | None) -> bool:
     with get_db() as conn:
         cursor = conn.execute(

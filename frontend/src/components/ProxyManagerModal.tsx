@@ -31,6 +31,13 @@ export function ProxyManagerModal({
   const [showNewSubModal, setShowNewSubModal] = useState(false);
   const [showEditSubModal, setShowEditSubModal] = useState(false);
   const [showBatchAddModal, setShowBatchAddModal] = useState(false);
+  const [showEditNodeModal, setShowEditNodeModal] = useState(false);
+
+  // Edit node form
+  const [editingNode, setEditingNode] = useState<ProxyNode | null>(null);
+  const [editNodeName, setEditNodeName] = useState("");
+  const [editNodeUri, setEditNodeUri] = useState("");
+  const [nodeActionLoading, setNodeActionLoading] = useState(false);
 
   // New sub form
   const [newSubName, setNewSubName] = useState("");
@@ -238,6 +245,38 @@ export function ProxyManagerModal({
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "删除节点失败";
       setFeedback({ type: "error", text: msg });
+    }
+  };
+
+  // Open edit manual node
+  const handleOpenEditNode = (node: ProxyNode) => {
+    setEditingNode(node);
+    setEditNodeName(node.name);
+    setEditNodeUri(node.raw_uri);
+    setShowEditNodeModal(true);
+  };
+
+  // Update manual node
+  const handleUpdateNode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingNode || !editNodeName.trim() || !editNodeUri.trim()) return;
+    setNodeActionLoading(true);
+    setFeedback(null);
+    try {
+      const updated = await api.updateProxyNode(editingNode.id, {
+        name: editNodeName.trim(),
+        raw_uri: editNodeUri.trim(),
+      });
+      setFeedback({ type: "success", text: `节点 "${updated.name}" 已更新！` });
+      setShowEditNodeModal(false);
+      setEditingNode(null);
+      await fetchData();
+      onNodesChanged?.();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "更新节点失败";
+      setFeedback({ type: "error", text: msg });
+    } finally {
+      setNodeActionLoading(false);
     }
   };
 
@@ -529,6 +568,17 @@ export function ProxyManagerModal({
                         测试
                       </button>
 
+                      {/* Edit manual node */}
+                      {!node.subscription_id && (
+                        <button
+                          onClick={() => handleOpenEditNode(node)}
+                          className="p-1 text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded border border-gray-800/80 transition"
+                          title="编辑节点"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
                       {/* Delete node */}
                       <button
                         onClick={() => handleDeleteNode(node.id, node.name)}
@@ -780,6 +830,72 @@ export function ProxyManagerModal({
                   className="bg-[#1a2b42] text-cyan-400 border border-cyan-500/40 hover:bg-[#203654] px-5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {batchLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>保存</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-modal 4: Edit Manual Node Modal */}
+      {showEditNodeModal && editingNode && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[#121624] border border-cyan-400/80 rounded-2xl w-full max-w-lg shadow-[0_0_40px_-10px_rgba(6,182,212,0.3)] p-6 flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-800/80 pb-3">
+              <h3 className="text-base font-bold text-cyan-400">编辑节点</h3>
+              <button
+                onClick={() => {
+                  setShowEditNodeModal(false);
+                  setEditingNode(null);
+                }}
+                className="text-cyan-400/80 hover:text-cyan-300 p-1 rounded-lg hover:bg-cyan-500/10 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateNode} className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-300 mb-1.5">节点名称</label>
+                <input
+                  type="text"
+                  required
+                  value={editNodeName}
+                  onChange={(e) => setEditNodeName(e.target.value)}
+                  className="w-full bg-[#191f33] border border-gray-700/80 text-gray-200 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-300 mb-1.5">代理链接 (URI)</label>
+                <input
+                  type="text"
+                  required
+                  value={editNodeUri}
+                  onChange={(e) => setEditNodeUri(e.target.value)}
+                  placeholder="socks5://..., vmess://..., http://..."
+                  className="w-full bg-[#191f33] border border-gray-700/80 text-gray-200 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500 font-mono"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditNodeModal(false);
+                    setEditingNode(null);
+                  }}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-gray-400 hover:text-gray-200 transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={nodeActionLoading}
+                  className="bg-[#1a2b42] text-cyan-400 border border-cyan-500/40 hover:bg-[#203654] px-5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {nodeActionLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>保存</span>
                 </button>
               </div>

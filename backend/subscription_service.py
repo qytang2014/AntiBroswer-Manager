@@ -92,19 +92,29 @@ def parse_multiline_nodes(
             if scheme in (
                 "vless", "vmess", "trojan", "trojan-go", "ss", "shadowsocks",
                 "hysteria", "hysteria2", "hy2", "tuic", "anytls",
+                "socks5", "socks", "http", "https",
             ):
                 try:
                     outbound = _parse_uri(line)
                     parsed_config = json.dumps(outbound, ensure_ascii=False)
                     tag = outbound.get("tag", tag)
-                    protocol = outbound.get("type", scheme)
+                    if scheme in ("socks5", "socks"):
+                        protocol = "socks5"
+                    elif scheme in ("http", "https"):
+                        protocol = "http"
+                    else:
+                        protocol = outbound.get("type", scheme)
                 except Exception as exc:
                     logger.warning("Failed to parse singbox URI '%s...': %s", line[:30], exc)
                     parsed_config = None
-                    protocol = "shadowsocks" if scheme in ("ss", "shadowsocks") else scheme
-            elif scheme in ("socks5", "socks", "http", "https"):
-                protocol = "socks5" if "socks" in scheme else "http"
-                parsed_config = None
+                    if scheme in ("socks5", "socks"):
+                        protocol = "socks5"
+                    elif scheme in ("http", "https"):
+                        protocol = "http"
+                    elif scheme in ("ss", "shadowsocks"):
+                        protocol = "shadowsocks"
+                    else:
+                        protocol = scheme
             else:
                 continue
 
@@ -119,6 +129,14 @@ def parse_multiline_nodes(
             logger.warning("Skipping invalid proxy line '%s...': %s", line[:30], exc)
 
     return nodes
+
+
+def parse_single_node(line: str) -> dict[str, Any]:
+    """Parse a single proxy URI line into a node dict. Raises ValueError if invalid."""
+    nodes = parse_multiline_nodes(line)
+    if not nodes:
+        raise ValueError(f"Invalid or unsupported proxy URI: {line}")
+    return nodes[0]
 
 
 async def fetch_subscription_content(url: str) -> str:

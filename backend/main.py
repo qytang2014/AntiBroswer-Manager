@@ -131,6 +131,7 @@ from .models import (
     ProxyNodeBatchCreate,
     ProxyNodeCreate,
     ProxyNodeResponse,
+    ProxyNodeUpdate,
     ProxyTestRequest,
     ProxyTestResponse,
     SystemProxyStatusResponse,
@@ -1048,6 +1049,44 @@ async def batch_create_proxy_nodes_endpoint(req: ProxyNodeBatchCreate):
         raise HTTPException(status_code=400, detail="No valid proxy nodes could be parsed from the input.")
     created = db.batch_create_proxy_nodes(nodes)
     return created
+
+
+@app.put("/api/proxies/nodes/{node_id}", response_model=ProxyNodeResponse)
+async def update_proxy_node_endpoint(node_id: str, req: ProxyNodeUpdate):
+    """Update a manual proxy node's name and/or raw_uri."""
+    from .subscription_service import parse_single_node
+
+    node = db.get_proxy_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Proxy node not found")
+    if node.get("subscription_id"):
+        raise HTTPException(status_code=400, detail="Cannot edit subscription nodes directly. Edit the subscription instead.")
+
+    name = req.name.strip() if req.name is not None else None
+    raw_uri = req.raw_uri.strip() if req.raw_uri is not None else None
+    protocol = None
+    parsed_config = None
+
+    if raw_uri:
+        try:
+            parsed_info = parse_single_node(raw_uri)
+            protocol = parsed_info["protocol"]
+            parsed_config = parsed_info.get("parsed_config")
+            if not name:
+                name = parsed_info["name"]
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid proxy URI: {exc}")
+
+    updated = db.update_proxy_node(
+        node_id=node_id,
+        name=name,
+        protocol=protocol,
+        raw_uri=raw_uri,
+        parsed_config=parsed_config,
+    )
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update proxy node")
+    return updated
 
 
 @app.delete("/api/proxies/nodes/{node_id}")

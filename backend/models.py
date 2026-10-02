@@ -327,6 +327,11 @@ class ProxyNodeCreate(BaseModel):
     subscription_id: str | None = None
 
 
+class ProxyNodeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    raw_uri: str | None = Field(default=None, min_length=1)
+
+
 class ProxyNodeBatchCreate(BaseModel):
     text: str = Field(min_length=1, max_length=1_048_576)
     subscription_id: str | None = None
