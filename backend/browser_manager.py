@@ -269,15 +269,19 @@ def _normalize_proxy(raw: Any, proxy_type: str | None = None) -> Any:
         except Exception:
             pass
 
-    if proxy_type in ("singbox_uri", "singbox_sub") or raw.startswith((
+    if proxy_type in ("singbox_uri", "singbox_sub", "proxy_manager") or raw.startswith((
         "vless://", "vmess://", "trojan://", "ss://", "shadowsocks://",
         "hysteria2://", "hy2://", "tuic://", "wireguard://",
+        "anytls://",
     )):
         return {"type": "singbox", "config": raw}
 
-    # Standard proxy URLs
-    if raw.startswith(("http://", "https://", "socks5://")):
-        return raw
+    # If it's a standard URL but we specifically want it managed by singbox
+    if proxy_type == "singbox" and raw.startswith(("http://", "https://", "socks5://", "socks://")):
+        return {"type": "singbox", "config": raw}
+
+    if raw.startswith(("http://", "https://", "socks5://", "socks://")):
+        return {"type": "singbox", "config": raw}
 
     # host:port:user:pass or host:port
     parts = raw.split(":")
@@ -1182,7 +1186,8 @@ class BrowserManager:
 
 
             raw_proxy = profile.get("proxy") or None
-            proxy = _normalize_proxy(raw_proxy) if raw_proxy else None
+            proxy = _normalize_proxy(raw_proxy, profile.get("proxy_type")) if raw_proxy else None
+
             if proxy:
                 _validate_proxy(proxy)
             else:
@@ -1248,12 +1253,14 @@ class BrowserManager:
                 launch_options["env"] = {**os.environ, "DISPLAY": f":{display}"}
 
             _singbox_proc = None
+            _singbox_http_url = None
             if isinstance(proxy, dict) and proxy.get("type") == "singbox":
                 try:
                     from backend.singbox.manager import handle_singbox_proxy
-                    _singbox_proc, _local_url = await asyncio.to_thread(handle_singbox_proxy, proxy)
+                    _singbox_proc, _local_url, _http_url = await asyncio.to_thread(handle_singbox_proxy, proxy)
                     if _local_url:
                         launch_options["proxy"] = {"server": _local_url}
+                        _singbox_http_url = _http_url
                 except Exception as exc:
                     raise RuntimeError(f"Failed to start sing-box proxy: {exc}") from exc
 
@@ -1265,8 +1272,6 @@ class BrowserManager:
                     pw = await async_playwright().start()
 
                     # Camoufox is Firefox-based. Convert proxy to its expected dict format.
-                    # After singbox processing, proxy is already {"server": "socks5://..."}.
-                    # A plain URL string (http/socks5) must also be wrapped.
                     cam_proxy = None
                     raw_cam_proxy = launch_options.get("proxy")
                     if isinstance(raw_cam_proxy, dict) and "server" in raw_cam_proxy:
@@ -1500,6 +1505,11 @@ class BrowserManager:
                         locale=resolved_locale,
                         downloads_dir=downloads_dir,
                     )
+                    if cam_proxy and isinstance(cam_proxy.get("server"), str) and "socks" in cam_proxy["server"]:
+                        server_url = cam_proxy["server"]
+                        cam_user_prefs["network.proxy.socks_remote_dns"] = "socks5h" in server_url or "socksh" in server_url
+                        cam_user_prefs["network.proxy.socks_version"] = 5
+
                     if webrtc_ip:
                         cam_user_prefs["network.dns.disableIPv6"] = True
 

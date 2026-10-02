@@ -62,6 +62,13 @@ def build_singbox_config(config_input: str | dict[str, Any]) -> dict[str, Any]:
         config_input = config_input.strip()
         scheme = urlparse(config_input).scheme.lower()
         if scheme in ("http", "https"):
+            parsed = urlparse(config_input)
+            has_auth = bool(parsed.username or parsed.password)
+            is_simple_path = parsed.path in ("", "/")
+            no_query = not parsed.query
+            if has_auth or (is_simple_path and no_query):
+                # Likely a standard HTTP/HTTPS proxy, not a subscription
+                return _wrap_outbounds([_parse_uri(config_input)])
             return _parse_subscription(config_input)
         return _wrap_outbounds([_parse_uri(config_input)])
 
@@ -154,13 +161,17 @@ def _parse_uri(uri: str) -> dict[str, Any]:
         "hy2":         _parse_hysteria2,
         "tuic":        _parse_tuic,
         "anytls":      _parse_anytls,
+        "http":        _parse_http_proxy,
+        "https":       _parse_http_proxy,
+        "socks":       _parse_socks_proxy,
+        "socks5":      _parse_socks_proxy,
     }
 
     parser = dispatch.get(scheme)
     if parser is None:
         raise ValueError(
             f"Unsupported proxy URI scheme: '{scheme}'. "
-            "Supported: vless, vmess, trojan, ss, hysteria, hysteria2, tuic, anytls. "
+            "Supported: http, https, socks5, vless, vmess, trojan, ss, hysteria, hysteria2, tuic, anytls. "
             "For other protocols, pass a complete sing-box outbounds JSON."
         )
 
@@ -462,7 +473,68 @@ def _parse_tuic(uri: str) -> dict[str, Any]:
     return outbound
 
 
+
+def _parse_http_proxy(uri: str) -> dict[str, Any]:
+    """Parse an HTTP/HTTPS proxy URI into a sing-box outbound.
+    Format: http[s]://[user:pass@]host:port[?insecure=1&sni=xxx][#tag]
+    """
+    parsed = urlparse(uri)
+    params = parse_qs(parsed.query)
+    def _p(key: str, default: str = "") -> str:
+        return params.get(key, [default])[0]
+
+    tag = unquote(parsed.fragment) if parsed.fragment else f"{parsed.scheme}-node"
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    user = unquote(parsed.username or "")
+    password = unquote(parsed.password or "")
+
+    outbound: dict[str, Any] = {
+        "type": "http",
+        "tag": _slug(tag),
+        "server": host,
+        "server_port": port,
+    }
+    if user:
+        outbound["username"] = user
+    if password:
+        outbound["password"] = password
+    if parsed.scheme == "https":
+        outbound["tls"] = {
+            "enabled": True,
+            "server_name": _p("sni") or host,
+            "insecure": _p("insecure", "0") == "1" or _p("allowInsecure") == "1",
+        }
+    return outbound
+
+
+def _parse_socks_proxy(uri: str) -> dict[str, Any]:
+    """Parse a SOCKS5 proxy URI into a sing-box outbound.
+    Format: socks[5]://[user:pass@]host:port[#tag]
+    """
+    parsed = urlparse(uri)
+    tag = unquote(parsed.fragment) if parsed.fragment else "socks5-node"
+    host = parsed.hostname or ""
+    port = parsed.port or 1080
+    user = unquote(parsed.username or "")
+    password = unquote(parsed.password or "")
+
+    outbound: dict[str, Any] = {
+        "type": "socks",
+        "tag": _slug(tag),
+        "server": host,
+        "server_port": port,
+        "version": "5",
+    }
+    if user:
+        outbound["username"] = user
+    if password:
+        outbound["password"] = password
+    return outbound
+
+
 def _parse_anytls(uri: str) -> dict[str, Any]:
+
     """Parse an AnyTLS URI into a sing-box outbound.
 
     Format: anytls://<password>@<host>:<port>?<params>#<tag>
@@ -595,9 +667,9 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             seen[tag] = 0
 
-    return {
+    config = {
         "log": {
-            "level": "warn",
+            "level": "trace",
             "timestamp": True,
         },
         "dns": {
@@ -612,6 +684,7 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
         "route": {
             "default_domain_resolver": "local-dns",
             "rules": [
+                {"action": "resolve", "strategy": "prefer_ipv4"} if outbounds[0].get("type") == "socks" else None,
                 {"inbound": ["socks-in", "http-in"], "outbound": primary_tag},
             ],
             "final": primary_tag,
@@ -619,3 +692,6 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
         },
         # inbounds injected by process.py at runtime
     }
+
+    config["route"]["rules"] = [r for r in config["route"]["rules"] if r is not None]
+    return config

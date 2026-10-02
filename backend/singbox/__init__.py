@@ -5,7 +5,7 @@ Hysteria2, etc.) as an extension to the standard SOCKS5/HTTP proxy options.
 
 Public surface:
     is_singbox_proxy(proxy)        -> bool
-    handle_singbox_proxy(proxy)    -> (SingboxProcess | None, str | None)
+    handle_singbox_proxy(proxy)    -> (SingboxProcess | None, str | None, str | None)
     SingboxProcess                 -> dataclass for a live sing-box instance
     ensure_singbox()               -> Path  (binary resolver)
     build_singbox_config(input)    -> dict  (config builder)
@@ -15,7 +15,7 @@ Usage within browser.py (hook points):
 
     # 1. In _resolve_proxy_config():
     from .singbox.manager import handle_singbox_proxy
-    _singbox_proc, _local_url = handle_singbox_proxy(proxy)
+    _singbox_proc, _local_url, _http_url = handle_singbox_proxy(proxy)
     if _local_url:
         proxy = _local_url   # replace with local socks5://127.0.0.1:port
 

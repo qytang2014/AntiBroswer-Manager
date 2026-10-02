@@ -54,7 +54,7 @@ if getattr(sys, "frozen", False):
                 env = os.environ.copy()
             else:
                 env = env.copy()
-            
+
             for k in list(env.keys()):
                 if k.startswith("ORIG_"):
                     orig_k = k[5:]
@@ -62,7 +62,7 @@ if getattr(sys, "frozen", False):
             for var in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"):
                 if f"ORIG_{var}" not in env and var in env:
                     del env[var]
-            
+
             kwargs["env"] = env
             super().__init__(*args, **kwargs)
 
@@ -90,7 +90,7 @@ if getattr(sys, "frozen", False):
 
     def _sanitized_create_subprocess_exec(program, *args, **kwargs):
         return _orig_create_subprocess_exec(program, *args, **_sanitize_env_kwargs(kwargs))
-        
+
     def _sanitized_create_subprocess_shell(cmd, **kwargs):
         return _orig_create_subprocess_shell(cmd, **_sanitize_env_kwargs(kwargs))
 

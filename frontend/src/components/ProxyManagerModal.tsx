@@ -769,7 +769,7 @@ export function ProxyManagerModal({
                 rows={10}
                 value={batchText}
                 onChange={(e) => setBatchText(e.target.value)}
-                placeholder={"vmess://...\nss://...\nvless://...\ntrojan://...\ntuic://...\nanytls://..."}
+                placeholder={"socks5://user:pass@127.0.0.1:1080\nhttp://user:pass@127.0.0.1:8080\nhttps://user:pass@1.2.3.4:443?insecure=1#my-https\nvmess://...\nss://...\nvless://...\ntrojan://...\ntuic://...\nanytls://..."}
                 className="w-full bg-[#191f33] border border-gray-700/80 text-gray-200 font-mono text-xs rounded-lg p-3 focus:outline-none focus:border-cyan-500 resize-none"
               />
 

@@ -29,7 +29,7 @@ def is_singbox_proxy(proxy: Any) -> bool:
 
 def handle_singbox_proxy(
     proxy: Any,
-) -> tuple["SingboxProcess | None", str | None]:  # noqa: F821
+) -> tuple["SingboxProcess | None", str | None, str | None]:  # noqa: F821
     """Start sing-box if proxy is a sing-box config; otherwise pass through.
 
     Called from browser.py's _resolve_proxy_config (and equivalents) before
@@ -39,17 +39,17 @@ def handle_singbox_proxy(
         proxy: The raw proxy argument passed by the user.
 
     Returns:
-        (singbox_proc, local_socks5_url)
+        (singbox_proc, local_socks5_url, local_http_url)
           - If proxy is a sing-box dict: returns the live process and its
-            local SOCKS5 URL (e.g. 'socks5://127.0.0.1:12345').
-          - Otherwise: returns (None, None) — caller proceeds as normal.
+            local SOCKS5 URL and HTTP URL.
+          - Otherwise: returns (None, None, None).
 
     Raises:
         RuntimeError: If sing-box binary is unavailable or fails to start.
         ValueError:   If the supplied node config is malformed.
     """
     if not is_singbox_proxy(proxy):
-        return None, None
+        return None, None, None
 
     from .downloader import ensure_singbox
     from .parser import build_singbox_config
@@ -66,4 +66,4 @@ def handle_singbox_proxy(
         proc.socks_port, proc.proc.pid,
     )
 
-    return proc, proc.socks5_url
+    return proc, proc.socks5_url, proc.http_url
