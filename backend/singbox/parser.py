@@ -684,7 +684,6 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
         "route": {
             "default_domain_resolver": "local-dns",
             "rules": [
-                {"action": "resolve", "strategy": "prefer_ipv4"} if outbounds[0].get("type") == "socks" else None,
                 {"inbound": ["socks-in", "http-in"], "outbound": primary_tag},
             ],
             "final": primary_tag,
@@ -693,5 +692,4 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
         # inbounds injected by process.py at runtime
     }
 
-    config["route"]["rules"] = [r for r in config["route"]["rules"] if r is not None]
     return config

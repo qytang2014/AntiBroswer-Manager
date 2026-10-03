@@ -269,19 +269,23 @@ def _normalize_proxy(raw: Any, proxy_type: str | None = None) -> Any:
         except Exception:
             pass
 
-    if proxy_type in ("singbox_uri", "singbox_sub", "proxy_manager") or raw.startswith((
-        "vless://", "vmess://", "trojan://", "ss://", "shadowsocks://",
-        "hysteria2://", "hy2://", "tuic://", "wireguard://",
-        "anytls://",
-    )):
+    if proxy_type in ("singbox_uri", "singbox_sub") or (
+        proxy_type != "standard"
+        and raw.startswith((
+            "vless://", "vmess://", "trojan://", "ss://", "shadowsocks://",
+            "hysteria2://", "hy2://", "tuic://", "wireguard://",
+            "anytls://",
+        ))
+    ):
         return {"type": "singbox", "config": raw}
 
     # If it's a standard URL but we specifically want it managed by singbox
     if proxy_type == "singbox" and raw.startswith(("http://", "https://", "socks5://", "socks://")):
         return {"type": "singbox", "config": raw}
 
-    if raw.startswith(("http://", "https://", "socks5://", "socks://")):
-        return {"type": "singbox", "config": raw}
+    # If it's a standard URL with a scheme, return it as-is
+    if "://" in raw:
+        return raw
 
     # host:port:user:pass or host:port
     parts = raw.split(":")
@@ -310,7 +314,7 @@ def _validate_proxy(proxy: Any) -> None:
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https", "socks5"):
+    if parsed.scheme not in ("http", "https", "socks5", "socks"):
         raise ValueError(
             f"Invalid proxy scheme '{parsed.scheme}'. Must be http, https, socks5, or a sing-box node."
         )
@@ -1254,10 +1258,17 @@ class BrowserManager:
 
             _singbox_proc = None
             _singbox_http_url = None
-            if isinstance(proxy, dict) and proxy.get("type") == "singbox":
+            effective_proxy = proxy
+            if profile.get("browser_type") == "camoufox" and isinstance(proxy, str):
+                from urllib.parse import urlparse
+                parsed_p = urlparse(proxy)
+                if parsed_p.scheme in ("socks5", "socks") and (parsed_p.username or parsed_p.password):
+                    effective_proxy = {"type": "singbox", "config": proxy}
+
+            if isinstance(effective_proxy, dict) and effective_proxy.get("type") == "singbox":
                 try:
                     from backend.singbox.manager import handle_singbox_proxy
-                    _singbox_proc, _local_url, _http_url = await asyncio.to_thread(handle_singbox_proxy, proxy)
+                    _singbox_proc, _local_url, _http_url = await asyncio.to_thread(handle_singbox_proxy, effective_proxy)
                     if _local_url:
                         launch_options["proxy"] = {"server": _local_url}
                         _singbox_http_url = _http_url
