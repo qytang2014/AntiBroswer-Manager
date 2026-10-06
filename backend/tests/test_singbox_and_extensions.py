@@ -338,14 +338,15 @@ def test_probe_proxy_target():
 def test_resolve_profile_network_fingerprint_sync():
     from backend.browser_manager import _resolve_profile_network_fingerprint_sync
 
-    mock_city = MagicMock()
-    mock_city.location.time_zone = "America/Chicago"
-    mock_city.country.iso_code = "US"
-    mock_reader = MagicMock()
-    mock_reader.__enter__.return_value.city.return_value = mock_city
+    mock_geo = {
+        "country": "US",
+        "city": "Chicago",
+        "timezone": "America/Chicago",
+        "locale": "en-US",
+    }
 
     with patch("backend.browser_manager._probe_proxy_target", return_value=("8.8.8.8", 50, None)), \
-         patch("geoip2.database.Reader", return_value=mock_reader):
+         patch("backend.geoip_resolver.resolve_ip_geo", return_value=mock_geo):
         # 1. Profile with empty timezone/locale -> auto-matched from exit IP
         profile_auto = {"timezone": None, "locale": None, "geoip": True, "launch_args": []}
         tz, loc, args = _resolve_profile_network_fingerprint_sync("http://127.0.0.1:1080", profile_auto)
@@ -679,6 +680,47 @@ async def test_extension_engine_subdirs_and_migration(tmp_db: Path, tmp_path: Pa
     # 4. Idempotency
     migrate_extensions_to_engine_subdirs()
     assert migrated_dir.is_dir()
+
+
+def test_singbox_terminate_cleans_child_processes(tmp_path):
+    from backend.singbox.process import SingboxProcess, _wrap_macos_cmd
+    import subprocess
+    import sys
+
+    # Create dummy config file
+    cfg = tmp_path / "dummy_cfg.json"
+    cfg.write_text("{}")
+
+    # Use a dummy long-running sleep command wrapped with _wrap_macos_cmd
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+    wrapped_cmd, extra_kwargs = _wrap_macos_cmd(cmd)
+    proc = subprocess.Popen(wrapped_cmd, **extra_kwargs)
+
+    sb_proc = SingboxProcess(
+        proc=proc,
+        socks_port=12345,
+        http_port=12346,
+        config_file=cfg,
+    )
+
+    time.sleep(0.3)
+    assert sb_proc.is_running
+
+    # Terminate SingboxProcess
+    sb_proc.terminate()
+    time.sleep(0.3)
+
+    assert not sb_proc.is_running
+    assert not cfg.exists()
+
+
+def test_cleanup_stale_singbox(monkeypatch):
+    from backend.singbox.process import cleanup_stale_singbox
+
+    # Should run safely without error
+    cleaned = cleanup_stale_singbox()
+    assert isinstance(cleaned, int)
+
 
 
 

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import platform
+import signal
 import socket
 import subprocess
 import tempfile
@@ -125,6 +126,22 @@ class SingboxProcess:
             except ValueError:
                 pass
 
+        # Close stdin pipe first so the macOS watcher unblocks and terminates child immediately
+        if self.proc.stdin and not self.proc.stdin.closed:
+            try:
+                self.proc.stdin.close()
+            except Exception:
+                pass
+
+        # If on macOS/Linux, query child PIDs before killing the watcher wrapper
+        child_pids: list[int] = []
+        try:
+            res = subprocess.run(["pgrep", "-P", str(self.proc.pid)], capture_output=True, text=True)
+            if res.returncode == 0:
+                child_pids = [int(p) for p in res.stdout.strip().split() if p.isdigit()]
+        except Exception:
+            pass
+
         # Graceful termination
         if self.proc.poll() is None:
             try:
@@ -139,6 +156,15 @@ class SingboxProcess:
                     logger.error("Failed to force-kill sing-box (pid=%d): %s", self.proc.pid, exc)
             except Exception as exc:
                 logger.debug("Error during sing-box terminate: %s", exc)
+
+        # Ensure any child PIDs are also terminated
+        for cpid in child_pids:
+            try:
+                os.kill(cpid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                logger.debug("Error killing child sing-box pid %d: %s", cpid, exc)
 
         # Remove temp config file
         try:
@@ -206,14 +232,25 @@ def _wrap_macos_cmd(cmd: list[str]) -> tuple[list[str], dict]:
     if platform.system() != "Darwin":
         return cmd, {}
 
-    # Watcher reads sys.stdin. When parent dies, pipe closes, read() unblocks, and watcher kills the child.
+    # Watcher reads sys.stdin. When parent dies or stdin closes, read() unblocks, and watcher kills the child.
+    # Signal handlers for SIGTERM and SIGINT guarantee the child is terminated even if watcher is signaled directly.
     script = (
-        "import sys, subprocess;"
-        "p = subprocess.Popen(sys.argv[1:]);"
-        "sys.stdin.read();"
-        "p.terminate();"
-        "p.wait(timeout=3);"
-        "p.kill()"
+        "import sys, subprocess, signal\n"
+        "p = subprocess.Popen(sys.argv[1:])\n"
+        "def _cleanup(*_):\n"
+        "    if p.poll() is None:\n"
+        "        p.terminate()\n"
+        "        try:\n"
+        "            p.wait(timeout=3)\n"
+        "        except Exception:\n"
+        "            p.kill()\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, _cleanup)\n"
+        "signal.signal(signal.SIGINT, _cleanup)\n"
+        "try:\n"
+        "    sys.stdin.read()\n"
+        "finally:\n"
+        "    _cleanup()\n"
     )
     # Using the system-provided python3 available on macOS 10.15+
     wrapped = ["/usr/bin/python3", "-c", script] + cmd
@@ -358,19 +395,6 @@ def start_singbox(binary: Path, config: dict) -> SingboxProcess:
         },
     ]
 
-    # Bind outbound connections to physical network interface (bypassing Karing/VPN TUN)
-    try:
-        from backend.system_proxy_detector import get_physical_default_interface
-
-        physical_iface = get_physical_default_interface()
-        if physical_iface:
-            config_with_inbounds.setdefault("route", {})["default_interface"] = physical_iface
-            for ob in config_with_inbounds.get("outbounds", []):
-                if isinstance(ob, dict) and ob.get("type") != "direct":
-                    ob["bind_interface"] = physical_iface
-    except Exception as exc:
-        logger.debug("Failed injecting physical interface into sing-box config: %s", exc)
-
     config_file = _write_temp_config(config_with_inbounds)
 
     cmd = [str(binary), "run", "-c", str(config_file)]
@@ -415,3 +439,33 @@ def start_singbox(binary: Path, config: dict) -> SingboxProcess:
         http_port=http_port,
         config_file=config_file,
     )
+
+
+def cleanup_stale_singbox() -> int:
+    """Find and kill any stale orphan sing-box processes from previous runs.
+
+    Returns the number of stale processes terminated.
+    """
+    killed = 0
+    try:
+        if platform.system() in ("Darwin", "Linux"):
+            cmd = ["pgrep", "-f", r"sing-box run -c .*(antibrowser_singbox|cloakbrowser_singbox_test)"]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                pids = [int(p) for p in res.stdout.strip().split() if p.isdigit()]
+                current_pid = os.getpid()
+                for pid in pids:
+                    if pid == current_pid:
+                        continue
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        killed += 1
+                        logger.info("Cleaned up stale sing-box process %d", pid)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as e:
+                        logger.warning("Failed to kill stale sing-box process %d: %s", pid, e)
+    except Exception as exc:
+        logger.debug("Failed checking for stale sing-box processes: %s", exc)
+    return killed
+

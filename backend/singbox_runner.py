@@ -57,15 +57,19 @@ def fast_singbox_proxy(proxy_payload: Any, startup_timeout: float = 1.5) -> Iter
     config = build_singbox_config(proxy_payload)
 
     # Bind outbound connections to physical network interface (bypassing Karing/VPN TUN)
+    # but do NOT bypass TUN for standard socks/http proxies which may require local proxy routing
     try:
         from backend.system_proxy_detector import get_physical_default_interface
 
-        physical_iface = get_physical_default_interface()
-        if physical_iface:
-            config.setdefault("route", {})["default_interface"] = physical_iface
-            for ob in config.get("outbounds", []):
-                if isinstance(ob, dict) and ob.get("type") != "direct":
-                    ob["bind_interface"] = physical_iface
+        outbounds = config.get("outbounds", [])
+        has_app_proxy = any(isinstance(ob, dict) and ob.get("type") in ("socks", "http") for ob in outbounds)
+        if not has_app_proxy:
+            physical_iface = get_physical_default_interface()
+            if physical_iface:
+                config.setdefault("route", {})["default_interface"] = physical_iface
+                for ob in outbounds:
+                    if isinstance(ob, dict) and ob.get("type") != "direct":
+                        ob["bind_interface"] = physical_iface
     except Exception as exc:
         logger.debug("Failed injecting physical interface into sing-box test config: %s", exc)
 

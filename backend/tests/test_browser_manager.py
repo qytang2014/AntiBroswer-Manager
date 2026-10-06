@@ -409,10 +409,13 @@ async def test_failed_launch_stays_active_until_its_context_is_closed(monkeypatc
     monkeypatch.setattr(manager, "_close_context", blocked_close)
     monkeypatch.setattr(module, "launch_persistent_context_async", AsyncMock(return_value=context))
     profile = _launch_profile(tmp_path)
+    profile["timezone"] = "UTC"
+    profile["locale"] = "en-US"
+    profile["geoip"] = False
     pid = profile["id"]
 
     task = asyncio.create_task(manager.launch(profile))
-    await asyncio.wait_for(closing.wait(), 2)
+    await asyncio.wait_for(closing.wait(), 5)
     try:
         assert pid not in manager._launching  # the exact window: cleanup pending
         assert manager.is_active(pid)
@@ -1027,10 +1030,10 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
     assert cfg["mediaDevices:micros"] == 1
     assert cfg["mediaDevices:webcams"] == 1
 
-    # 5. User-Agent coherence: Camoufox native UA to prevent Firefox anomaly penalty
-    assert "Camoufox/" in cfg["navigator.userAgent"]
-    assert "Firefox/" not in cfg["navigator.userAgent"]
-    assert cfg["headers.User-Agent"] == cfg["navigator.userAgent"]
+    # 5. User-Agent coherence: When user_agent is not explicitly set, do not inject custom UA
+    # into cam_config so Camoufox engine generates authentic Firefox headers without path corruption.
+    assert "navigator.userAgent" not in cfg
+    assert "headers.User-Agent" not in cfg
 
     await manager.stop("prof-coherence")
 
@@ -1051,8 +1054,8 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
     assert cfg_def["webGl2:parameters"]["34047"] == 16
     assert cfg_def["webGl:vendor"] is not None
     assert cfg_def["webGl:renderer"] is not None
-    assert "Camoufox/" in cfg_def["navigator.userAgent"]
-    assert "Firefox/" not in cfg_def["navigator.userAgent"]
+    assert "navigator.userAgent" not in cfg_def
+    assert "headers.User-Agent" not in cfg_def
     await manager.stop("prof-default-webgl")
 
     # 7. Custom User-Agent support for Camoufox

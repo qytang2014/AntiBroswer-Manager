@@ -687,7 +687,6 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
                 {"inbound": ["socks-in", "http-in"], "outbound": primary_tag},
             ],
             "final": primary_tag,
-            "auto_detect_interface": True,
         },
         # inbounds injected by process.py at runtime
     }

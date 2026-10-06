@@ -425,7 +425,14 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
     physical_iface = get_physical_default_interface()
 
     addr = _extract_server_host_port(node)
+    is_loopback = False
     if addr:
+        h = addr[0].strip().lower()
+        is_loopback = h in ("127.0.0.1", "localhost", "::1") or h.startswith("127.")
+
+    # Only run direct transport (TCP/ICMP) ping for remote targets; loopback proxies (127.0.0.1)
+    # must be tested end-to-end through the proxy tunnel to reflect true network latency.
+    if addr and not is_loopback:
         host, port = addr
         ok, lat, err = False, None, None
 
@@ -448,7 +455,7 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
             update_proxy_node_latency(nid, lat)
             return BatchTestResult(node_id=nid, latency_ms=lat, ok=True)
 
-    # Fallback / UDP path: HTTP RTT or sing-box
+    # Fallback / UDP path / Loopback proxy: HTTP RTT or sing-box
     parsed_config = node.get("parsed_config")
 
     try:
@@ -467,7 +474,10 @@ def test_node_sync(node: dict[str, Any]) -> BatchTestResult:
             with fast_singbox_proxy(proxy_payload) as target_proxy_url:
                 ok, lat, err = _measure_proxy_rtt(target_proxy_url)
         else:
-            ok, lat, err = _measure_proxy_rtt(raw_uri)
+            target_proxy = raw_uri
+            if target_proxy and "://" not in target_proxy:
+                target_proxy = f"socks5://{target_proxy}" if protocol in ("socks5", "socks") else f"http://{target_proxy}"
+            ok, lat, err = _measure_proxy_rtt(target_proxy)
     except Exception as exc:
         ok, lat, err = False, None, str(exc)
 

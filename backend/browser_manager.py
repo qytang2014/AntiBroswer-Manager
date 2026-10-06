@@ -451,22 +451,13 @@ def _test_proxy_sync(proxy: Any) -> dict[str, Any]:
 
     if not ip:
         return {"ok": False, "error": last_err or "Proxy did not return an exit IP (timeout or blocked)"}
-    country = city = timezone = None
-    try:  # geo is best-effort; never fails the test
-        import geoip2.database
+    from backend.geoip_resolver import resolve_ip_geo
 
-        with geoip2.database.Reader(_ensure_geoip_db()) as reader:
-            resp = reader.city(ip)
-            country, city = resp.country.iso_code, resp.city.name
-            timezone = resp.location.time_zone
-    except Exception as exc:
-        logger.debug("Proxy test geo lookup failed for %s: %s", ip, exc)
-
-    locale = None
-    if country:
-        from cloakbrowser.geoip import COUNTRY_LOCALE_MAP
-
-        locale = COUNTRY_LOCALE_MAP.get(country, "en-US")
+    geo = resolve_ip_geo(ip)
+    country = geo.get("country")
+    city = geo.get("city")
+    timezone = geo.get("timezone")
+    locale = geo.get("locale")
 
     return {
         "ok": True,
@@ -535,27 +526,24 @@ def _resolve_profile_network_fingerprint_sync(
                     if not has_user_webrtc_ip:
                         extra_args.append(f"--fingerprint-webrtc-ip={exit_ip}")
                 try:
-                    import geoip2.database
+                    from backend.geoip_resolver import resolve_ip_geo
 
-                    with geoip2.database.Reader(_ensure_geoip_db()) as reader:
-                        resp = reader.city(exit_ip)
-                        detected_tz = resp.location.time_zone
-                        detected_locale = None
-                        if resp.country.iso_code:
-                            detected_locale = COUNTRY_LOCALE_MAP.get(resp.country.iso_code, "en-US")
+                    geo = resolve_ip_geo(exit_ip)
+                    detected_tz = geo.get("timezone")
+                    detected_locale = geo.get("locale")
 
-                        if is_auto_geo:
-                            # In auto geo mode, dynamic exit IP detection always takes precedence!
-                            if detected_tz:
-                                timezone = detected_tz
-                            if detected_locale:
-                                locale = detected_locale
-                        else:
-                            # In manual mode, only fill in if user left it blank
-                            if timezone is None and detected_tz:
-                                timezone = detected_tz
-                            if locale is None and detected_locale:
-                                locale = detected_locale
+                    if is_auto_geo:
+                        # In auto geo mode, dynamic exit IP detection always takes precedence!
+                        if detected_tz:
+                            timezone = detected_tz
+                        if detected_locale:
+                            locale = detected_locale
+                    else:
+                        # In manual mode, only fill in if user left it blank
+                        if timezone is None and detected_tz:
+                            timezone = detected_tz
+                        if locale is None and detected_locale:
+                            locale = detected_locale
                 except Exception as geo_exc:
                     logger.warning("Failed to resolve GeoIP from exit IP %s: %s", exit_ip, geo_exc)
         except Exception as exc:
@@ -1283,12 +1271,27 @@ class BrowserManager:
                     pw = await async_playwright().start()
 
                     # Camoufox is Firefox-based. Convert proxy to its expected dict format.
+                    # Ensure username and password are clean and separated for Playwright Firefox.
                     cam_proxy = None
                     raw_cam_proxy = launch_options.get("proxy")
                     if isinstance(raw_cam_proxy, dict) and "server" in raw_cam_proxy:
-                        cam_proxy = raw_cam_proxy  # already {"server": "..."} from singbox
+                        cam_proxy = dict(raw_cam_proxy)
                     elif isinstance(raw_cam_proxy, str):
                         cam_proxy = {"server": raw_cam_proxy}
+
+                    if cam_proxy and isinstance(cam_proxy.get("server"), str):
+                        server_str = cam_proxy["server"]
+                        if "@" in server_str:
+                            from urllib.parse import urlparse, unquote
+                            parsed_s = urlparse(server_str)
+                            clean_srv = f"{parsed_s.scheme}://{parsed_s.hostname}"
+                            if parsed_s.port:
+                                clean_srv += f":{parsed_s.port}"
+                            cam_proxy["server"] = clean_srv
+                            if parsed_s.username and "username" not in cam_proxy:
+                                cam_proxy["username"] = unquote(parsed_s.username)
+                            if parsed_s.password and "password" not in cam_proxy:
+                                cam_proxy["password"] = unquote(parsed_s.password)
 
                     # Determine target OS to match the host platform and maintain fingerprint coherence
                     target_os = "macos" if self.runtime.host_os == "macos" else ("linux" if self.runtime.host_os == "linux" else "windows")
@@ -1309,27 +1312,22 @@ class BrowserManager:
                             cam_config["locale:region"] = loc_parts[1]
 
                     # User-Agent coherence:
-                    # When Camoufox is started by Playwright, BrowserForge by default generates a synthetic
-                    # "Firefox/<ver>" UA which lacks Camoufox identity and causes bot detectors (e.g. fingerprint-scan.com)
-                    # to abort font detection (reporting Fonts: "NA") and penalize browser coherence (+5 medium).
-                    # If the user explicitly configured a user_agent, respect it; otherwise, enforce Camoufox's
-                    # authentic native User-Agent matching the target OS and kernel version.
+                    # Camoufox natively generates a genuine, coherent Firefox User-Agent matching the target
+                    # OS, architecture, and installed Firefox release, keeping navigator.userAgent,
+                    # navigator.appVersion, navigator.platform, and HTTP headers in full sync.
+                    # We only override navigator.userAgent and headers.User-Agent if the user explicitly
+                    # configured a custom user_agent for this profile.
                     if profile.get("user_agent"):
                         custom_ua = str(profile["user_agent"]).strip()
                         cam_config["navigator.userAgent"] = custom_ua
                         cam_config["headers.User-Agent"] = custom_ua
-                    else:
-                        eff_clean = str(effective_kernel or "152.0.4-beta.31").lstrip("vV")
-                        ff_major = eff_clean.split(".")[0]
-                        if target_os == "macos":
-                            platform_str = "Macintosh; Intel Mac OS X 10.15"
-                        elif target_os == "windows":
-                            platform_str = "Windows NT 10.0; Win64; x64"
-                        else:
-                            platform_str = "X11; Linux x86_64"
-                        native_ua = f"Mozilla/5.0 ({platform_str}; rv:{ff_major}.0) Gecko/20100101 Camoufox/{eff_clean}"
-                        cam_config["navigator.userAgent"] = native_ua
-                        cam_config["headers.User-Agent"] = native_ua
+                        try:
+                            from camoufox.fingerprints import _app_version_from_user_agent
+                            derived_app_ver = _app_version_from_user_agent(custom_ua)
+                            if derived_app_ver:
+                                cam_config["navigator.appVersion"] = derived_app_ver
+                        except Exception:
+                            pass
 
                     # Hardware & WebGL & Privacy configurations
                     if profile.get("cpu_cores"):
@@ -1517,8 +1515,7 @@ class BrowserManager:
                         downloads_dir=downloads_dir,
                     )
                     if cam_proxy and isinstance(cam_proxy.get("server"), str) and "socks" in cam_proxy["server"]:
-                        server_url = cam_proxy["server"]
-                        cam_user_prefs["network.proxy.socks_remote_dns"] = "socks5h" in server_url or "socksh" in server_url
+                        cam_user_prefs["network.proxy.socks_remote_dns"] = True
                         cam_user_prefs["network.proxy.socks_version"] = 5
 
                     if webrtc_ip:
@@ -1553,6 +1550,24 @@ class BrowserManager:
                         context = await AsyncNewBrowser(pw, **camoufox_options)
                         context._playwright_instance = pw
                         cdp_port = 0
+
+                        # In Camoufox, closing the last window/tab does not emit context.close.
+                        # Listen to page close events and automatically close context when all pages are closed.
+                        async def _check_camoufox_empty():
+                            await asyncio.sleep(0.15)
+                            active = [p for p in context.pages if not p.is_closed()]
+                            if not active:
+                                try:
+                                    await context.close()
+                                except Exception:
+                                    pass
+
+                        def _on_camoufox_page(p):
+                            p.on("close", lambda *_: asyncio.create_task(_check_camoufox_empty()))
+
+                        context.on("page", _on_camoufox_page)
+                        for pg in context.pages:
+                            _on_camoufox_page(pg)
                     except Exception as exc:
                         await pw.stop()
                         raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc
@@ -2107,12 +2122,23 @@ class BrowserManager:
     ) -> None:
         if running.screenshot_task is not None:
             running.screenshot_task.cancel()
+
+        # Stop sing-box proxy immediately so proxy ports and processes are released reliably
+        if running.singbox_proc is not None:
+            try:
+                running.singbox_proc.terminate()
+            except Exception as exc:
+                logger.warning("Error terminating singbox for %s: %s", running.profile_id, exc)
+
         if close_context:
             await self._close_context(running.context, running.profile_id)
-        if running.singbox_proc is not None:
-            running.singbox_proc.terminate()
+
         if running.display is not None:
-            await self.vnc.stop_vnc(running.display)
+            try:
+                await self.vnc.stop_vnc(running.display)
+            except Exception as exc:
+                logger.warning("Error stopping VNC for %s: %s", running.profile_id, exc)
+
         self._release_cdp_port(running.cdp_port)
 
     async def _on_browser_closed(self, running: RunningProfile):
@@ -2284,10 +2310,22 @@ class BrowserManager:
         if self.runtime.viewer_mode == "vnc":
             await self.vnc.cleanup_all()
 
+        try:
+            from backend.singbox.process import cleanup_stale_singbox
+            cleanup_stale_singbox()
+        except Exception as exc:
+            logger.debug("Failed cleaning up singbox on shutdown: %s", exc)
+
     async def cleanup_stale(self):
-        """Kill orphan display processes in the Docker runtime only."""
+        """Kill orphan display and proxy processes from previous runs."""
         if self.runtime.viewer_mode == "vnc":
             await self.vnc.cleanup_stale()
+
+        try:
+            from backend.singbox.process import cleanup_stale_singbox
+            cleanup_stale_singbox()
+        except Exception as exc:
+            logger.debug("Failed cleaning up stale singbox processes on startup: %s", exc)
 
     async def auto_launch_all(self):
         """Launch all profiles with auto_launch=True. Called on startup."""

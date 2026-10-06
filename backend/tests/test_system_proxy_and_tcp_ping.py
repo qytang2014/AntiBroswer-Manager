@@ -207,3 +207,22 @@ def test_udp_protocols_fallback_to_singbox(tmp_db):
         mock_db_update.assert_called_once_with("node-udp-2", 350)
 
 
+def test_loopback_proxy_bypasses_tcp_ping(tmp_db):
+    """Test that loopback proxies (127.0.0.1, localhost) bypass single-machine TCP ping and run end-to-end RTT."""
+    node = {
+        "id": "node-loopback-1",
+        "protocol": "socks5",
+        "raw_uri": "socks5://127.0.0.1:1080#KaringLocal",
+    }
+    with patch("backend.subscription_service._tcp_ping_rtt") as mock_tcp, \
+         patch("backend.subscription_service._measure_proxy_rtt", return_value=(True, 280, None)) as mock_measure, \
+         patch("backend.subscription_service.update_proxy_node_latency") as mock_db_update:
+        res = run_test_node_sync(node)
+        assert res.ok is True
+        assert res.latency_ms == 280
+        # Must NOT call local TCP ping to avoid false 1ms latency
+        mock_tcp.assert_not_called()
+        mock_measure.assert_called_once_with("socks5://127.0.0.1:1080#KaringLocal")
+        mock_db_update.assert_called_once_with("node-loopback-1", 280)
+
+
