@@ -134,7 +134,7 @@ def pack(
     if progress_callback:
         progress_callback(10, "Initializing backup staging area...")
 
-    with tempfile.TemporaryDirectory(dir=str(dest_tar_path.parent)) as tmp_staging_str:
+    with tempfile.TemporaryDirectory(dir=str(dest_tar_path.parent), ignore_cleanup_errors=True) as tmp_staging_str:
         staging_dir = Path(tmp_staging_str)
 
         # 1. Hot backup SQLite database
@@ -179,20 +179,24 @@ def pack(
         # Prepare Webstore extension exclusions to reduce backup size
         exclude_arcnames: set[str] = set()
         if staged_db_path.exists():
+            ext_conn = None
             try:
-                with sqlite3.connect(str(staged_db_path)) as conn:
-                    conn.row_factory = sqlite3.Row
-                    has_exts = conn.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='extensions'"
-                    ).fetchone() is not None
-                    if has_exts:
-                        rows = conn.execute("SELECT path FROM extensions WHERE source = 'webstore_id'").fetchall()
-                        for row in rows:
-                            p = row["path"]
-                            if p and p.startswith("extensions/"):
-                                exclude_arcnames.add(p)
+                ext_conn = sqlite3.connect(str(staged_db_path))
+                ext_conn.row_factory = sqlite3.Row
+                has_exts = ext_conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='extensions'"
+                ).fetchone() is not None
+                if has_exts:
+                    rows = ext_conn.execute("SELECT path FROM extensions WHERE source = 'webstore_id'").fetchall()
+                    for row in rows:
+                        p = row["path"]
+                        if p and p.startswith("extensions/"):
+                            exclude_arcnames.add(p)
             except Exception:
                 pass
+            finally:
+                if ext_conn is not None:
+                    ext_conn.close()
 
         # 4. Assemble .tar.gz
         if progress_callback:

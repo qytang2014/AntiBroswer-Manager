@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import time
@@ -1312,11 +1313,11 @@ class BrowserManager:
                             cam_config["locale:region"] = loc_parts[1]
 
                     # User-Agent coherence:
-                    # Camoufox natively generates a genuine, coherent Firefox User-Agent matching the target
-                    # OS, architecture, and installed Firefox release, keeping navigator.userAgent,
-                    # navigator.appVersion, navigator.platform, and HTTP headers in full sync.
-                    # We only override navigator.userAgent and headers.User-Agent if the user explicitly
-                    # configured a custom user_agent for this profile.
+                    # When user explicitly configured a user_agent, respect it.
+                    # Otherwise, generate Camoufox's authentic User-Agent matching the target OS and clean kernel version.
+                    # Note: We cleanly extract the numeric release version to avoid path leaks, and use Camoufox identity
+                    # which prevents bot detectors (e.g. fingerprint-scan.com) from triggering the hardcoded
+                    # `indexOf('Firefox') !== -1` early-return that causes fonts: NA and +5 medium penalty.
                     if profile.get("user_agent"):
                         custom_ua = str(profile["user_agent"]).strip()
                         cam_config["navigator.userAgent"] = custom_ua
@@ -1328,6 +1329,25 @@ class BrowserManager:
                                 cam_config["navigator.appVersion"] = derived_app_ver
                         except Exception:
                             pass
+                    else:
+                        eff_str = str(effective_kernel or "")
+                        # Robustly extract numeric semver from version or path (e.g. '152.0' from '/.../official/152.0')
+                        v_match = re.search(r"(\d+(?:\.\d+)+)", eff_str)
+                        if v_match:
+                            eff_clean = v_match.group(1)
+                            ff_major = eff_clean.split(".")[0]
+                        else:
+                            eff_clean = "152.0"
+                            ff_major = "152"
+                        if target_os == "macos":
+                            platform_str = "Macintosh; Intel Mac OS X 10.15"
+                        elif target_os == "windows":
+                            platform_str = "Windows NT 10.0; Win64; x64"
+                        else:
+                            platform_str = "X11; Linux x86_64"
+                        native_ua = f"Mozilla/5.0 ({platform_str}; rv:{ff_major}.0) Gecko/20100101 Camoufox/{eff_clean}"
+                        cam_config["navigator.userAgent"] = native_ua
+                        cam_config["headers.User-Agent"] = native_ua
 
                     # Hardware & WebGL & Privacy configurations
                     if profile.get("cpu_cores"):

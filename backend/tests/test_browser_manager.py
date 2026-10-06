@@ -1030,10 +1030,11 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
     assert cfg["mediaDevices:micros"] == 1
     assert cfg["mediaDevices:webcams"] == 1
 
-    # 5. User-Agent coherence: When user_agent is not explicitly set, do not inject custom UA
-    # into cam_config so Camoufox engine generates authentic Firefox headers without path corruption.
-    assert "navigator.userAgent" not in cfg
-    assert "headers.User-Agent" not in cfg
+    # 5. User-Agent coherence: Camoufox native UA to prevent Firefox anomaly penalty
+    assert "Camoufox/" in cfg["navigator.userAgent"]
+    assert "Firefox/" not in cfg["navigator.userAgent"]
+    assert "/Users/" not in cfg["navigator.userAgent"]
+    assert cfg["headers.User-Agent"] == cfg["navigator.userAgent"]
 
     await manager.stop("prof-coherence")
 
@@ -1054,8 +1055,9 @@ async def test_camoufox_fingerprint_coherence_screen_fonts_webgl(monkeypatch, tm
     assert cfg_def["webGl2:parameters"]["34047"] == 16
     assert cfg_def["webGl:vendor"] is not None
     assert cfg_def["webGl:renderer"] is not None
-    assert "navigator.userAgent" not in cfg_def
-    assert "headers.User-Agent" not in cfg_def
+    assert "Camoufox/" in cfg_def["navigator.userAgent"]
+    assert "Firefox/" not in cfg_def["navigator.userAgent"]
+    assert "/Users/" not in cfg_def["navigator.userAgent"]
     await manager.stop("prof-default-webgl")
 
     # 7. Custom User-Agent support for Camoufox
