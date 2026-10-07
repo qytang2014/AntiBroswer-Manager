@@ -22,6 +22,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import collections
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,10 +91,16 @@ class SingboxProcess:
     http_port: int
     config_file: Path
     _terminated: bool = field(default=False, init=False, repr=False)
+    _recent_logs: collections.deque = field(default_factory=lambda: collections.deque(maxlen=30), init=False, repr=False)
 
     def __post_init__(self) -> None:
         with _registry_lock:
             _live_processes.append(self)
+
+    @property
+    def recent_logs(self) -> list[str]:
+        """Return the most recent lines logged to stderr by sing-box."""
+        return list(self._recent_logs)
 
     @property
     def socks5_url(self) -> str:
@@ -433,12 +440,37 @@ def start_singbox(binary: Path, config: dict) -> SingboxProcess:
         proc.pid, socks_port, http_port,
     )
 
-    return SingboxProcess(
+    sb_proc = SingboxProcess(
         proc=proc,
         socks_port=socks_port,
         http_port=http_port,
         config_file=config_file,
     )
+
+    if proc.stderr:
+        def _drain_stderr(pipe, log_deque: collections.deque) -> None:
+            try:
+                for line in iter(pipe.readline, b""):
+                    decoded = line.decode("utf-8", errors="replace").strip()
+                    if decoded:
+                        log_deque.append(decoded)
+            except Exception:
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        drain_thread = threading.Thread(
+            target=_drain_stderr,
+            args=(proc.stderr, sb_proc._recent_logs),
+            daemon=True,
+            name=f"singbox-stderr-{proc.pid}",
+        )
+        drain_thread.start()
+
+    return sb_proc
 
 
 def cleanup_stale_singbox() -> int:

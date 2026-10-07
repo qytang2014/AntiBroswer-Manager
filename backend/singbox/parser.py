@@ -669,13 +669,13 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
 
     config = {
         "log": {
-            "level": "trace",
+            "level": "warn",
             "timestamp": True,
         },
         "dns": {
             "servers": [
-                {"tag": "remote-dns", "type": "udp", "server": "8.8.8.8"},
-                {"tag": "local-dns",  "type": "local"},
+                {"tag": "remote-dns", "type": "udp", "server": "8.8.8.8", "detour": primary_tag},
+                {"tag": "local-dns", "type": "udp", "server": "223.5.5.5"},
             ],
         },
         "outbounds": outbounds + [

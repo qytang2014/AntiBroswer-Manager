@@ -38,6 +38,27 @@ try:
 except Exception:
     pass
 
+# Ensure CloakBrowser recognizes locally installed Pro kernels without attempting GitHub download
+try:
+    import cloakbrowser.browser as _cbb
+    import cloakbrowser.download as _cbd
+
+    if not hasattr(_cbd, "_orig_ensure_binary"):
+        _cbd._orig_ensure_binary = _cbd.ensure_binary
+        def _patched_ensure_binary(*args, **kwargs):
+            req_v = kwargs.get("browser_version") or (args[1] if len(args) > 1 else None)
+            if req_v:
+                for pro in (False, True):
+                    bp = _cbd.get_binary_path(req_v, pro=pro)
+                    if bp.exists() and _cbd._is_executable(bp):
+                        return str(bp)
+            return _cbd._orig_ensure_binary(*args, **kwargs)
+
+        _cbd.ensure_binary = _patched_ensure_binary
+        _cbb.ensure_binary = _patched_ensure_binary
+except Exception:
+    pass
+
 # Preserve acceptDownloads="internal-browser-default" in Playwright's protocol layer
 # so Playwright does not intercept downloads with Juggler (Firefox) or CDP allowAndName (Chromium),
 # allowing native browser download UI, download panel, and about:downloads history to function.
@@ -69,28 +90,78 @@ def _ensure_playwright_internal_download_patch() -> None:
         if cb2.exists():
             candidate_bundles.append(cb2)
 
+    app_bundle = Path("/Applications/AntiBrowser-Manager.app/Contents/Resources/playwright/driver/package/lib/coreBundle.js")
+    if app_bundle.exists():
+        candidate_bundles.append(app_bundle)
+
     for core_bundle in candidate_bundles:
         try:
             if not core_bundle.exists():
                 continue
             content = core_bundle.read_text(encoding="utf-8")
-            if 'if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";' in content or \
-               'if (acceptDownloads === "internal-browser-default") return "internal-browser-default";' in content:
-                continue
+            modified = False
 
-            target = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads)\n    return "accept";'
-            replacement = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";\n  if (acceptDownloads)\n    return "accept";'
-            if target in content:
-                core_bundle.write_text(content.replace(target, replacement, 1), encoding="utf-8")
-                logger.info("Applied internal-browser-default patch to %s", core_bundle)
-            else:
-                pattern = re.compile(r'(function\s+toAcceptDownloadsProtocol\s*\(\s*acceptDownloads\s*\)\s*\{\s*if\s*\(\s*acceptDownloads\s*===\s*void 0\s*\)\s*return void 0;)')
-                if pattern.search(content):
-                    patched = pattern.sub(r'\1\n  if (acceptDownloads === "internal-browser-default") return "internal-browser-default";', content, count=1)
-                    core_bundle.write_text(patched, encoding="utf-8")
-                    logger.info("Applied regex internal-browser-default patch to %s", core_bundle)
+            # Patch 1: Preserve 'internal-browser-default'
+            if not ('if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";' in content or \
+                   'if (acceptDownloads === "internal-browser-default") return "internal-browser-default";' in content):
+                target = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads)\n    return "accept";'
+                replacement = 'function toAcceptDownloadsProtocol(acceptDownloads) {\n  if (acceptDownloads === void 0)\n    return void 0;\n  if (acceptDownloads === "internal-browser-default")\n    return "internal-browser-default";\n  if (acceptDownloads)\n    return "accept";'
+                if target in content:
+                    content = content.replace(target, replacement, 1)
+                    modified = True
+                    logger.info("Applied internal-browser-default patch to %s", core_bundle)
+                else:
+                    pattern = re.compile(r'(function\s+toAcceptDownloadsProtocol\s*\(\s*acceptDownloads\s*\)\s*\{\s*if\s*\(\s*acceptDownloads\s*===\s*void 0\s*\)\s*return void 0;)')
+                    if pattern.search(content):
+                        content = pattern.sub(r'\1\n  if (acceptDownloads === "internal-browser-default") return "internal-browser-default";', content, count=1)
+                        modified = True
+                        logger.info("Applied regex internal-browser-default patch to %s", core_bundle)
+
+            # Patch 2: Firefox FFNetworkManager._onRequestFinished null response crash fix
+            # Fixes Playwright driver crash: TypeError: Cannot read properties of null (reading 'setTransferSize')
+            ff_old = (
+                "        const response2 = request2.request._existingResponse();\n"
+                "        response2.setTransferSize(event.transferSize);\n"
+                "        response2.setEncodedBodySize(event.encodedBodySize);\n"
+                "        const isRedirected = response2.status() >= 300 && response2.status() <= 399;\n"
+                "        const responseEndTime = event.responseEndTime ? event.responseEndTime / 1e3 - response2.timing().startTime : -1;\n"
+                "        if (isRedirected) {\n"
+                "          response2._requestFinished(responseEndTime);\n"
+                "        } else {\n"
+                "          this._requests.delete(request2._id);\n"
+                "          response2._requestFinished(responseEndTime);\n"
+                "        }\n"
+                "        response2._setHttpVersion(event.protocolVersion ?? null);\n"
+                "        this._page._page.frameManager.reportRequestFinished(request2.request, response2);"
+            )
+            ff_new = (
+                "        const response2 = request2.request._existingResponse();\n"
+                "        if (response2) {\n"
+                "          response2.setTransferSize(event.transferSize);\n"
+                "          response2.setEncodedBodySize(event.encodedBodySize);\n"
+                "          const isRedirected = response2.status() >= 300 && response2.status() <= 399;\n"
+                "          const responseEndTime = event.responseEndTime ? event.responseEndTime / 1e3 - response2.timing().startTime : -1;\n"
+                "          if (isRedirected) {\n"
+                "            response2._requestFinished(responseEndTime);\n"
+                "          } else {\n"
+                "            this._requests.delete(request2._id);\n"
+                "            response2._requestFinished(responseEndTime);\n"
+                "          }\n"
+                "          response2._setHttpVersion(event.protocolVersion ?? null);\n"
+                "          this._page._page.frameManager.reportRequestFinished(request2.request, response2);\n"
+                "        } else {\n"
+                "          this._requests.delete(request2._id);\n"
+                "        }"
+            )
+            if ff_old in content:
+                content = content.replace(ff_old, ff_new, 1)
+                modified = True
+                logger.info("Applied Firefox null response crash patch to %s", core_bundle)
+
+            if modified:
+                core_bundle.write_text(content, encoding="utf-8")
         except Exception as exc:
-            logger.debug("Failed to apply Playwright internal download patch to %s: %s", core_bundle, exc)
+            logger.debug("Failed to apply Playwright patches to %s: %s", core_bundle, exc)
 
 _ensure_playwright_internal_download_patch()
 
@@ -505,6 +576,9 @@ def _resolve_profile_network_fingerprint_sync(
         has_user_policy = any(a.startswith("--force-webrtc-ip-handling-policy") for a in user_launch_args)
         if not has_user_policy:
             extra_args.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+        has_user_quic = any(a.startswith("--disable-quic") for a in user_launch_args)
+        if not has_user_quic:
+            extra_args.append("--disable-quic")
 
     # Probe exit IP if auto geo is enabled, or if manual timezone/locale is missing
     need_probe = is_auto_geo or timezone is None or locale is None
@@ -1096,6 +1170,40 @@ class BrowserManager:
                 lic = next((l for l in self.licenses if l.get("id") == profile.get("license_id")), None)
                 if lic:
                     profile_license_key = lic.get("key")
+            elif self.license_key:
+                profile_license_key = self.license_key
+
+            # If the selected license has reached its concurrent session limit on the license server,
+            # automatically fail over to any other configured license that has available seats.
+            if profile_license_key and self.licenses and len(self.licenses) > 1:
+                try:
+                    from cloakbrowser.license import get_session_seats
+                    target_lic = next((l for l in self.licenses if l.get("key") == profile_license_key), None)
+                    seats = await asyncio.to_thread(get_session_seats, profile_license_key)
+                    if seats.state == "ok" and seats.limit is not None and seats.active >= seats.limit:
+                        logger.warning(
+                            "License %s (%s) has reached seat limit (%d/%d); checking alternate licenses...",
+                            target_lic.get("name") if target_lic else "selected",
+                            profile.get("license_id") or "default",
+                            seats.active,
+                            seats.limit,
+                        )
+                        for alt_lic in self.licenses:
+                            alt_key = alt_lic.get("key")
+                            if alt_key and alt_key != profile_license_key:
+                                alt_seats = await asyncio.to_thread(get_session_seats, alt_key)
+                                if alt_seats.state == "ok" and (alt_seats.limit is None or alt_seats.active < alt_seats.limit):
+                                    logger.info(
+                                        "Automatically failed over to available license %s (%s, %d/%d seats used)",
+                                        alt_lic.get("name"),
+                                        alt_lic.get("id"),
+                                        alt_seats.active,
+                                        alt_seats.limit or 1,
+                                    )
+                                    profile_license_key = alt_key
+                                    break
+                except Exception as exc:
+                    logger.debug("Automatic license seat failover check failed: %s", exc)
 
             is_pro_binary = False
             if effective_kernel:
@@ -1573,17 +1681,33 @@ class BrowserManager:
 
                         # In Camoufox, closing the last window/tab does not emit context.close.
                         # Listen to page close events and automatically close context when all pages are closed.
+                        # Debounce for 2.5s and cancel if a new page is opened to prevent premature shutdown during navigation/popups.
+                        _empty_check_task: asyncio.Task | None = None
+
                         async def _check_camoufox_empty():
-                            await asyncio.sleep(0.15)
-                            active = [p for p in context.pages if not p.is_closed()]
-                            if not active:
-                                try:
-                                    await context.close()
-                                except Exception:
-                                    pass
+                            try:
+                                await asyncio.sleep(2.5)
+                                active = [p for p in context.pages if not p.is_closed()]
+                                if not active:
+                                    try:
+                                        await context.close()
+                                    except Exception:
+                                        pass
+                            except asyncio.CancelledError:
+                                pass
+
+                        def _schedule_camoufox_empty_check():
+                            nonlocal _empty_check_task
+                            if _empty_check_task and not _empty_check_task.done():
+                                _empty_check_task.cancel()
+                            _empty_check_task = asyncio.create_task(_check_camoufox_empty())
 
                         def _on_camoufox_page(p):
-                            p.on("close", lambda *_: asyncio.create_task(_check_camoufox_empty()))
+                            nonlocal _empty_check_task
+                            if _empty_check_task and not _empty_check_task.done():
+                                _empty_check_task.cancel()
+                                _empty_check_task = None
+                            p.on("close", lambda *_: _schedule_camoufox_empty_check())
 
                         context.on("page", _on_camoufox_page)
                         for pg in context.pages:
