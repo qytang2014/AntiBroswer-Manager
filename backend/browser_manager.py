@@ -39,6 +39,8 @@ try:
         cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--use-mock-keychain")
     if "--password-store=basic" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
         cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--password-store=basic")
+    if "--enable-automation" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--enable-automation")
 except Exception:
     pass
 
