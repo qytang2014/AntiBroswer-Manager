@@ -262,6 +262,15 @@ def get_camoufox_user_prefs(
         # Media devices & WebRTC probe smoothness: avoid hanging on permission dialogs during tests
         "media.navigator.permission.disabled": True,
         "media.navigator.enabled": True,
+        # DRM / Widevine for video platforms like muse.ai and Netflix
+        "media.eme.enabled": True,
+        "media.gmp-widevinecdm.enabled": True,
+        "media.gmp-widevinecdm.visible": True,
+        # WebAuthn and Passkey for password managers like Bitwarden
+        "security.webauth.webauthn_enable_usbtoken": True,
+        "security.webauth.webauthn_enable_softtoken": True,
+        "security.webauth.webauthn_enable_passkey": True,
+        "security.webauth.webauthn": True,
     }
 
     # Explicit fallback font families to prevent font/glyph corruption (乱码) across platforms

@@ -617,8 +617,8 @@ export const api = {
     });
   },
 
-  deleteKernel: (version: string, browser_type: string = "cloakbrowser") =>
-    request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}?browser_type=${encodeURIComponent(browser_type)}`, { method: "DELETE" }),
+  deleteKernel: (version: string, tier: string = "free", browser_type: string = "cloakbrowser") =>
+    request<{ ok: boolean; message?: string }>(`/api/kernels/${encodeURIComponent(version)}?tier=${encodeURIComponent(tier)}&browser_type=${encodeURIComponent(browser_type)}`, { method: "DELETE" }),
 
   getBackupConfig: () => request<BackupConfig>("/api/backup/config"),
 

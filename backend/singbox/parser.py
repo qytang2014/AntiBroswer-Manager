@@ -657,7 +657,7 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
 
     primary_tag = outbounds[0].get("tag", "proxy")
 
-    # Deduplicate tags (subscription may have duplicates)
+    # Deduplicate tags and inject TCP keep-alive
     seen: dict[str, int] = {}
     for ob in outbounds:
         tag = ob.get("tag", "proxy")
@@ -666,6 +666,13 @@ def _wrap_outbounds(outbounds: list[dict[str, Any]]) -> dict[str, Any]:
             ob["tag"] = f"{tag}_{seen[tag]}"
         else:
             seen[tag] = 0
+
+        # Inject TCP keep-alive to prevent NAT timeouts and connection drops
+        if ob.get("type") not in ("direct", "block", "dns"):
+            if "tcp_keep_alive" not in ob:
+                ob["tcp_keep_alive"] = "30s"
+            if "tcp_keep_alive_interval" not in ob:
+                ob["tcp_keep_alive_interval"] = "15s"
 
     config = {
         "log": {

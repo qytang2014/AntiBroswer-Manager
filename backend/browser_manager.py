@@ -35,6 +35,10 @@ try:
     import cloakbrowser.config
     if "--disable-extensions" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
         cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--disable-extensions")
+    if "--use-mock-keychain" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--use-mock-keychain")
+    if "--password-store=basic" not in cloakbrowser.config.IGNORE_DEFAULT_ARGS:
+        cloakbrowser.config.IGNORE_DEFAULT_ARGS.append("--password-store=basic")
 except Exception:
     pass
 
@@ -1622,8 +1626,13 @@ class BrowserManager:
                         camoufox_options["timezone_id"] = resolved_tz
                     if profile.get("extension_paths"):
                         camoufox_options["addons"] = launch_options["extension_paths"]
+                    # Ensure MOZ_ALLOW_DOWNGRADE is set so Camoufox doesn't wipe cookies (compatibility check)
+                    # when the binary path changes (e.g., after reinstalling AntiBrowser-Manager)
+                    env_dict = launch_options.get("env") or os.environ.copy()
+                    env_dict["MOZ_ALLOW_DOWNGRADE"] = "1"
+                    camoufox_options["env"] = env_dict
+                    
                     if display is not None:
-                        camoufox_options["env"] = launch_options.get("env")
                         camoufox_options["virtual_display"] = f":{display}"
 
                     # Fonts: Only pass custom fonts if user explicitly configured custom fonts list.
@@ -1679,39 +1688,8 @@ class BrowserManager:
                         context._playwright_instance = pw
                         cdp_port = 0
 
-                        # In Camoufox, closing the last window/tab does not emit context.close.
-                        # Listen to page close events and automatically close context when all pages are closed.
-                        # Debounce for 2.5s and cancel if a new page is opened to prevent premature shutdown during navigation/popups.
-                        _empty_check_task: asyncio.Task | None = None
-
-                        async def _check_camoufox_empty():
-                            try:
-                                await asyncio.sleep(2.5)
-                                active = [p for p in context.pages if not p.is_closed()]
-                                if not active:
-                                    try:
-                                        await context.close()
-                                    except Exception:
-                                        pass
-                            except asyncio.CancelledError:
-                                pass
-
-                        def _schedule_camoufox_empty_check():
-                            nonlocal _empty_check_task
-                            if _empty_check_task and not _empty_check_task.done():
-                                _empty_check_task.cancel()
-                            _empty_check_task = asyncio.create_task(_check_camoufox_empty())
-
-                        def _on_camoufox_page(p):
-                            nonlocal _empty_check_task
-                            if _empty_check_task and not _empty_check_task.done():
-                                _empty_check_task.cancel()
-                                _empty_check_task = None
-                            p.on("close", lambda *_: _schedule_camoufox_empty_check())
-
-                        context.on("page", _on_camoufox_page)
-                        for pg in context.pages:
-                            _on_camoufox_page(pg)
+                        # Auto-stop on 0 tabs has been removed by user request,
+                        # so that it behaves like CloakBrowser and must be manually stopped.
                     except Exception as exc:
                         await pw.stop()
                         raise RuntimeError(f"Camoufox 启动失败: {exc}") from exc

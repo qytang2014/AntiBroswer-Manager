@@ -235,7 +235,7 @@ export function KernelManagerModal({
 
     try {
       setActionLoading(true);
-      const res = await api.deleteKernel(kernel.version, kernel.browser_type || "cloakbrowser");
+      const res = await api.deleteKernel(kernel.version, kernel.tier, kernel.browser_type || "cloakbrowser");
       setFeedback({
         type: "success",
         text: res.message || `内核 ${kernel.version} 已删除`,
