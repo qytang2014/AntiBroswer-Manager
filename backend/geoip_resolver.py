@@ -64,7 +64,12 @@ def resolve_ip_geo(ip: str | None, timeout: float = 2.0) -> dict[str, Any]:
     try:
         import geoip2.database
 
-        with geoip2.database.Reader(_ensure_geoip_db()) as reader:
+        db_path = _ensure_geoip_db()
+        if db_path is None:
+            # Database is not available locally and could not be downloaded
+            # (e.g. no network access); nothing to fall back to.
+            return empty_result
+        with geoip2.database.Reader(db_path) as reader:
             city_resp = reader.city(clean_ip)
             country = city_resp.country.iso_code
             city = city_resp.city.name
