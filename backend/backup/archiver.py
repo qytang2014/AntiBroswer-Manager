@@ -65,17 +65,21 @@ def _relativize_staged_database(staged_db_path: Path, host_data_dir: Path) -> No
                             portable_list = []
                             for ep in paths:
                                 if isinstance(ep, str):
-                                    if ep.startswith(host_str):
+                                    norm_ep = ep.replace("\\", "/")
+                                    norm_host = host_str.replace("\\", "/")
+                                    if norm_ep.startswith(norm_host):
                                         rel = os.path.relpath(ep, host_str)
                                         portable_list.append(rel.replace("\\", "/"))
-                                    elif "/extensions/" in ep or "\\extensions\\" in ep:
-                                        ep_p = Path(ep)
-                                        eng = ep_p.parent.name
-                                        eid = ep_p.name
-                                        if eng in ("firefox", "chromium"):
-                                            portable_list.append(f"extensions/{eng}/{eid}")
+                                    elif "extensions/" in norm_ep:
+                                        sub = norm_ep.split("extensions/", 1)[1].strip("/")
+                                        parts = [p for p in sub.split("/") if p]
+                                        if len(parts) >= 2 and parts[0] in ("chromium", "firefox"):
+                                            portable_list.append(f"extensions/{parts[0]}/{parts[1]}")
+                                        elif len(parts) >= 1 and parts[0]:
+                                            target_eng = "firefox" if btype == "camoufox" else "chromium"
+                                            portable_list.append(f"extensions/{target_eng}/{parts[0]}")
                                         else:
-                                            portable_list.append(f"extensions/{eid}")
+                                            portable_list.append(norm_ep)
                                     else:
                                         portable_list.append(ep)
                             portable_ext_paths = json.dumps(portable_list)

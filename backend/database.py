@@ -351,6 +351,53 @@ def create_profile(
     return profile
 
 
+def canonicalize_extension_path(ep: str, browser_type: str | None = None) -> str:
+    """Resolve an extension path, relative path, or legacy foreign path to the canonical absolute path."""
+    if not ep or not isinstance(ep, str):
+        return ep
+    extensions_root = DATA_DIR / "extensions"
+    default_engine = "firefox" if (browser_type or "").lower() == "camoufox" else "chromium"
+
+    norm_ep = ep.replace("\\", "/")
+
+    # 1. Relative path from backup archive (e.g. "extensions/chromium/{ext_id}" or "extensions/firefox/{ext_id}")
+    if norm_ep.startswith("extensions/"):
+        sub = norm_ep[len("extensions/"):].strip("/")
+        parts = [p for p in sub.split("/") if p]
+        if len(parts) >= 2 and parts[0] in ("chromium", "firefox"):
+            return str(extensions_root / parts[0] / parts[1])
+        elif len(parts) >= 1 and parts[0]:
+            return str(extensions_root / default_engine / parts[0])
+
+    # 2. Path already starting with current DATA_DIR
+    data_dir_str = str(DATA_DIR).replace("\\", "/")
+    if norm_ep.startswith(data_dir_str):
+        # Check if legacy layout extensions/{ext_id} without engine
+        rel_to_data = norm_ep[len(data_dir_str):].strip("/")
+        if rel_to_data.startswith("extensions/"):
+            sub = rel_to_data[len("extensions/"):].strip("/")
+            parts = [p for p in sub.split("/") if p]
+            if len(parts) == 1 and parts[0]:
+                cand = extensions_root / default_engine / parts[0]
+                if cand.exists():
+                    return str(cand)
+        return str(Path(ep))
+
+    # 3. Foreign absolute path from another machine (contains /extensions/chromium/ or /extensions/firefox/)
+    if "/extensions/chromium/" in norm_ep:
+        ext_id = norm_ep.split("/extensions/chromium/", 1)[1].strip("/").split("/")[0]
+        return str(extensions_root / "chromium" / ext_id)
+    if "/extensions/firefox/" in norm_ep:
+        ext_id = norm_ep.split("/extensions/firefox/", 1)[1].strip("/").split("/")[0]
+        return str(extensions_root / "firefox" / ext_id)
+
+    # 4. Raw extension ID (no slashes and length >= 8)
+    if "/" not in norm_ep and "\\" not in norm_ep and "." not in norm_ep and len(norm_ep) >= 8:
+        return str(extensions_root / default_engine / norm_ep)
+
+    return ep
+
+
 def _hydrate_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     profile = dict(row)
     btype = profile.get("browser_type") or "cloakbrowser"
@@ -366,7 +413,10 @@ def _hydrate_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, An
             profile["user_data_dir"] = canonical_udd
 
     profile["launch_args"] = _json_list(profile.get("launch_args"))
-    profile["extension_paths"] = _json_list(profile.get("extension_paths"))
+    raw_exts = _json_list(profile.get("extension_paths"))
+    profile["extension_paths"] = [
+        canonicalize_extension_path(ep, btype) for ep in raw_exts if isinstance(ep, str)
+    ]
 
     profile["firefox_user_prefs"] = _json_dict(profile.get("firefox_user_prefs"))
     profile["extra_launch_args"] = _json_dict(profile.get("extra_launch_args"))
@@ -555,27 +605,15 @@ def realign_profile_paths() -> int:
                 try:
                     paths = json.loads(ext_paths_raw)
                     if isinstance(paths, list):
-                        updated_paths = []
-                        changed = False
-                        for ep in paths:
-                            if not ep.startswith(str(DATA_DIR)) and ("/extensions/" in ep or "\\extensions\\" in ep):
-                                ep_p = Path(ep)
-                                engine_name = ep_p.parent.name
-                                ext_id = ep_p.name
-                                if engine_name in ("firefox", "chromium"):
-                                    canonical_ep = str(extensions_root / engine_name / ext_id)
-                                else:
-                                    canonical_ep = str(extensions_root / ext_id)
-                                if canonical_ep != ep:
-                                    changed = True
-                                updated_paths.append(canonical_ep)
-                            else:
-                                updated_paths.append(ep)
-                        if changed:
+                        updated_paths = [
+                            canonicalize_extension_path(ep, btype) for ep in paths if isinstance(ep, str)
+                        ]
+                        if updated_paths != paths:
                             conn.execute(
                                 "UPDATE profiles SET extension_paths = ? WHERE id = ?",
                                 (json.dumps(updated_paths), pid),
                             )
+                            realigned_count += 1
                 except Exception as exc:
                     logger.debug("Failed to rebase extension_paths for profile %s: %s", pid, exc)
 

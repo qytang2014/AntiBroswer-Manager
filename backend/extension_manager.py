@@ -1224,7 +1224,7 @@ async def rebuild_missing_extensions() -> None:
         try:
             success = False
             async for progress in stream_install_from_webstore(wid, browser_type=btype):
-                if progress.get("stage") == "installed":
+                if progress.get("stage") in ("installed", "completed"):
                     success = True
                     break
                 elif progress.get("stage") == "error":
@@ -1234,3 +1234,9 @@ async def rebuild_missing_extensions() -> None:
                 logger.info("Successfully rebuilt extension %s", name)
         except Exception as exc:
             logger.warning("Error while rebuilding extension %s: %s", name, exc)
+
+    try:
+        from .database import realign_profile_paths
+        realign_profile_paths()
+    except Exception as exc:
+        logger.debug("Failed to realign paths after rebuild: %s", exc)

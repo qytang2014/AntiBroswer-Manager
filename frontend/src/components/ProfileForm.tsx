@@ -45,6 +45,25 @@ function detectProxyType(raw: string | null | undefined): "standard" | "singbox_
   return "standard";
 }
 
+export function isSameExtension(pathOrId: string, ext: Extension): boolean {
+  if (!pathOrId || !ext) return false;
+  if (pathOrId === ext.path) return true;
+  if (ext.id && pathOrId === ext.id) return true;
+  if (ext.webstore_id && pathOrId === ext.webstore_id) return true;
+
+  const normP = pathOrId.replace(/\\/g, "/");
+  const normExtPath = (ext.path || "").replace(/\\/g, "/");
+  if (normP === normExtPath) return true;
+
+  if (ext.id && (normP.endsWith(`/${ext.id}`) || normP.endsWith(`\\${ext.id}`) || normP === ext.id)) {
+    return true;
+  }
+  if (ext.webstore_id && (normP.endsWith(`/${ext.webstore_id}`) || normP.endsWith(`\\${ext.webstore_id}`))) {
+    return true;
+  }
+  return false;
+}
+
 let _cachedInstalledKernels: KernelItem[] | null = null;
 
 export function setCachedInstalledKernels(kernels: KernelItem[] | null) {
@@ -405,19 +424,37 @@ export function ProfileForm({
           // Existing profile: if we had cached paths for this browserType in engineExtensionsRef, use them
           const cached = engineExtensionsRef.current[browserType];
           const basePaths = cached !== undefined ? cached : currentPaths;
-          const validPaths = new Set(list.map((e) => e.path));
-          const filteredPaths = basePaths.filter((p) => validPaths.has(p));
 
-          const updated = new Set(filteredPaths);
+          // Map basePaths to canonical installed ext.path if matched; if not yet installed (e.g. rebuilding in background), KEEP IT!
+          const updatedPaths: string[] = [];
+          const matchedExtPaths = new Set<string>();
+
+          basePaths.forEach((p) => {
+            const found = list.find((ext) => isSameExtension(p, ext));
+            if (found) {
+              if (!matchedExtPaths.has(found.path)) {
+                matchedExtPaths.add(found.path);
+                updatedPaths.push(found.path);
+              }
+            } else {
+              // Extension not currently in list (e.g. still downloading in background from webstore)
+              // Retain so user choice is preserved and never wiped!
+              if (!updatedPaths.includes(p)) {
+                updatedPaths.push(p);
+              }
+            }
+          });
+
           const prevKnown = prevLibraryPathsRef.current;
           list.forEach((ext) => {
             if (!prevKnown.has(ext.path) && prevKnown.size > 0) {
-              updated.add(ext.path);
+              if (!updatedPaths.some((p) => isSameExtension(p, ext))) {
+                updatedPaths.push(ext.path);
+              }
             }
           });
-          const nextExts = Array.from(updated);
-          engineExtensionsRef.current[browserType] = nextExts;
-          return { ...f, extension_paths: nextExts };
+          engineExtensionsRef.current[browserType] = updatedPaths;
+          return { ...f, extension_paths: updatedPaths };
         }
       });
 
@@ -684,11 +721,18 @@ export function ProfileForm({
 
   const toggleExtension = (extPath: string) => {
     const current = form.extension_paths ?? [];
+    const matchedExt = installedExtensions.find((e) => isSameExtension(extPath, e));
+    const isCurrentlySelected = current.some((p) =>
+      matchedExt ? isSameExtension(p, matchedExt) : p === extPath
+    );
     let updatedPaths: string[];
-    if (current.includes(extPath)) {
-      updatedPaths = current.filter((p) => p !== extPath);
+    if (isCurrentlySelected) {
+      updatedPaths = current.filter((p) =>
+        matchedExt ? !isSameExtension(p, matchedExt) : p !== extPath
+      );
     } else {
-      updatedPaths = [...current, extPath];
+      const canonicalPath = matchedExt ? matchedExt.path : extPath;
+      updatedPaths = [...current, canonicalPath];
     }
     set("extension_paths", updatedPaths);
 
@@ -714,17 +758,21 @@ export function ProfileForm({
   };
 
   const selectAllExtensions = () => {
-    const allPaths = Array.from(
-      new Set([...(form.extension_paths ?? []), ...installedExtensions.map((e) => e.path)])
-    );
-    set("extension_paths", allPaths);
+    const current = form.extension_paths ?? [];
+    const updated = [...current];
+    installedExtensions.forEach((e) => {
+      if (!updated.some((p) => isSameExtension(p, e))) {
+        updated.push(e.path);
+      }
+    });
+    set("extension_paths", updated);
     let currentArgs = form.launch_args ?? [];
     const hasLoadExt = currentArgs.some((a) => a.startsWith("--load-extension="));
-    if (hasLoadExt && allPaths.length > 0) {
-      const newArg = `--load-extension=${allPaths.join(",")}`;
+    if (hasLoadExt && updated.length > 0) {
+      const newArg = `--load-extension=${updated.join(",")}`;
       currentArgs = currentArgs.map((a) => (a.startsWith("--load-extension=") ? newArg : a));
     }
-    if (allPaths.length > 0 && !currentArgs.includes("ignore: --disable-extensions")) {
+    if (updated.length > 0 && !currentArgs.includes("ignore: --disable-extensions")) {
       currentArgs = [...currentArgs, "ignore: --disable-extensions"];
     }
     set("launch_args", currentArgs);
@@ -2871,7 +2919,7 @@ export function ProfileForm({
                           (e.description || "").toLowerCase().includes(extSearch.toLowerCase())
                       )
                       .map((ext) => {
-                        const isSelected = (form.extension_paths ?? []).includes(ext.path);
+                        const isSelected = (form.extension_paths ?? []).some((p) => isSameExtension(p, ext));
                         return (
                           <div
                             key={ext.id}
@@ -2918,19 +2966,25 @@ export function ProfileForm({
           {(form.extension_paths ?? []).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3">
               {(form.extension_paths ?? []).map((path) => {
-                const ext = installedExtensions.find((e) => e.path === path);
-                const displayName = ext ? ext.name : path.split("/").pop() || path;
+                const ext = installedExtensions.find((e) => isSameExtension(path, e));
+                const isPending = !ext;
+                const rawName = path.replace(/\\/g, "/").split("/").pop() || path;
+                const displayName = ext ? ext.name : `${rawName} (⏳ 正在下载重建中)`;
                 return (
                   <span
                     key={path}
-                    className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-indigo-950/60 border border-indigo-800/50 text-indigo-200"
+                    className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full ${
+                      isPending
+                        ? "bg-amber-950/60 border border-amber-800/50 text-amber-200"
+                        : "bg-indigo-950/60 border border-indigo-800/50 text-indigo-200"
+                    }`}
                   >
                     {ext?.icon_url ? (
                       <img src={ext.icon_url} alt="" className="h-3.5 w-3.5 object-contain" />
                     ) : (
-                      <Puzzle className="h-3 w-3 text-indigo-400" />
+                      <Puzzle className={`h-3 w-3 ${isPending ? "text-amber-400" : "text-indigo-400"}`} />
                     )}
-                    <span className="truncate max-w-[160px]">{displayName}</span>
+                    <span className="truncate max-w-[180px]" title={displayName}>{displayName}</span>
                     <button
                       type="button"
                       onClick={() => removeExtensionPath(path)}

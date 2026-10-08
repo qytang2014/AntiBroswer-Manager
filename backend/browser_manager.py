@@ -1314,25 +1314,31 @@ class BrowserManager:
             if profile.get("user_agent"):
                 extra_args.append(f"--user-agent={str(profile['user_agent']).strip()}")
 
+            from .database import canonicalize_extension_path
             raw_ext_paths = profile.get("extension_paths") or []
             sanitized_ext_paths = []
+            extensions_root = self.runtime.data_dir / "extensions"
             for ep in raw_ext_paths:
-                if isinstance(ep, str) and not ep.startswith(str(self.runtime.data_dir)) and ("/extensions/" in ep or "\\extensions\\" in ep):
+                if isinstance(ep, str):
+                    canonical_ep = canonicalize_extension_path(ep, browser_type)
+                    cand_path = Path(canonical_ep)
                     try:
-                        ep_p = Path(ep)
-                        if not ep_p.exists():
-                            eng = ep_p.parent.name
-                            eid = ep_p.name
-                            if eng in ("firefox", "chromium"):
-                                candidate = self.runtime.data_dir / "extensions" / eng / eid
-                            else:
-                                candidate = self.runtime.data_dir / "extensions" / eid
-                            if candidate.exists():
-                                sanitized_ext_paths.append(str(candidate))
-                                continue
-                    except Exception:
-                        pass
-                sanitized_ext_paths.append(ep)
+                        is_managed = cand_path.is_relative_to(extensions_root)
+                    except (ValueError, AttributeError):
+                        is_managed = str(cand_path).startswith(str(extensions_root))
+
+                    if is_managed:
+                        if (cand_path.is_dir() and any(cand_path.iterdir())) or cand_path.is_file():
+                            sanitized_ext_paths.append(str(cand_path))
+                        else:
+                            logger.warning(
+                                "Managed extension path '%s' (resolved: '%s') for profile %s not found on disk (may still be rebuilding). Skipping browser launch argument for this run.",
+                                ep,
+                                canonical_ep,
+                                profile.get("id"),
+                            )
+                    else:
+                        sanitized_ext_paths.append(canonical_ep)
 
             downloads_dir = _resolve_downloads_dir(self.runtime)
             launch_options: dict[str, Any] = {
