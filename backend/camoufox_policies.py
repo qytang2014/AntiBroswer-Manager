@@ -266,11 +266,13 @@ def get_camoufox_user_prefs(
         "media.eme.enabled": True,
         "media.gmp-widevinecdm.enabled": True,
         "media.gmp-widevinecdm.visible": True,
-        # WebAuthn and Passkey for password managers like Bitwarden
-        "security.webauth.webauthn_enable_usbtoken": True,
-        "security.webauth.webauthn_enable_softtoken": True,
-        "security.webauth.webauthn_enable_passkey": True,
-        "security.webauth.webauthn": True,
+        # Disable native WebAuthn to prevent macOS AuthenticationServices API deadlock in custom builds.
+        # This prevents the entire browser from hanging when extensions like Bitwarden handle passkeys.
+        "security.webauth.webauthn_enable_usbtoken": False,
+        "security.webauth.webauthn_enable_softtoken": False,
+        "security.webauthn.enable_macos_passkeys": False,
+        "security.webauthn.ctap2": False,
+        "security.webauth.webauthn": False,
     }
 
     # Explicit fallback font families to prevent font/glyph corruption (乱码) across platforms
