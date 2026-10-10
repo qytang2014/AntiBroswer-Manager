@@ -1,13 +1,36 @@
 # Changelog
 
-All notable changes to CloakBrowser Manager are documented here.
+All notable changes to AntiBrowser-Manager are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-09
+
 ### Added
-- **Duplicate a profile together with its browser state.** `POST /api/profiles/{id}/duplicate` now accepts `{"include_browser_state": true}`, which copies the source profile's cookies, logged-in sessions, history and local storage into the clone alongside its settings and fingerprint — so the copy launches as the same identity *and* the same session. The source is held stopped for the whole copy — a launch, reset or delete of it is refused with 409 until the copy finishes, and a source that is still launching or closing is refused too — and the clone only appears in the list once its directory is complete, so a half-built clone can never be launched or deleted. Chromium's single-instance lock files and the source's preview frame are left behind; a failed copy leaves nothing behind. Reset and Delete now also refuse (409) a profile whose browser is still launching or closing, instead of touching a directory Chrome is using, and Launch refuses (409) a profile whose previous browser is still closing instead of starting a second Chrome on the same directory. In the profile editor, **Duplicate** becomes a split button: the button itself still makes a config-only copy, and its menu offers **With browser state** (disabled until the profile is stopped). Without the flag the endpoint behaves exactly as before.
+- **Dual-engine architecture: Camoufox (Firefox) joins CloakBrowser (Chromium).** Profiles can now run on either the Chromium-based CloakBrowser engine or the Firefox-based Camoufox engine, each with isolated downloads, version catalogs, and fingerprinting. Includes a kernel manager modal with resumable downloads, per-profile kernel version selection, separate extension and profile handling for Camoufox, Firefox add-ons search with a popular list, and engine-tabbed settings.
+- **Encrypted cloud backup & restore.** Back up profiles and app settings to WebDAV or S3-compatible storage with end-to-end encryption and integrity verification. Streaming transfers with in-place progress and a global progress banner, SSE keepalive pings, hardened secret-file permissions (0o600), portable archives that auto-realign paths on restore, and no more macOS keychain blocking prompts thanks to a local master key.
+- **Proxy & subscription management center.** Central proxy manager with subscription support, sing-box powered routing (AnyTLS, TUIC, Hysteria2, HTTP/SOCKS5 and more), fast node speed testing, collapsible subscription groups, manual node editing, and direct native probing for standard proxies.
+- **Extension manager.** Top-bar manager with profile multi-select, webstore search and resumable downloads with progress feedback, proxy-aware webstore requests, update checking, and per-profile GeoIP matching.
+- **Multiple license management** with dynamic profile binding; the configured license now syncs with the kernel manager and unlocks Pro downloads.
+- **Dynamic port allocation and single-instance upgrade**, plus a sidebar access badge for the running instance.
+- **Chinese README** (README_CN) covering dual-engine features, sing-box proxying, and acknowledgements.
+
+### Changed
+- **Renamed to AntiBrowser-Manager** across the UI (previously CloakBrowser Manager).
+- **Build tooling migrated to uv** for dependency and build management.
+- **Profile form revamp**: cleaner layout, custom select component, hardware fingerprint controls, and WebGL vendor/renderer support.
+- **Chromium/kernel downloads decoupled from startup** into a kernel manager modal with resumable progress.
+- **Docker image adapted for the dual-engine architecture** (release workflow updated, container port aligned to 52341).
+
+### Fixed
+- **Stealth & anti-detection**: `--enable-automation` is now ignored to remove the infobar, Camoufox bot score reduced, WebRTC/timezone leaks plugged on proxy profiles, and native WebAuthn disabled in Camoufox to prevent a macOS API deadlock.
+- **Camoufox stability**: version conflicts, `properties.json` launch errors, user-agent path corruption, session loss / auto-stop issues, and kernel version resolution.
+- **Proxy reliability**: sing-box pipe deadlock, NAT timeouts, DNS timeouts on standard proxies, orphan sing-box process cleanup, and license seat failover.
+- **Backup robustness**: timeouts and UI freezing on failure, stuck progress reporting, hardcoded paths decoupled from archives with auto-realign on restore, and extension selections now persist across backup/restore.
+- **Packaging**: PyInstaller child-process stability, multiprocessing popup bug on Windows, and Camoufox bundling fixes.
+- **CI**: hermetic GeoIP fallback test to stop flaky failures; Ubuntu/Windows CI fixes.
 
 ## [0.1.5] - 2026-08-30
 
