@@ -3,7 +3,10 @@ name: Release
 # Builds the native installers and Docker image on hosted runners:
 #   - Windows x64  -> Inno Setup -setup.exe (unsigned)
 #   - macOS        -> ONE universal .dmg (arm64 + x86_64), signed + notarized
-#   - Linux Docker -> ONE multi-architecture image (amd64 + arm64)
+#   - Linux Docker -> ONE multi-architecture image (amd64 + arm64).
+#                     The image is pushed once to Docker Hub, then copied to
+#                     GitHub Container Registry (single-push-then-copy avoids
+#                     the unreliable dual-registry push-by-digest).
 #
 # Trigger: push a v* tag (cuts a real release). workflow_dispatch builds the
 # installers without publishing a release (green-light check before tagging).
@@ -18,11 +21,13 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
   REGISTRY_IMAGE: qytang2014/antibrowser-manager
+  GHCR_IMAGE: ghcr.io/qytang2014/antibrowser-manager
 
 jobs:
   version:
@@ -196,7 +201,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: |
+            type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=min
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
@@ -225,6 +231,7 @@ jobs:
           retention-days: 1
 
   # Join the native amd64 and arm64 images under the public release tags.
+  # (Docker Hub only; GHCR is synced by the sync-ghcr job afterwards.)
   docker-manifest:
     needs: [version, build-docker]
     if: github.event_name == 'push' && github.ref_type == 'tag'
@@ -423,6 +430,40 @@ jobs:
           print(f"Verified published manifest exactly matches candidate: {reference}")
           PY
 
+  # Copy the Docker Hub release manifest to GHCR. Single-push-then-copy is
+  # used instead of pushing to both registries at once because the
+  # dual-registry push-by-digest proved unreliable (v0.1.6: the arm64 image
+  # reached GHCR but never became visible on Docker Hub).
+  sync-ghcr:
+    needs: [version, docker-manifest]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.DOCKER_GITHUB_TOKEN }}
+      - name: Copy release manifest to GHCR
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ env.GHCR_IMAGE }}:${VERSION}" \
+            "${{ env.REGISTRY_IMAGE }}:${VERSION}"
+          docker buildx imagetools inspect --raw "${{ env.GHCR_IMAGE }}:${VERSION}" > /dev/null
+          echo "Synced ${{ env.GHCR_IMAGE }}:${VERSION} from ${{ env.REGISTRY_IMAGE }}:${VERSION}"
+
   # Reconcile `latest` to the newest stable SemVer image that exists and has
   # both required platforms. Every surviving serialized job considers all
   # releases, so GitHub cancelling an intermediate pending job is harmless.
@@ -443,6 +484,12 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.DOCKER_GITHUB_TOKEN }}
       - name: Find newest complete stable image
         id: newest
         shell: bash
@@ -551,9 +598,17 @@ jobs:
           details = "; ".join(error for error in last_errors if error) or "manifest digest mismatch"
           raise SystemExit(f"latest did not resolve to {version}: {details}")
           PY
+      - name: Sync latest to GHCR
+        if: steps.newest.outputs.tag != ''
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ env.GHCR_IMAGE }}:latest" \
+            "${{ env.REGISTRY_IMAGE }}:latest"
+          echo "Synced ${{ env.GHCR_IMAGE }}:latest"
 
   release:
-    needs: [version, build-windows, universal, docker-manifest]
+    needs: [version, build-windows, universal, docker-manifest, sync-ghcr]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -586,6 +641,8 @@ jobs:
             echo "**macOS (universal — Apple Silicon + Intel):** not notarized yet, so macOS blocks the first launch. Run \`xattr -rc \"/Applications/AntiBrowser-Manager.app\"\` once, or use **System Settings → Privacy & Security → Open Anyway**."
             echo
             echo "**Windows:** if SmartScreen warns, click **More info → Run anyway**."
+            echo
+            echo "**Docker:** `qytang2014/antibrowser-manager:$TAG` (Docker Hub) and `ghcr.io/qytang2014/antibrowser-manager:$TAG` (GitHub Container Registry), multi-arch linux/amd64 + linux/arm64."
             echo
             echo "_Dual anti-detect engines: CloakBrowser (Chromium) & Camoufox (Firefox) are supported out-of-the-box._"
             echo
