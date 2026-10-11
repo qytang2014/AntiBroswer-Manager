@@ -208,7 +208,7 @@ class S3Storage(BackupStorage):
                         filename.endswith(".tar.gz") or filename.endswith(".tar.gz.enc")
                     ):
                         is_encrypted = filename.endswith(".enc")
-                        mode = "full" if "-full." in filename else "config"
+                        mode = "session" if ("-session." in filename or "-full." in filename) else "config"
                         last_modified = obj.get("LastModified")
                         created_iso = (
                             last_modified.isoformat()

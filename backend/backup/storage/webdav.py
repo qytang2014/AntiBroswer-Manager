@@ -391,7 +391,7 @@ class WebDAVStorage(BackupStorage):
                     filename.endswith(".tar.gz") or filename.endswith(".tar.gz.enc")
                 ):
                     is_encrypted = filename.endswith(".enc")
-                    mode = "full" if "-full." in filename else "config"
+                    mode = "session" if ("-session." in filename or "-full." in filename) else "config"
 
                     # Try to extract timestamp from filename if available: antibrowser-backup-YYYYMMDD-HHmmss
                     time_match = re.search(r"antibrowser-backup-(\d{8})-(\d{6})", filename)

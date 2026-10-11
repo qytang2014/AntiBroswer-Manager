@@ -451,22 +451,30 @@ class BackupConfigResponse(BaseModel):
     last_backup_at: str | None = None
 
 
+BackupMode = Literal["config", "session"]
+ConflictStrategy = Literal["latest_wins", "skip", "overwrite", "keep_both"]
+RestoreMode = Literal["replace", "merge"]
+
+
 class BackupFile(BaseModel):
     name: str
     size_bytes: int
     created_at: str
-    mode: Literal["config", "full"]
+    mode: Literal["config", "full", "session"]
     encrypted: bool
     checksum: str | None = None
 
 
 class BackupRequest(BaseModel):
+    mode: BackupMode | None = None
     include_browser_state: bool | None = None
 
 
 class RestoreRequest(BaseModel):
     filename: str
     decrypt_password: str | None = None
+    mode: RestoreMode = "replace"
+    conflict_strategy: ConflictStrategy = "latest_wins"
 
 
 class BackupTestConnectionResponse(BaseModel):

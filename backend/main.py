@@ -2239,8 +2239,11 @@ async def test_backup_connection(payload: BackupConfigUpdate | None = None):
 @app.post("/api/backup/now")
 async def trigger_backup_now(payload: BackupRequest | None = None):
     include_state = payload.include_browser_state if payload else None
+    mode = payload.mode if payload else None
     try:
-        task_id = await backup_mgr.create_backup(include_browser_state=include_state)
+        task_id = await backup_mgr.create_backup(
+            include_browser_state=include_state, mode=mode
+        )
         return {"task_id": task_id}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2279,6 +2282,8 @@ async def trigger_restore(payload: RestoreRequest):
         task_id = await backup_mgr.restore_backup(
             filename=payload.filename,
             decrypt_password=payload.decrypt_password,
+            mode=payload.mode,
+            conflict_strategy=payload.conflict_strategy,
         )
         return {"task_id": task_id}
     except Exception as exc:

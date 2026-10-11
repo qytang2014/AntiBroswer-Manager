@@ -27,6 +27,8 @@ import {
   type BackupConfigUpdate,
   type BackupFile,
   type BackupProgressEvent,
+  type RestoreMode,
+  type ConflictStrategy,
 } from "../lib/api";
 import { CustomSelect, CustomSelectOption } from "./common/CustomSelect";
 
@@ -89,6 +91,8 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
   // Restore Modal & In-place progress state
   const [restoreModalFile, setRestoreModalFile] = useState<BackupFile | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
+  const [restoreMode, setRestoreMode] = useState<RestoreMode>("merge");
+  const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("latest_wins");
   const [restoring, setRestoring] = useState(false);
   const [restoreTask, setRestoreTask] = useState<BackupProgressEvent | null>(null);
   const restoreAbortRef = useRef<AbortController | null>(null);
@@ -312,6 +316,8 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
   const handleOpenRestoreModal = (file: BackupFile) => {
     setRestoreModalFile(file);
     setRestorePassword("");
+    setRestoreMode("merge");
+    setConflictStrategy("latest_wins");
     setRestoreTask(null);
     setRestoring(false);
   };
@@ -327,12 +333,20 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
       type: "restore",
       stage: "starting",
       percent: 5,
-      message: "正在向后台提交数据恢复请求...",
+      message:
+        restoreMode === "merge"
+          ? "正在向后台提交数据增量合并请求..."
+          : "正在向后台提交数据恢复请求...",
       status: "running",
     });
 
     try {
-      const { task_id } = await api.restoreBackup(restoreModalFile.name, restorePassword || undefined);
+      const { task_id } = await api.restoreBackup(
+        restoreModalFile.name,
+        restorePassword || undefined,
+        restoreMode,
+        conflictStrategy
+      );
 
       const abortCtrl = new AbortController();
       restoreAbortRef.current = abortCtrl;
@@ -464,37 +478,37 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
               <h4 className="text-xs font-semibold text-gray-200">快捷手动备份 (Instant Backup)</h4>
             </div>
             <p className="text-[11px] text-gray-400 mt-0.5">
-              默认推荐快速备份（轻量、秒级打包）；全量备份包含各环境完整 Cookies 与持久化会话。
+              推荐包含会话备份（已自动剥离临时垃圾，保留 100% 登录态与工作现场）；仅配置备份适合环境模板快速同步。
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
-            {/* 快速备份 (醒目主按钮，默认推荐) */}
+            {/* 包含会话备份 (醒目主按钮，默认推荐) */}
             <button
               type="button"
               disabled={Boolean(activeBackupTask) || !isConfigured}
-              onClick={() => handleTriggerBackup(false)}
+              onClick={() => handleTriggerBackup(true)}
               className="btn-primary text-xs flex items-center gap-1.5 py-2 px-4 shadow-sm font-medium"
-              title="打包 profiles.db、settings.json 和 extensions，快速且轻量"
+              title="完整保留 Cookies、未关闭标签页、历史记录与登录态，自动排除临时缓存 (体积 ~20-40MB)"
             >
               {activeBackupTask ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Cloud className="w-3.5 h-3.5" />
+                <Sparkles className="w-3.5 h-3.5" />
               )}
-              <span>快速备份 (推荐)</span>
+              <span>包含会话备份 (推荐)</span>
             </button>
 
-            {/* 全量备份 (次级按钮，需二次确认) */}
+            {/* 仅配置备份 (次级按钮，秒级) */}
             <button
               type="button"
               disabled={Boolean(activeBackupTask) || !isConfigured}
-              onClick={() => setFullBackupConfirmOpen(true)}
+              onClick={() => handleTriggerBackup(false)}
               className="btn-secondary text-xs flex items-center gap-1.5 py-2 px-3 text-gray-300 hover:text-gray-100 hover:border-gray-500/50"
-              title="包含全部浏览器环境完整会话、本地存储和 Cookies，体积较大"
+              title="仅打包 profiles.db、settings.json 和 extensions，快速且轻量 (< 1MB)"
             >
-              <Database className="w-3.5 h-3.5 text-gray-400" />
-              <span>全量备份 (含全部会话)</span>
+              <HardDrive className="w-3.5 h-3.5 text-gray-400" />
+              <span>仅配置备份</span>
             </button>
           </div>
         </div>
@@ -599,12 +613,12 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
                     )}
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        bk.mode === "full"
-                          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                        bk.mode === "session" || bk.mode === "full"
+                          ? "bg-purple-500/10 text-purple-400 border border-purple-500/20"
                           : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                       }`}
                     >
-                      {bk.mode === "full" ? "全量会话" : "仅配置"}
+                      {bk.mode === "session" || bk.mode === "full" ? "包含会话" : "仅配置"}
                     </span>
                     {bk.checksum && (
                       <span
@@ -1203,19 +1217,128 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
               </div>
             ) : (
               /* Pre-restore confirmation & password form */
-              <div className="space-y-3 text-xs text-gray-300">
-                <p>
-                  即将从备份包 <strong className="text-gray-100 font-mono">{restoreModalFile.name}</strong> 恢复系统数据。
-                </p>
-
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-1 text-[11px] text-amber-300">
-                  <p className="font-semibold">⚠️ 注意事项：</p>
-                  <ul className="list-disc pl-4 space-y-1">
-                    <li>恢复操作将覆盖本地现有的 Profiles 数据库、设置及扩展。</li>
-                    <li>所有正在运行的浏览器实例必须已关闭，否则恢复将被拒绝。</li>
-                    <li>系统在恢复前会自动为您创建一份本地应急快照。</li>
-                  </ul>
+              <div className="space-y-4 text-xs text-gray-300">
+                <div className="p-2.5 bg-surface-1/60 border border-border rounded-lg flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] text-gray-400 block">目标备份文件</span>
+                    <strong className="text-gray-100 font-mono text-xs">{restoreModalFile.name}</strong>
+                  </div>
+                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-surface-2 border border-border text-gray-300">
+                    {formatSize(restoreModalFile.size_bytes)}
+                  </span>
                 </div>
+
+                {/* 恢复模式选择 */}
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-gray-200 block">选择恢复模式：</label>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setRestoreMode("merge")}
+                      className={`p-3 rounded-lg border text-left transition-all ${
+                        restoreMode === "merge"
+                          ? "bg-purple-500/10 border-purple-500 text-purple-200 shadow-sm"
+                          : "bg-surface-1/40 border-border text-gray-400 hover:border-gray-600 hover:text-gray-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-semibold text-xs mb-1">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                        <span>增量合并导入</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-normal">
+                          多机推荐
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 leading-relaxed">
+                        保留本机现有环境，将备份中的新环境追加并入。增量合并授权池与代理节点。
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRestoreMode("replace")}
+                      className={`p-3 rounded-lg border text-left transition-all ${
+                        restoreMode === "replace"
+                          ? "bg-amber-500/10 border-amber-500 text-amber-200 shadow-sm"
+                          : "bg-surface-1/40 border-border text-gray-400 hover:border-gray-600 hover:text-gray-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-semibold text-xs mb-1">
+                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                        <span>完全镜像替换</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-normal">
+                          新机开荒
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 leading-relaxed">
+                        使用备份完全替换本地全部环境与设置。本地现有的不同环境将被覆盖。
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 增量合并冲突策略单选 */}
+                {restoreMode === "merge" && (
+                  <div className="space-y-2 p-3 bg-surface-1/40 border border-border rounded-lg animate-in fade-in duration-150">
+                    <label className="text-xs font-medium text-gray-200 block">同名 / 同 ID 环境冲突仲裁策略：</label>
+                    <div className="space-y-1.5">
+                      {[
+                        {
+                          key: "latest_wins" as const,
+                          name: "最新者优先 (latest_wins / 推荐)",
+                          desc: "自动对比修改时间戳，保留更新的版本，不产生重复冗余环境",
+                        },
+                        {
+                          key: "skip" as const,
+                          name: "仅导入新环境 (skip)",
+                          desc: "本地环境保持不动，仅导入本地缺失的新环境",
+                        },
+                        {
+                          key: "overwrite" as const,
+                          name: "以备份为准 (overwrite)",
+                          desc: "同名或同 ID 的本地环境强制被备份覆盖",
+                        },
+                        {
+                          key: "keep_both" as const,
+                          name: "保留两者 (keep_both)",
+                          desc: "生成独立新环境副本，自动重命名为「环境名 (来自备份)」",
+                        },
+                      ].map((strat) => (
+                        <label
+                          key={strat.key}
+                          className={`flex items-start gap-2.5 p-2 rounded cursor-pointer transition-colors ${
+                            conflictStrategy === strat.key
+                              ? "bg-purple-500/10 text-gray-100"
+                              : "hover:bg-surface-1/80 text-gray-400"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="conflict_strategy"
+                            value={strat.key}
+                            checked={conflictStrategy === strat.key}
+                            onChange={() => setConflictStrategy(strat.key)}
+                            className="mt-0.5 text-purple-600 focus:ring-purple-500"
+                          />
+                          <div>
+                            <div className="text-xs font-medium text-gray-200">{strat.name}</div>
+                            <div className="text-[11px] text-gray-400">{strat.desc}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 完全替换警示 */}
+                {restoreMode === "replace" && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-1 text-[11px] text-amber-300">
+                    <p className="font-semibold">⚠️ 完全替换注意事项：</p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-300">
+                      <li>将完全抹除本地现有的 Profiles 数据库、自定义配置并由备份替换。</li>
+                      <li>所有正在运行的浏览器实例必须已关闭，系统在恢复前会自动创建本地应急快照。</li>
+                    </ul>
+                  </div>
+                )}
 
                 {restoreModalFile.encrypted && (
                   <div className="space-y-1.5 pt-1">
@@ -1259,10 +1382,20 @@ export const BackupRestorePanel = forwardRef<BackupRestorePanelHandle>((_props, 
                     type="button"
                     disabled={restoring}
                     onClick={handleExecuteRestore}
-                    className="btn-primary text-xs flex items-center gap-1.5 py-1.5 px-4 bg-amber-600 hover:bg-amber-500 text-white"
+                    className={`btn-primary text-xs flex items-center gap-1.5 py-1.5 px-4 text-white font-medium ${
+                      restoreMode === "merge"
+                        ? "bg-purple-600 hover:bg-purple-500"
+                        : "bg-amber-600 hover:bg-amber-500"
+                    }`}
                   >
-                    {restoring ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-                    确认并开始恢复
+                    {restoring ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : restoreMode === "merge" ? (
+                      <Sparkles className="w-3.5 h-3.5" />
+                    ) : (
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    )}
+                    {restoreMode === "merge" ? "确认并增量合并" : "确认并全量替换"}
                   </button>
                 </div>
               </div>

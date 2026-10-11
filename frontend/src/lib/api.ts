@@ -636,18 +636,23 @@ export const api = {
 
   getBackupStatus: () => request<BackupStatusResponse>("/api/backup/status"),
 
-  triggerBackupNow: (include_browser_state?: boolean) =>
+  triggerBackupNow: (include_browser_state?: boolean, mode?: BackupMode) =>
     request<{ task_id: string }>("/api/backup/now", {
       method: "POST",
-      body: JSON.stringify({ include_browser_state }),
+      body: JSON.stringify({ include_browser_state, mode }),
     }),
 
   listBackups: () => request<BackupFile[]>("/api/backup/list"),
 
-  restoreBackup: (filename: string, decrypt_password?: string) =>
+  restoreBackup: (
+    filename: string,
+    decrypt_password?: string,
+    mode: RestoreMode = "replace",
+    conflict_strategy: ConflictStrategy = "latest_wins"
+  ) =>
     request<{ task_id: string }>("/api/backup/restore", {
       method: "POST",
-      body: JSON.stringify({ filename, decrypt_password }),
+      body: JSON.stringify({ filename, decrypt_password, mode, conflict_strategy }),
     }),
 
   deleteBackup: (filename: string) =>
@@ -793,11 +798,15 @@ export interface BackupConfigUpdate {
   include_browser_state?: boolean;
 }
 
+export type BackupMode = "config" | "session";
+export type RestoreMode = "replace" | "merge";
+export type ConflictStrategy = "latest_wins" | "skip" | "overwrite" | "keep_both";
+
 export interface BackupFile {
   name: string;
   size_bytes: number;
   created_at: string;
-  mode: "config" | "full";
+  mode: "config" | "full" | "session";
   encrypted: boolean;
   checksum: string | null;
 }

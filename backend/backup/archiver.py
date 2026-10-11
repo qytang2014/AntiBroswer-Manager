@@ -121,6 +121,86 @@ def _relativize_staged_database(staged_db_path: Path, host_data_dir: Path) -> No
         conn.close()
 
 
+DISCARD_DIR_NAMES = {
+    "cache",
+    "code cache",
+    "gpucache",
+    "gpupersistentcache",
+    "dawngraphitecache",
+    "dawnwebgpucache",
+    "graphitedawncache",
+    "grshadercache",
+    "shadercache",
+    "blob_storage",
+    "component_crx_cache",
+    "extensions_crx_cache",
+    "crashpad",
+    "cache2",
+    "startupcache",
+    "thumbnails",
+    "safebrowsing",
+    "datareporting",
+    "minidumps",
+    "saved-telemetry-pings",
+    "jumplistcache",
+    "cachestorage",
+    "scriptcache",
+}
+
+DISCARD_EXACT_FILES = {
+    "singletonlock",
+    "singletoncookie",
+    "singletonsocket",
+    "parent.lock",
+    ".parentlock",
+    "lock",
+}
+
+
+def _lean_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Filter out disposable browser caches, volatile locks, favicon caches,
+    and extension offline filter blobs while preserving login sessions, cookies,
+    localStorage, indexedDB, unclosed tabs, and history.
+    """
+    norm_name = tarinfo.name.replace("\\", "/")
+    norm_lower = norm_name.lower()
+    parts = [p for p in norm_name.split("/") if p]
+    if not parts:
+        return tarinfo
+
+    # 1. Skip Firefox webextension offline rule blobs (e.g. uBlock Origin compiled filter lists)
+    if "moz-extension" in norm_lower and ".files" in norm_lower:
+        return None
+
+    # 2. Directory component check
+    for part in parts[:-1]:
+        part_lower = part.lower()
+        if part_lower in DISCARD_DIR_NAMES or (part_lower.endswith("cache") and "." not in part_lower):
+            return None
+
+    # 3. Leaf component check
+    leaf = parts[-1]
+    leaf_lower = leaf.lower()
+    if tarinfo.isdir():
+        if leaf_lower in DISCARD_DIR_NAMES or (leaf_lower.endswith("cache") and "." not in leaf_lower):
+            return None
+        if leaf_lower == ".files" and "moz-extension" in norm_lower:
+            return None
+    else:
+        # Volatile locks
+        if leaf_lower in DISCARD_EXACT_FILES:
+            return None
+        # Discard website favicon icon caches (re-downloaded automatically over the web)
+        if leaf_lower.startswith("favicons"):
+            return None
+        if leaf_lower.endswith(".pma") or leaf_lower.startswith("browsermetrics"):
+            return None
+        if leaf_lower.endswith((".tmp", ".old")):
+            return None
+
+    return tarinfo
+
+
 def pack(
     dest_tar_path: Path,
     include_browser_state: bool = False,
@@ -168,7 +248,7 @@ def pack(
         staged_settings_path.write_text(json.dumps(clean_settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # 3. Create Manifest
-        mode = "full" if include_browser_state else "config"
+        mode = "session" if include_browser_state else "config"
         manifest = {
             "version": MANIFEST_VERSION,
             "app_name": "AntiBrowser-Manager",
@@ -208,7 +288,6 @@ def pack(
 
         def _ext_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
             # tarinfo.name is e.g. "extensions/chromium/abcdefgh..."
-            # Windows might use backslashes in tarinfo.name if python is dumb, but usually forward
             for ex in exclude_arcnames:
                 if tarinfo.name == ex or tarinfo.name.startswith(ex + "/"):
                     return None
@@ -232,13 +311,13 @@ def pack(
                     progress_callback(30, "Archiving extensions directory (excluding Webstore extensions)...")
                 tar.add(str(extensions_dir), arcname="extensions", filter=_ext_filter)
 
-            # Optionally add browser profiles user data directory
+            # Optionally add browser profiles user data directory with lean filtering
             if include_browser_state:
                 profiles_dir = data_dir / "profiles"
                 if profiles_dir.exists():
                     if progress_callback:
-                        progress_callback(35, "Archiving browser user data directory (cookies, sessions)...")
-                    tar.add(str(profiles_dir), arcname="profiles")
+                        progress_callback(35, "Archiving browser user data directory (lean session state)...")
+                    tar.add(str(profiles_dir), arcname="profiles", filter=_lean_filter)
 
         if progress_callback:
             progress_callback(40, "Archive compression complete.")
